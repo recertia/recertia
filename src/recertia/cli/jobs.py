@@ -44,6 +44,26 @@ def jobs_run(
     arxiv_max: int = typer.Option(
         5, "--arxiv-max", help="Mine job: max_results for --arxiv-query (1–50)."
     ),
+    with_pdf: bool = typer.Option(
+        False,
+        "--with-pdf",
+        help="Mine job: download PDF on host; extract text if pypdf is installed.",
+    ),
+    pdf_sandbox: bool = typer.Option(
+        False,
+        "--pdf-sandbox",
+        help="Mine job: run PDF text extract inside the configured execution backend.",
+    ),
+    distill_paper: bool = typer.Option(
+        False,
+        "--distill-paper",
+        help="Mine job: on --submit, distill pitfall skill + arxiv-keyed facts.",
+    ),
+    facts_root: Path = typer.Option(
+        Path(".recertia/facts"),
+        "--facts-root",
+        help="Mine job: FactStore root when --distill-paper --submit.",
+    ),
     one_off: Optional[list[str]] = typer.Option(
         None, "--one-off", help="Practice job: one-off cluster reason (repeatable)."
     ),
@@ -137,15 +157,40 @@ def jobs_run(
                 )
 
             result = _run("mine", _mine_arxiv, budget=budget)
+            if with_pdf and result.proposals:
+                from recertia.jobs.paper_pipeline import enrich_proposals_with_pdf
+
+                result.proposals = enrich_proposals_with_pdf(
+                    result.proposals,
+                    dest_dir=runs_root / "arxiv-pdfs",
+                    use_sandbox=pdf_sandbox,
+                    sandbox_workdir=runs_root / "arxiv-pdf-sandbox",
+                )
         else:
             hints = list(hint or ["README.md chore hints"])
             result = _run(
                 "mine", lambda: mine_from_repo_hints(store, hints=hints), budget=budget
             )
         if submit and not dry_run:
-            for proposal in result.proposals:
-                draft = enqueue_mined_candidate(store, proposal)
-                typer.echo(f"candidate {draft.skill_id}@v{draft.version}")
+            if distill_paper and use_arxiv:
+                from recertia.jobs.paper_pipeline import submit_paper_proposals
+                from recertia.memory.semantic import FactStore
+
+                fact_store = FactStore(facts_root)
+                written = submit_paper_proposals(
+                    store,
+                    result.proposals,
+                    fact_store=fact_store,
+                    distill=True,
+                )
+                for draft, facts in written:
+                    typer.echo(
+                        f"candidate {draft.skill_id}@v{draft.version} facts={len(facts)}"
+                    )
+            else:
+                for proposal in result.proposals:
+                    draft = enqueue_mined_candidate(store, proposal)
+                    typer.echo(f"candidate {draft.skill_id}@v{draft.version}")
     elif name in {"curator", "curate"}:
         eval_store = EvalStore(runs_root / "evals.db")
         try:
@@ -251,19 +296,24 @@ def jobs_run(
         )
         raise typer.Exit(code=2)
 
-    payload = {
-        "job": result.job,
-        "skipped": result.skipped,
-        "proposals": [
+    # Strip internal PDF text from JSON echo (can be large).
+    safe_proposals = []
+    for p in result.proposals:
+        pl = dict(p.payload or {})
+        pl.pop("_pdf_text", None)
+        safe_proposals.append(
             {
                 "kind": p.kind,
                 "skill_id": p.skill_id,
                 "version": p.version,
                 "rationale": p.rationale,
-                "payload": p.payload,
+                "payload": pl,
             }
-            for p in result.proposals
-        ],
+        )
+    payload = {
+        "job": result.job,
+        "skipped": result.skipped,
+        "proposals": safe_proposals,
         "dry_run": dry_run,
     }
     typer.echo(json.dumps(payload, indent=2))
