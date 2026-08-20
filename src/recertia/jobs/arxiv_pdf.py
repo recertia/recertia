@@ -4,7 +4,7 @@ Network isolation for the *execution* sandbox stays intact (``network=none``).
 PDF bytes are fetched on the improvement-plane host, then either:
 
 * extracted on the host via optional ``pypdf``, or
-* copied into a workdir and extracted by a sandboxed Python one-liner when the
+* copied into a workdir and extracted by a sandboxed Python script when the
   operator has installed ``pypdf`` in an allowlisted image (``RECERTIA_ALLOW_CUSTOM_IMAGE``).
 
 Default is host-side optional extract. Missing ``pypdf`` yields empty text, not an error.
@@ -13,6 +13,7 @@ Default is host-side optional extract. Missing ``pypdf`` yields empty text, not 
 from __future__ import annotations
 
 import os
+import textwrap
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -115,33 +116,31 @@ def extract_text_in_sandbox(
         target.write_bytes(pdf_path.read_bytes())
     script = workdir / "_extract_pdf.py"
     script.write_text(
-        "\n".join(
-            [
-                "from pathlib import Path",
-                "try:",
-                "    from pypdf import PdfReader",
-                "except ImportError:",
-                "    print('')",",
-                "    raise SystemExit(0)",
-                f"reader = PdfReader({target.name!r})",
-                "chunks = []",
-                "total = 0",
-                f"limit = {int(max_chars)}",
-                "for page in reader.pages:",
-                "    try:",
-                "        t = page.extract_text() or ''",
-                "    except Exception:",
-                "        continue",
-                "    if not t.strip():",
-                "        continue",
-                "    chunks.append(t)",
-                "    total += len(t)",
-                "    if total >= limit:",
-                "        break",
-                "print('\\n'.join(chunks)[:limit])",
-            ]
-        )
-        + "\n",
+        textwrap.dedent(
+            f"""\
+            try:
+                from pypdf import PdfReader
+            except ImportError:
+                print("")
+                raise SystemExit(0)
+            reader = PdfReader({target.name!r})
+            chunks = []
+            total = 0
+            limit = {int(max_chars)}
+            for page in reader.pages:
+                try:
+                    t = page.extract_text() or ""
+                except Exception:
+                    continue
+                if not t.strip():
+                    continue
+                chunks.append(t)
+                total += len(t)
+                if total >= limit:
+                    break
+            print("\\n".join(chunks)[:limit])
+            """
+        ),
         encoding="utf-8",
     )
     proc = run_configured_command(
