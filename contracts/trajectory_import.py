@@ -80,7 +80,7 @@ class TrajectoryImport(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    import_id: str = Field(min_length=1)
+    import_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     source: ImportSource
     source_ref: str = Field(min_length=1)
     captured_at: datetime

@@ -37,6 +37,8 @@ Introduce **residency control** for already-persisted working-set, not a second 
 4. On next hop, `resume`, or retrieve, restore transparently **before** the hop proceeds. Restore is a named telemetry span (`idle.restore`); it MUST NOT be folded into task-class step latency or `cost_per_solved_task`.
 5. Always-hot: active skill set, current identity / policy, in-flight attempt, frozen criteria, short-term working context, eval harness. These are never eligible.
 
+v1 pack trigger is the orchestrator pause (`max_steps` slice in `GraphOrchestrator._execute`), not a between-hop timer. `quiet_threshold_s` is the telemetry floor for counting `idle_gap_ms`; it does not itself pack. Packing between hops would add restore latency to every hop.
+
 Offloading is optional and policy-controlled (`state_management` in `policy/default.json`, T2). It never mutates approved skill content, policy, criteria, or the durable versioned record. It only changes residency of already-persisted bytes.
 
 Eligible planes are T0 derived/rebuildable surfaces (`recertia.workspace`, `recertia.retrieval`, `recertia.graph` checkpoints). Sandbox *policy* remains T3. If a future long-lived container is introduced, its pause/checkpoint path is an implementation of this ADR, not a new tier.

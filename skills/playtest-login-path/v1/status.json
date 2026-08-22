@@ -10,7 +10,7 @@
       "pytest": "8.3.4"
     },
     "golden_set_ref": "evals/golden/_promotion_logs/playtest-login-path-v1.json",
-    "last_recertified_at": "2026-08-22T22:14:35.224415Z",
+    "last_recertified_at": "2026-08-22T22:26:17.118471Z",
     "recert_status": "fresh"
   },
   "retirement": {

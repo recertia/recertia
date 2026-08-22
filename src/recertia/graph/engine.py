@@ -301,6 +301,7 @@ class GraphOrchestrator:
                     f"run {state.run_id!r} exceeded {MAX_GRAPH_STEPS} graph steps; likely a routing defect"
                 )
             if max_steps is not None and steps_taken > max_steps:
+                # Pause = Recertia idle. quiet_threshold_s is telemetry, not this trigger.
                 self._maybe_offload_idle(state, workdir)
                 return state
 

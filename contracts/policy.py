@@ -24,6 +24,12 @@ JOB_PRIORITY_ORDER: tuple[JobPriority, ...] = (
     "compress",
 )
 
+COMPUTER_USE_TASK_CLASSES: tuple[str, ...] = (
+    "bug-reproduction",
+    "playtest-operator",
+    "docs-auditor",
+)
+
 
 class AuthoringPrior(BaseModel):
     """Rules the distiller must apply on every success or failure-cluster path."""
@@ -111,18 +117,15 @@ class JobQuota(BaseModel):
 
     @staticmethod
     def _computer_use_class(task_class: str | None) -> bool:
-        return task_class in {
-            "bug-reproduction",
-            "playtest-operator",
-            "docs-auditor",
-        }
+        return task_class in COMPUTER_USE_TASK_CLASSES
 
     def can_admit(self, job: JobPriority, *, task_class: str | None = None, tokens: int = 0) -> bool:
         if self._computer_use_class(task_class) and job in (
             "practice_band",
             "practice_hex",
         ):
-            if self.computer_use_remaining() < tokens:
+            remaining = self.computer_use_remaining()
+            if remaining <= 0 or remaining < tokens:
                 return False
         if job in ("recertifier", "curator_retire", "fail_cluster_author", "practice_band"):
             return self.remaining() >= tokens

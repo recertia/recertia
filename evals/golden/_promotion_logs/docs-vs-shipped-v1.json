@@ -7,9 +7,9 @@
       "golden_path": "evals/golden/docs-auditor/docs-vs-shipped",
       "passed": true,
       "terminal": "solved",
-      "run_id": "golden-docs-vs-shipped-v1-3ec5ca",
+      "run_id": "golden-docs-vs-shipped-v1-858db7",
       "detail": "expected terminal='solved', got 'solved'; snapshot=None model='m4-harness'",
-      "at": "2026-08-22T22:14:35.283197+00:00"
+      "at": "2026-08-22T22:26:17.177762+00:00"
     }
   ]
 }

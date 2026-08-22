@@ -72,9 +72,26 @@ def brief_from_runs_root(runs_root: Path | str) -> OperatorBrief:
     """Best-effort folder scan. Honest empty when stores are missing."""
 
     from recertia.evals.task_classes import COMPUTER_USE_TASK_CLASSES
+    from recertia.graph.store import CheckpointStore
 
     root = Path(runs_root)
-    brief = brief_from_events([], task_classes=list(COMPUTER_USE_TASK_CLASSES))
-    if not (root / "checkpoints").exists():
-        brief.unavailable.append("checkpoints missing")
+    db = root / "checkpoints.db"
+    unavailable: list[str] = []
+    stuck: list[dict[str, Any]] = []
+    if not db.exists():
+        unavailable.append("checkpoints missing")
+    else:
+        store = CheckpointStore(db)
+        try:
+            for run_id in store.list_run_ids():
+                latest = store.latest(run_id)
+                if latest is None:
+                    continue
+                seq, node, _next, state = latest
+                if state.terminal is None:
+                    stuck.append({"run_id": run_id, "node": node, "seq": seq})
+        finally:
+            store.close()
+    brief = brief_from_events([], task_classes=list(COMPUTER_USE_TASK_CLASSES), stuck=stuck)
+    brief.unavailable.extend(unavailable)
     return brief

@@ -10,7 +10,7 @@
       "pytest": "8.3.4"
     },
     "golden_set_ref": "evals/golden/_promotion_logs/docs-vs-shipped-v1.json",
-    "last_recertified_at": "2026-08-22T22:14:35.283661Z",
+    "last_recertified_at": "2026-08-22T22:26:17.178332Z",
     "recert_status": "fresh"
   },
   "retirement": {

@@ -69,7 +69,7 @@ def test_import_writes_episodic_and_does_not_promote(tmp_path: Path) -> None:
     result = ingest_trajectory(_valid_payload(), runs_root=tmp_path, tenant_id="default")
     assert result.promoted is False
     assert result.proposal_id is None
-    assert (tmp_path / "imports" / "imp-001.json").exists()
+    assert (tmp_path / "runs" / "default" / "imports" / "imp-001.json").exists()
     from recertia.memory.episodic import EpisodicStore
 
     store = EpisodicStore(tmp_path / "runs" / "default" / "episodic")
@@ -86,7 +86,7 @@ def test_reexecutable_queues_pending_proposal_not_approved(tmp_path: Path) -> No
     assert result.proposal_id is not None
     from recertia.proposals.store import ProposalStore
 
-    store = ProposalStore(tmp_path / "proposals.sqlite")
+    store = ProposalStore(tmp_path / "runs" / "default" / "proposals.sqlite")
     try:
         rec = store.get(result.proposal_id, tenant_id="default")
         assert rec is not None
@@ -176,15 +176,92 @@ def test_computer_use_quota_share() -> None:
     assert quota.can_admit("practice_band", task_class="repo-chore", tokens=200) is True
 
 
+def test_import_id_rejects_path_escape() -> None:
+    with pytest.raises(ValidationError):
+        TrajectoryImport.model_validate(_valid_payload(import_id="../etc/passwd"))
+    with pytest.raises(ValidationError):
+        TrajectoryImport.model_validate(_valid_payload(import_id="imp/001"))
+
+
+def test_tenants_do_not_share_import_files(tmp_path: Path) -> None:
+    ingest_trajectory(_valid_payload(import_id="imp-t"), runs_root=tmp_path, tenant_id="a")
+    ingest_trajectory(_valid_payload(import_id="imp-t"), runs_root=tmp_path, tenant_id="b")
+    assert (tmp_path / "runs" / "a" / "imports" / "imp-t.json").exists()
+    assert (tmp_path / "runs" / "b" / "imports" / "imp-t.json").exists()
+
+
+def test_computer_use_quota_exhausted_refuses_zero_token_job() -> None:
+    quota = JobQuota(weekly_token_cap=100, computer_use_practice_share=0.1)
+    quota = quota.charge("practice_band", 10, task_class="bug-reproduction")
+    assert quota.computer_use_remaining() == 0
+    assert quota.can_admit("practice_band", task_class="bug-reproduction", tokens=0) is False
+
+
 def test_distill_imported_never_promotes(tmp_path: Path) -> None:
     frozen = TrajectoryImport.model_validate(_valid_payload(reexecutable=False))
     store = SkillStore(tmp_path / "skills")
     with pytest.raises(DistillRejected):
         distill_imported(frozen, store)
-    imported = TrajectoryImport.model_validate(
-        _valid_payload(import_id="imp-d", reexecutable=True)
+    browser_only = TrajectoryImport.model_validate(
+        _valid_payload(import_id="imp-browser", reexecutable=True)
     )
+    with pytest.raises(DistillRejected, match="shell steps|command criterion"):
+        distill_imported(browser_only, store)
+    payload = _valid_payload(
+        import_id="imp-d",
+        reexecutable=True,
+        steps=[
+            {"seq": 0, "action": "python -c 'open(\"x\",\"w\").write(\"ok\")'", "tool": "shell", "ok": True}
+        ],
+        criteria_snapshot=[
+            {
+                "id": "x-exists",
+                "kind": "command",
+                "run": "test -f x",
+                "source": "caller",
+                "weight": 1.0,
+                "sensitivity_proof": {
+                    "criterion_id": "x-exists",
+                    "negative_fixture": "empty",
+                    "rejected": True,
+                    "checked_at": "2026-08-22T00:00:00Z",
+                },
+            }
+        ],
+    )
+    imported = TrajectoryImport.model_validate(payload)
     version = distill_imported(imported, store)
     status = store.get_status(version.skill_id, version.version)
+    assert version.skill_id == "import-imp-d"
     assert status.lifecycle == "candidate"
     assert status.active is False
+    assert version.steps[0].inputs["command"] != "true"
+
+
+def test_distill_refuses_when_import_flag_off(tmp_path: Path) -> None:
+    policy = load_policy()
+    policy = policy.model_copy(
+        update={"improvement": policy.improvement.model_copy(update={"external_trajectory_import": False})}
+    )
+    payload = _valid_payload(
+        import_id="imp-flag",
+        reexecutable=True,
+        steps=[{"seq": 0, "action": "echo hi", "tool": "shell", "ok": True}],
+        criteria_snapshot=[
+            {
+                "id": "true-cmd",
+                "kind": "command",
+                "run": "test -f README.md",
+                "source": "caller",
+                "weight": 1.0,
+                "sensitivity_proof": {
+                    "criterion_id": "true-cmd",
+                    "negative_fixture": "empty",
+                    "rejected": True,
+                    "checked_at": "2026-08-22T00:00:00Z",
+                },
+            }
+        ],
+    )
+    with pytest.raises(DistillRejected, match="external_trajectory_import"):
+        distill_imported(TrajectoryImport.model_validate(payload), SkillStore(tmp_path / "s"), policy=policy)

@@ -4,7 +4,7 @@
   "version": 1,
   "supersedes": null,
   "title": "Playtest a login path and record the final state",
-  "intent": "Drive the login path and record UI step assertions plus a final-state predicate when APIs are missing and the product must still be exercised through its UI.",
+  "intent": "Read the shipped UI module and record discovered defs plus a final-state predicate when APIs are missing and the product must still be exercised.",
   "task_class": "playtest-operator",
   "tags": [
     "playtest",
@@ -18,9 +18,9 @@
     {
       "id": "record",
       "tool": "shell",
-      "intent": "Write playtest log and final-state files when the workdir is writable.",
+      "intent": "Copy def names from app.py into the playtest log when writable.",
       "inputs": {
-        "command": "python -c \"from pathlib import Path; Path('playtest').mkdir(exist_ok=True); Path('playtest/step-log.txt').write_text('open login\\nsubmit\\n', encoding='utf-8'); Path('playtest/final-state.txt').write_text('ok=true\\n', encoding='utf-8')\""
+        "command": "python -c \"from pathlib import Path; src=Path('app.py').read_text(encoding='utf-8'); Path('playtest').mkdir(exist_ok=True); Path('playtest/step-log.txt').write_text(src, encoding='utf-8'); ok='def login' in src; Path('playtest/final-state.txt').write_text('ok=true\\n' if ok else 'ok=false\\n', encoding='utf-8')\""
       },
       "outputs": [],
       "input_bindings": [],
@@ -31,9 +31,9 @@
   ],
   "certification_criteria": [
     {
-      "id": "log-exists",
+      "id": "log-has-def",
       "kind": "command",
-      "run": "test -f playtest/step-log.txt",
+      "run": "grep -q 'def login' playtest/step-log.txt",
       "expect_exit": 0,
       "expr": null,
       "target": null,
@@ -47,12 +47,12 @@
       "timeout_s": 300,
       "weight": 1.0,
       "sensitivity_proof": {
-        "criterion_id": "log-exists",
-        "negative_fixture": "no playtest log",
+        "criterion_id": "log-has-def",
+        "negative_fixture": "canned playtest log without reading app.py",
         "rejected": true,
         "checked_at": "2026-07-31T00:00:00Z",
         "checked_against": "sha256:m1-seed-env",
-        "evidence_hash": "5c14f27adaf4d6bc70f3fa4e2dbf287fc9bb7deb1a0b4785bd7f9d3542ae487e"
+        "evidence_hash": "5ba583e1fb006ceb1b525ca01d96acf60772d3eb3c8c9d658ddf91033dd16483"
       },
       "authored_by": "human",
       "preregistered": true
@@ -87,8 +87,8 @@
   ],
   "failure_modes": [
     {
-      "symptom": "final-state file missing ok=true",
-      "response": "re-drive the login path and rewrite playtest/final-state.txt"
+      "symptom": "playtest log does not contain defs from app.py",
+      "response": "re-read app.py and rewrite the log from source"
     }
   ],
   "provenance": {
@@ -110,6 +110,6 @@
   "hygiene": {
     "secret_scan": "passed",
     "scanned_at": "2026-07-31T00:00:00Z",
-    "lint_content_hash": "d54dfc977a0c2fc82f6f122ecd7bc710b367ede81852f298b769919a4e13960d"
+    "lint_content_hash": "4288036c15673a30aa9445f811b6e574e18eda4eed26235c7e0d3eb91d3ea9ec"
   }
 }

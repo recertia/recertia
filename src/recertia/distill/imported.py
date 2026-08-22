@@ -6,9 +6,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from contracts.criteria import SkillCertificationCriterion, mint_rejecting_proof
+from contracts.policy import Policy
 from contracts.skill import Hygiene, Provenance, SkillVersion, Step
 from contracts.trajectory_import import TrajectoryImport
+from recertia.memory.procedural.hygiene import require_clean, scan_findings
 from recertia.memory.procedural.store import SkillStore
+from recertia.policy_load import load_policy
 
 _NOW = datetime(2026, 8, 22, tzinfo=timezone.utc)
 
@@ -22,38 +25,24 @@ def distill_imported(
     store: SkillStore,
     *,
     actor: str = "import-distill",
+    policy: Policy | None = None,
 ) -> SkillVersion:
     """Author a *candidate* from an external trajectory. Promotion stays outside this path."""
 
+    policy = policy or load_policy()
+    if not policy.improvement.external_trajectory_import:
+        raise DistillRejected("improvement.external_trajectory_import is false")
     if not imported.reexecutable:
         raise DistillRejected(
             "reexecutable=false: episodic only; cannot distill until a Recertia re-validation path exists"
         )
-    skill_id = (imported.task_class or f"import-{imported.import_id}").replace("_", "-")[:64]
-    task_class = (imported.task_class or "repo-chore").replace("_", "-")
-    steps: list[Step] = []
-    for step in imported.steps[:12]:
-        cmd = step.action if (step.tool or "shell") in {"shell", "bash"} else "true"
-        steps.append(
-            Step(
-                id=f"step_{step.seq}",
-                tool="shell",
-                intent=f"Replay imported action {step.seq} when the workspace is writable",
-                inputs={"command": cmd if cmd.strip() else "true"},
-            )
-        )
-    if not steps:
-        steps = [
-            Step(
-                id="step_0",
-                tool="shell",
-                intent="Placeholder replay when the imported trajectory had no steps",
-                inputs={"command": "true"},
-            )
-        ]
+    secrets = scan_findings(imported.model_dump_json())
+    if secrets:
+        raise DistillRejected(f"hygiene scan failed ({', '.join(secrets)})")
     criteria: list[SkillCertificationCriterion] = []
     for raw in imported.criteria_snapshot:
-        if raw.kind != "command" or not raw.run:
+        run = (raw.run or "").strip()
+        if raw.kind != "command" or not run or run == "true":
             continue
         base = SkillCertificationCriterion(
             id=raw.id,
@@ -74,32 +63,35 @@ def distill_imported(
             )
         )
     if not criteria:
-        base = SkillCertificationCriterion(
-            id="import-true",
-            kind="command",
-            run="true",
-            weight=1.0,
-            preregistered=True,
-            authored_by="distiller",
+        raise DistillRejected(
+            "no command criterion on the import; refuse to author a true-noop skill"
         )
-        criteria.append(
-            base.model_copy(
-                update={
-                    "sensitivity_proof": mint_rejecting_proof(
-                        base, negative_fixture="import-empty", fingerprint="import-neg"
-                    )
-                }
+    steps: list[Step] = []
+    for step in imported.steps[:12]:
+        if (step.tool or "shell") not in {"shell", "bash"}:
+            continue
+        cmd = (step.action or "").strip()
+        if not cmd or cmd == "true":
+            continue
+        steps.append(
+            Step(
+                id=f"step_{step.seq}",
+                tool="shell",
+                intent=f"Replay imported action {step.seq} when the workspace is writable",
+                inputs={"command": cmd},
             )
         )
+    if not steps:
+        raise DistillRejected("no replayable shell steps; refuse to author a true-noop skill")
     version = SkillVersion(
-        skill_id=skill_id,
+        skill_id=f"import-{imported.import_id}",
         version=1,
         title=f"Imported {imported.source} {imported.import_id}",
         intent=(
             f"Replay imported trajectory {imported.import_id} when Recertia re-validates it "
             "under locked criteria; not a standing Bot."
         ),
-        task_class=task_class,
+        task_class=(imported.task_class or "repo-chore").replace("_", "-"),
         tags=["imported", imported.source],
         steps=steps,
         certification_criteria=criteria,
@@ -113,7 +105,7 @@ def distill_imported(
         ),
         hygiene=Hygiene(secret_scan="passed", scanned_at=_NOW),
     )
-    return store.write_candidate(version)
+    return store.write_candidate(require_clean(version))
 
 
 def distill_imported_file(
@@ -121,6 +113,7 @@ def distill_imported_file(
     store: SkillStore,
     *,
     actor: str = "import-distill",
+    policy: Policy | None = None,
 ) -> SkillVersion:
     imported = TrajectoryImport.model_validate_json(path.read_text(encoding="utf-8"))
-    return distill_imported(imported, store, actor=actor)
+    return distill_imported(imported, store, actor=actor, policy=policy)

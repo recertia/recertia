@@ -10,7 +10,7 @@
       "pytest": "8.3.4"
     },
     "golden_set_ref": "evals/golden/_promotion_logs/repro-evidence-pack-v1.json",
-    "last_recertified_at": "2026-08-22T22:14:35.167357Z",
+    "last_recertified_at": "2026-08-22T22:26:17.057519Z",
     "recert_status": "fresh"
   },
   "retirement": {

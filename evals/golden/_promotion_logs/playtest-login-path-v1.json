@@ -7,9 +7,9 @@
       "golden_path": "evals/golden/playtest-operator/playtest-login-path",
       "passed": true,
       "terminal": "solved",
-      "run_id": "golden-playtest-login-path-v1-737c7f",
+      "run_id": "golden-playtest-login-path-v1-87b763",
       "detail": "expected terminal='solved', got 'solved'; snapshot=None model='m4-harness'",
-      "at": "2026-08-22T22:14:35.223941+00:00"
+      "at": "2026-08-22T22:26:17.117897+00:00"
     }
   ]
 }

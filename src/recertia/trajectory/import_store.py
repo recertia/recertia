@@ -10,6 +10,7 @@ from uuid import uuid4
 from contracts.policy import Policy
 from contracts.trajectory_import import TrajectoryImport
 from recertia.memory.episodic import CaseRecord, EpisodicStore
+from recertia.paths import contained_path
 from recertia.policy_load import load_policy
 from recertia.proposals.store import ProposalRecord, ProposalStore
 
@@ -36,6 +37,12 @@ def _outcome(value: str) -> str:
     return "abandoned"
 
 
+def _kebab(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return value.replace("_", "-")
+
+
 def ingest_trajectory(
     payload: dict | TrajectoryImport,
     *,
@@ -55,9 +62,10 @@ def ingest_trajectory(
         else TrajectoryImport.model_validate(payload)
     )
     root = Path(runs_root)
-    imports_dir = root / "imports"
+    tenant_root = root / "runs" / tenant_id
+    imports_dir = tenant_root / "imports"
     imports_dir.mkdir(parents=True, exist_ok=True)
-    dest = imports_dir / f"{imported.import_id}.json"
+    dest = contained_path(imports_dir, f"{imported.import_id}.json")
     if dest.exists():
         raise ImportRejected(f"import {imported.import_id!r} already exists (append-only)")
     dest.write_text(imported.model_dump_json(indent=2) + "\n", encoding="utf-8")
@@ -67,7 +75,7 @@ def ingest_trajectory(
         case_id=case_id,
         run_id=f"import:{imported.import_id}",
         attempt_no=0,
-        task_class=imported.task_class,
+        task_class=_kebab(imported.task_class),
         request_excerpt=imported.source_ref[:240],
         outcome=_outcome(imported.outcome),
         transcript_ref=str(dest),
@@ -76,18 +84,18 @@ def ingest_trajectory(
         session_id=imported.import_id,
         recorded_at=datetime.now(timezone.utc),
     )
-    episodic = EpisodicStore(root / "runs" / tenant_id / "episodic")
+    episodic = EpisodicStore(tenant_root / "episodic")
     episodic.write(case)
 
     proposal_id = None
     if imported.reexecutable:
-        store = ProposalStore(root / "proposals.sqlite")
+        store = ProposalStore(tenant_root / "proposals.sqlite")
         try:
             rec = store.add(
                 ProposalRecord(
                     proposal_id=uuid4().hex[:12],
                     kind="external_trajectory",
-                    skill_id=imported.task_class or "external-import",
+                    skill_id=f"import-{imported.import_id}",
                     version=0,
                     rationale=(
                         "Imported trajectory queued for Recertia re-validation. "

@@ -17,8 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `improvement.external_trajectory_import`, `long_lived_computer_backend`
   (default false), `isolation.allow_external_computer` (default false),
   `job_quota.computer_use_practice_share`. `recertia jobs run --task-class`
-  charges that share. `recertia systems --brief` prints stuck/lift/redundancy
-  with honest "not established".
+  `--max-tokens` charges that share. `recertia systems --brief` prints
+  stuck/lift/redundancy with honest "not established". Import ids are
+  path-safe and tenant-scoped. Distill refuses `true`-noop skills.
 
 - **Systems efficiency (ADR-0018, AgentSysBench / ClawGym II)** — hop telemetry now
   emits `component_class`, `rss_bytes`, `workdir_bytes`, `idle_gap_ms` on

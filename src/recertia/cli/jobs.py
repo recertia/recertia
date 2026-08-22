@@ -71,6 +71,9 @@ def jobs_run(
         "--task-class",
         help="Quota class for computer-use practice share (ADR-0019).",
     ),
+    max_tokens: int = typer.Option(
+        0, "--max-tokens", help="JobQuota tokens to admit/charge (0 = no charge)."
+    ),
 ) -> None:
     """Run an offline improvement job under a proposal budget."""
 
@@ -113,7 +116,7 @@ def jobs_run(
         eval_db=runs_root / "evals.db",
         skills_root=skills_root,
     )
-    budget = JobBudget(max_proposals=max_proposals)
+    budget = JobBudget(max_proposals=max_proposals, max_tokens=max_tokens)
     name = job.strip().lower()
     traj_store = TrajectoryStore(runs_root / "trajectories")
 

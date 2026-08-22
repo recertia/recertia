@@ -4,7 +4,7 @@
   "version": 1,
   "supersedes": null,
   "title": "Produce a bug-reproduction evidence pack",
-  "intent": "Write a self-contained evidence pack (steps plus network notes) when a fixture fails and a reviewer needs a replayable repro, not a live debugger session.",
+  "intent": "Run the failing fixture and write a replayable evidence pack when a reviewer needs the observed fault, not a live debugger session.",
   "task_class": "bug-reproduction",
   "tags": [
     "repro",
@@ -18,9 +18,9 @@
     {
       "id": "write_pack",
       "tool": "shell",
-      "intent": "Write evidence pack files when the workdir is writable.",
+      "intent": "Execute broken.add and record the fault when the workdir is writable.",
       "inputs": {
-        "command": "python -c \"from pathlib import Path; Path('evidence').mkdir(exist_ok=True); Path('evidence/steps.txt').write_text('1. run broken.py\\n', encoding='utf-8'); Path('evidence/network-notes.txt').write_text('no network\\n', encoding='utf-8')\""
+        "command": "python -c \"from pathlib import Path; import broken; Path('evidence').mkdir(exist_ok=True); got=broken.add(1,1); Path('evidence/steps.txt').write_text(f'add(1,1)={got} expected 2\\n', encoding='utf-8'); Path('evidence/network-notes.txt').write_text('network_policy=none\\n', encoding='utf-8')\""
       },
       "outputs": [],
       "input_bindings": [],
@@ -31,9 +31,9 @@
   ],
   "certification_criteria": [
     {
-      "id": "steps-exist",
+      "id": "steps-record-fault",
       "kind": "command",
-      "run": "test -f evidence/steps.txt",
+      "run": "grep -q 'add(1,1)=' evidence/steps.txt",
       "expect_exit": 0,
       "expr": null,
       "target": null,
@@ -47,12 +47,12 @@
       "timeout_s": 300,
       "weight": 1.0,
       "sensitivity_proof": {
-        "criterion_id": "steps-exist",
-        "negative_fixture": "no evidence dir",
+        "criterion_id": "steps-record-fault",
+        "negative_fixture": "canned evidence without running broken.py",
         "rejected": true,
         "checked_at": "2026-07-31T00:00:00Z",
         "checked_against": "sha256:m1-seed-env",
-        "evidence_hash": "c5a7c87fb7abb5f97a7a43a85ef75a8096a3590b87729db7baa06002e99c1c1e"
+        "evidence_hash": "23e24636bc319e9c9f6b92e4a57d3f606a8f8c6f4288eeaa90082850982ae927"
       },
       "authored_by": "human",
       "preregistered": true
@@ -87,8 +87,8 @@
   ],
   "failure_modes": [
     {
-      "symptom": "evidence files missing after the pack step",
-      "response": "re-run the pack command and refuse promotion if either file is absent"
+      "symptom": "evidence pack missing the observed add(1,1) value",
+      "response": "re-run broken.add(1,1) and refuse promotion if the record is canned"
     }
   ],
   "provenance": {
@@ -110,6 +110,6 @@
   "hygiene": {
     "secret_scan": "passed",
     "scanned_at": "2026-07-31T00:00:00Z",
-    "lint_content_hash": "c936f3fd326c015f26b7dbda7aff2753e81d6b3a8f2e89e1977c5fc071dcadc5"
+    "lint_content_hash": "e6ea95ba4169485b909332e765ac058f8db8d488a104acc162f3f5ac748bb5e0"
   }
 }

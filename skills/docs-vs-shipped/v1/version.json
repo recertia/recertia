@@ -4,7 +4,7 @@
   "version": 1,
   "supersedes": null,
   "title": "Audit docs against shipped commands",
-  "intent": "Diff shipped product files against docs and list missing or stale pages when documentation has lagged a release.",
+  "intent": "Diff shipped command names against docs and list undocumented tokens when documentation has lagged a release.",
   "task_class": "docs-auditor",
   "tags": [
     "docs",
@@ -18,9 +18,9 @@
     {
       "id": "audit",
       "tool": "shell",
-      "intent": "Write audit/missing-pages.txt with stale entries when the workdir is writable.",
+      "intent": "List command tokens missing from docs when the workdir is writable.",
       "inputs": {
-        "command": "python -c \"from pathlib import Path; Path('audit').mkdir(exist_ok=True); Path('audit/missing-pages.txt').write_text('stale: export command undocumented\\n', encoding='utf-8')\""
+        "command": "python -c \"from pathlib import Path; cli=Path('src/cli.py').read_text(encoding='utf-8'); docs=Path('docs/README.md').read_text(encoding='utf-8'); names=[n for n in ('login','cmd_export') if n in cli]; missing=[n for n in names if n not in docs]; Path('audit').mkdir(exist_ok=True); Path('audit/missing-pages.txt').write_text('\\n'.join('stale: '+m for m in missing)+'\\n', encoding='utf-8')\""
       },
       "outputs": [],
       "input_bindings": [],
@@ -58,9 +58,9 @@
       "preregistered": true
     },
     {
-      "id": "flags-stale",
+      "id": "flags-export",
       "kind": "command",
-      "run": "grep -q stale audit/missing-pages.txt",
+      "run": "grep -q cmd_export audit/missing-pages.txt",
       "expect_exit": 0,
       "expr": null,
       "target": null,
@@ -74,12 +74,12 @@
       "timeout_s": 300,
       "weight": 1.0,
       "sensitivity_proof": {
-        "criterion_id": "flags-stale",
-        "negative_fixture": "audit without stale",
+        "criterion_id": "flags-export",
+        "negative_fixture": "audit without cmd_export",
         "rejected": true,
         "checked_at": "2026-07-31T00:00:00Z",
         "checked_against": "sha256:m1-seed-env",
-        "evidence_hash": "10f35603b1198c543e9c22211023e2c226c492849b95e55cec43b5443e994b46"
+        "evidence_hash": "a77f75121baa04101815b3b799a39c18fbd11907e378df9e126e60109feafce7"
       },
       "authored_by": "human",
       "preregistered": true
@@ -87,8 +87,8 @@
   ],
   "failure_modes": [
     {
-      "symptom": "audit file missing or has no stale entries",
-      "response": "re-diff shipped commands against docs and rewrite missing-pages.txt"
+      "symptom": "audit file missing cmd_export from src/cli.py",
+      "response": "re-parse shipped names and rewrite missing-pages.txt"
     }
   ],
   "provenance": {
@@ -110,6 +110,6 @@
   "hygiene": {
     "secret_scan": "passed",
     "scanned_at": "2026-07-31T00:00:00Z",
-    "lint_content_hash": "52e5509cea2dd7dd668d16b26599ac6f91dfc681a197eddc59eeeb8893b058f0"
+    "lint_content_hash": "5da9d9b169cbda74c797646f4cd0f03fdd0e56bfa0161d311b4ab8de31f6463c"
   }
 }

@@ -3,15 +3,14 @@
   "desired": [
     {
       "id": "missing-list",
-      "kind": "file_exists",
-      "path": "audit/missing-pages.txt",
+      "kind": "command",
+      "run": "test -f audit/missing-pages.txt",
       "weight": 1.0
     },
     {
-      "id": "flags-stale",
-      "kind": "file_contains",
-      "path": "audit/missing-pages.txt",
-      "pattern": "stale",
+      "id": "flags-export",
+      "kind": "command",
+      "run": "grep -q cmd_export audit/missing-pages.txt",
       "weight": 1.0
     }
   ],

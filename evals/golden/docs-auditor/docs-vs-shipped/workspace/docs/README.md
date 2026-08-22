@@ -1,3 +1,3 @@
 # Product
 
-Documents the `login` command. The `export` command shipped last week is not documented.
+Documents the `login` command. The latest shipped command is not listed here.

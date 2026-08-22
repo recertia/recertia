@@ -2,16 +2,15 @@
   "goal_id": "playtest-login-path-v1",
   "desired": [
     {
-      "id": "log-exists",
-      "kind": "file_exists",
-      "path": "playtest/step-log.txt",
+      "id": "log-has-def",
+      "kind": "command",
+      "run": "grep -q 'def login' playtest/step-log.txt",
       "weight": 1.0
     },
     {
       "id": "final-state",
-      "kind": "file_contains",
-      "path": "playtest/final-state.txt",
-      "pattern": "ok=true",
+      "kind": "command",
+      "run": "grep -q 'ok=true' playtest/final-state.txt",
       "weight": 1.0
     }
   ],

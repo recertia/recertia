@@ -439,7 +439,7 @@
   "description": "Append-only import record. Never mutates an existing Recertia run.",
   "properties": {
     "import_id": {
-      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
       "title": "Import Id",
       "type": "string"
     },

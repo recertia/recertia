@@ -1,1 +1,1 @@
-COMMANDS = ["login", "export"]
+COMMANDS = ["login", "cmd_export"]

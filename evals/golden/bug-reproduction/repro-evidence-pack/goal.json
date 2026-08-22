@@ -2,15 +2,15 @@
   "goal_id": "repro-evidence-pack-v1",
   "desired": [
     {
-      "id": "steps-exist",
-      "kind": "file_exists",
-      "path": "evidence/steps.txt",
+      "id": "steps-record-fault",
+      "kind": "command",
+      "run": "grep -q 'add(1,1)=' evidence/steps.txt",
       "weight": 1.0
     },
     {
       "id": "notes-exist",
-      "kind": "file_exists",
-      "path": "evidence/network-notes.txt",
+      "kind": "command",
+      "run": "test -f evidence/network-notes.txt",
       "weight": 1.0
     }
   ],

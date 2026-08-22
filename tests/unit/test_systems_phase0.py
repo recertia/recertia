@@ -234,3 +234,35 @@ def test_engine_emits_component_class(tmp_path: Path) -> None:
     assert finished[0].attributes.get("component_class") == "control_plane"
     assert "rss_bytes" in finished[0].attributes
     assert "latency_ms" in finished[0].attributes
+
+
+def test_operator_brief_lists_stuck_from_checkpoints(tmp_path: Path) -> None:
+    from contracts.criteria import TaskCriterion
+    from contracts.run import Task
+    from recertia.graph.engine import GraphOrchestrator
+    from recertia.ops.operator_brief import brief_from_runs_root
+
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    runs = tmp_path / "runs"
+    orch = GraphOrchestrator(runs)
+    try:
+        orch.start(
+            "stuck-run",
+            Task(task_id="t", request="pause me", submitted_at=datetime.now(timezone.utc)),
+            [
+                TaskCriterion(
+                    id="x",
+                    kind="command",
+                    run="true",
+                    source="caller",
+                    weight=1.0,
+                )
+            ],
+            workdir=workdir,
+            max_steps=1,
+        )
+    finally:
+        orch.close()
+    brief = brief_from_runs_root(runs)
+    assert any(j["run_id"] == "stuck-run" for j in brief.stuck_jobs)
