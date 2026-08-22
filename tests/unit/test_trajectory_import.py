@@ -130,10 +130,28 @@ def test_computer_use_goldens_compile() -> None:
 def test_isolation_defaults_forbid_long_lived_computer() -> None:
     policy = load_policy()
     assert policy.isolation.allow_external_computer is False
+    assert policy.isolation.external_computer_allowlist == []
     assert policy.improvement.long_lived_computer_backend is False
     assert policy.job_quota.computer_use_practice_share == 0.15
     IsolationSettings()
     Policy.model_validate(policy.model_dump())
+
+
+def test_external_computer_tool_registered_and_refuses_by_default(tmp_path: Path) -> None:
+    from recertia.solver.registry import default_registry
+    from recertia.solver.result_cache import ToolResultCache
+
+    registry = default_registry()
+    assert "external_computer" in registry.names()
+    tool = registry.get("external_computer")
+    assert tool.side_effect == "external"
+    result = registry.handler("external_computer")({"backend": "grok_bot"}, tmp_path)
+    assert result.ok is False
+    assert "allow_external_computer is false" in result.stderr
+    cache = ToolResultCache()
+    cache.store(tool, {"backend": "grok_bot"}, result, snapshot_hash="x")
+    assert cache.lookup(tool, {"backend": "grok_bot"}, snapshot_hash="x") is None
+    assert cache.stats.skipped >= 1
 
 
 def test_operator_brief_honest_when_no_lift() -> None:

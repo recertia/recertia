@@ -147,6 +147,13 @@
           "minimum": 1,
           "title": "External Computer Ttl Seconds",
           "type": "integer"
+        },
+        "external_computer_allowlist": {
+          "items": {
+            "type": "string"
+          },
+          "title": "External Computer Allowlist",
+          "type": "array"
         }
       },
       "title": "IsolationSettings",

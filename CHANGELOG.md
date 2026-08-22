@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--max-tokens` charges that share. `recertia systems --brief` prints
   stuck/lift/redundancy with honest "not established". Import ids are
   path-safe and tenant-scoped. Distill refuses `true`-noop skills.
+  `external_computer` is registered as an `external` tool and refuses unless
+  isolation + improvement flags and a non-empty allow-list are set; even then
+  this build does not open a standing VM.
 
 - **Systems efficiency (ADR-0018, AgentSysBench / ClawGym II)** — hop telemetry now
   emits `component_class`, `rss_bytes`, `workdir_bytes`, `idle_gap_ms` on

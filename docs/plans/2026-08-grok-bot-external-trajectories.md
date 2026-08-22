@@ -21,12 +21,12 @@ retrieve-before-invent / criteria lock / control-arm lift / plane separation.
 
 - **0** contracts + goldens + `recertia trajectory import` — done
 - **1** import → episodic → pending proposal; `recertia trajectory distill` writes *candidate* only — done
-- **2** operator projections + JobRunner `--task-class` quota charge; executor contract remains flag-off
+- **2** operator projections + JobRunner `--task-class` quota charge; `external_computer` tool registered, handler is a gate (flag off)
 - **3** cost control / retirement — not started
 
 ## Remaining
 
-- `ExternalComputerExecutor` is not registered in the affordance store (flag stays false).
+- No live Grok Bot / long-lived VM client (handler refuses even when flags are on).
 - No established control-arm lift on a computer-use class (honest “not established”).
 - Phase 3 soak / retirement tuning.
 

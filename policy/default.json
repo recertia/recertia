@@ -57,7 +57,8 @@
   "isolation": {
     "default_backend": "container",
     "allow_external_computer": false,
-    "external_computer_ttl_seconds": 3600
+    "external_computer_ttl_seconds": 3600,
+    "external_computer_allowlist": []
   },
   "notes": [
     "P0″ default policy. HEX and compress remain off until a lift interval exists.",

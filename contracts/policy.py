@@ -182,6 +182,7 @@ class IsolationSettings(BaseModel):
     default_backend: Literal["container", "local"] = "container"
     allow_external_computer: bool = False
     external_computer_ttl_seconds: int = Field(default=3600, ge=1)
+    external_computer_allowlist: list[str] = Field(default_factory=list)
 
 
 class Policy(BaseModel):

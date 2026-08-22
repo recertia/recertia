@@ -423,4 +423,19 @@ def default_registry() -> ToolRegistry:
         ),
         agent_subtask_handler,
     )
+    from recertia.solver.external_computer import external_computer_handler
+
+    registry.register(
+        Tool(
+            name="external_computer",
+            side_effect="external",
+            description=(
+                "Optional allow-listed computer-use backend (ADR-0019). "
+                "Default remains --rm; never a security boundary."
+            ),
+            flaky=True,
+            error_signatures=("allow_external_computer is false", "no live backend"),
+        ),
+        external_computer_handler,
+    )
     return registry
