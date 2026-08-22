@@ -19,7 +19,16 @@ retrieve-before-invent / criteria lock / control-arm lift / plane separation.
 
 ## Phases
 
-- **0** contracts + goldens + `recertia trajectory import` (this commit)
-- **1** import → episodic → pending proposal (never approved from this path)
-- **2** operator projections + optional executor contract (flag off)
+- **0** contracts + goldens + `recertia trajectory import` — done
+- **1** import → episodic → pending proposal (never approved from this path) — done
+- **2** operator projections + optional executor contract (flag off) — projections done; executor is contract-only
 - **3** cost control / retirement — not started
+
+## Remaining (not this cleanup)
+
+- JobRunner does not yet pass `task_class` into `JobQuota.charge`, so the computer-use share is enforced only when callers supply the class.
+- No seed skills for the three computer-use goldens; fixtures compile, they are not yet a promotion path.
+- Distill does not take `TrajectoryImport` as a first-class input; re-validation still requires a Recertia run.
+- `ExternalComputerExecutor` is not registered in the affordance store (flag stays false).
+- No established control-arm lift on a computer-use class (honest “not established”).
+

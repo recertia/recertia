@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -109,7 +110,7 @@ def test_flag_off_rejects(tmp_path: Path) -> None:
         ingest_trajectory(_valid_payload(), runs_root=tmp_path, policy=policy)
 
 
-def test_computer_use_goldens_compile(tmp_path: Path) -> None:
+def test_computer_use_goldens_compile() -> None:
     root = Path("evals/golden")
     if not root.exists():
         pytest.skip("golden tree not at cwd")
@@ -142,3 +143,35 @@ def test_operator_brief_honest_when_no_lift() -> None:
     assert brief.lift_by_task_class[0].established is False
     assert "not established" in brief.lift_by_task_class[0].detail
     assert brief.redundancy["tool_redundancy_rate"] == 0.5
+
+
+def test_cli_import_rejects_and_accepts(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from recertia.cli.main import app
+
+    runner = CliRunner()
+    bad = tmp_path / "bad.json"
+    bad.write_text("{}", encoding="utf-8")
+    denied = runner.invoke(app, ["trajectory", "import", str(bad), "--runs-root", str(tmp_path)])
+    assert denied.exit_code == 1
+    assert "rejected" in denied.output.lower() or "rejected" in (denied.stdout + denied.stderr).lower()
+
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps(_valid_payload(import_id="imp-cli")), encoding="utf-8")
+    ok = runner.invoke(app, ["trajectory", "import", str(good), "--runs-root", str(tmp_path)])
+    assert ok.exit_code == 0, ok.output
+    assert '"promoted": false' in ok.stdout.lower() or '"promoted": false' in ok.output.lower()
+
+
+def test_computer_use_quota_share() -> None:
+    from contracts.policy import JobQuota
+
+    quota = JobQuota(weekly_token_cap=1000, computer_use_practice_share=0.1)
+    assert quota.computer_use_remaining() == 100
+    assert quota.can_admit("practice_band", task_class="bug_reproduction", tokens=101) is False
+    charged = quota.charge("practice_band", 40, task_class="bug_reproduction")
+    assert charged.computer_use_tokens_spent == 40
+    assert charged.can_admit("practice_band", task_class="docs_auditor", tokens=70) is False
+    # Ordinary practice is not capped by the computer-use share.
+    assert quota.can_admit("practice_band", task_class="repo-chore", tokens=200) is True

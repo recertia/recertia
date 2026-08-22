@@ -109,7 +109,21 @@ class JobQuota(BaseModel):
         leftover = self.remaining()
         return max(0, min(cap - self.computer_use_tokens_spent, leftover))
 
+    @staticmethod
+    def _computer_use_class(task_class: str | None) -> bool:
+        return task_class in {
+            "bug_reproduction",
+            "playtest_operator",
+            "docs_auditor",
+        }
+
     def can_admit(self, job: JobPriority, *, task_class: str | None = None, tokens: int = 0) -> bool:
+        if self._computer_use_class(task_class) and job in (
+            "practice_band",
+            "practice_hex",
+        ):
+            if self.computer_use_remaining() < tokens:
+                return False
         if job in ("recertifier", "curator_retire", "fail_cluster_author", "practice_band"):
             return self.remaining() >= tokens
         if job == "practice_hex":
@@ -124,6 +138,9 @@ class JobQuota(BaseModel):
 
     def charge(self, job: JobPriority, tokens: int, *, task_class: str | None = None) -> "JobQuota":
         hex_spent = self.hex_tokens_spent + tokens if job == "practice_hex" else self.hex_tokens_spent
+        cu_spent = self.computer_use_tokens_spent
+        if self._computer_use_class(task_class) and job in ("practice_band", "practice_hex"):
+            cu_spent += tokens
         by_class = dict(self.hex_jobs_by_class)
         if job == "practice_hex" and task_class is not None:
             by_class[task_class] = by_class.get(task_class, 0) + 1
@@ -131,6 +148,7 @@ class JobQuota(BaseModel):
             update={
                 "tokens_spent": self.tokens_spent + tokens,
                 "hex_tokens_spent": hex_spent,
+                "computer_use_tokens_spent": cu_spent,
                 "hex_jobs_by_class": by_class,
             }
         )

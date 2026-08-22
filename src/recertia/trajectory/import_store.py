@@ -13,10 +13,6 @@ from recertia.memory.episodic import CaseRecord, EpisodicStore
 from recertia.policy_load import load_policy
 from recertia.proposals.store import ProposalRecord, ProposalStore
 
-COMPUTER_USE_TASK_CLASSES = frozenset(
-    {"bug_reproduction", "playtest_operator", "docs_auditor"}
-)
-
 
 class ImportRejected(ValueError):
     """Provenance, policy, or environment rejected the import."""
