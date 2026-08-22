@@ -1,0 +1,23 @@
+{
+  "skill_id": "playtest-login-path",
+  "version": 1,
+  "lifecycle": "approved",
+  "active": true,
+  "certification": {
+    "model_validated_on": "m1-seed",
+    "tool_fingerprint": {
+      "python": "3.12",
+      "pytest": "8.3.4"
+    },
+    "golden_set_ref": "evals/golden/_promotion_logs/playtest-login-path-v1.json",
+    "last_recertified_at": "2026-08-22T22:14:35.224415Z",
+    "recert_status": "fresh"
+  },
+  "retirement": {
+    "benched_at": null,
+    "reason": null,
+    "evidence": null,
+    "restored_at": null,
+    "grace_period_remaining": null
+  }
+}

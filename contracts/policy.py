@@ -112,9 +112,9 @@ class JobQuota(BaseModel):
     @staticmethod
     def _computer_use_class(task_class: str | None) -> bool:
         return task_class in {
-            "bug_reproduction",
-            "playtest_operator",
-            "docs_auditor",
+            "bug-reproduction",
+            "playtest-operator",
+            "docs-auditor",
         }
 
     def can_admit(self, job: JobPriority, *, task_class: str | None = None, tokens: int = 0) -> bool:

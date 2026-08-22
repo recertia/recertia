@@ -6085,7 +6085,7 @@ Standing named teammates, persistent VMs as a security boundary, auto-write of a
 2. Import is append-only. It never mutates an existing Recertia run.
 3. `reexecutable=False` trajectories may be written to the episodic store. They **cannot** be promoted until a Recertia-side re-validation path exists.
 4. Promotion still requires automatic validation + human review + positive control-arm lift with a Wilson interval. The system may not write approved state from the import path.
-5. Three golden task classes are first-class: `bug_reproduction`, `playtest_operator`, `docs_auditor`. They must support memory-off control runs.
+5. Three golden task classes are first-class: `bug-reproduction`, `playtest-operator`, `docs-auditor`. They must support memory-off control runs.
 6. A long-lived computer is an optional `ExternalComputerExecutor` affordance, policy-gated (`improvement.long_lived_computer_backend` default **false**). Default execution remains `--rm` containers. The shared computer is never a Recertia security boundary.
 7. Operator surface: import action + stuck-jobs / lift-by-task-class / redundancy projections. No Bot persona.
 

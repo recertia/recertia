@@ -8,6 +8,11 @@ from recertia.memory.procedural.seeds._common import (
     _cmd_criterion,
     _prov,
 )
+from recertia.memory.procedural.seeds.computer_use import (
+    docs_vs_shipped,
+    playtest_login_path,
+    repro_evidence_pack,
+)
 
 
 def add_gitignore_entry() -> SkillVersion:
@@ -391,5 +396,8 @@ SEED_SKILLS: list[SkillVersion] = [
     bump_action_checkout(),
     add_readme_section(),
     ensure_src_layout(),
+    repro_evidence_pack(),
+    playtest_login_path(),
+    docs_vs_shipped(),
 ]
 

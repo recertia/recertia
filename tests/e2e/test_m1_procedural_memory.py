@@ -186,7 +186,10 @@ def test_every_seed_skill_has_golden_promotion_log() -> None:
             f"(ref={status.certification.golden_set_ref!r} → {log_path})"
         )
         payload = json.loads(log_path.read_text())
-        assert payload["passed"] is True
+        passed = payload.get("passed")
+        if passed is None:
+            passed = payload.get("all_passed")
+        assert passed is True
         assert log_path.parent == log_dir
 
 

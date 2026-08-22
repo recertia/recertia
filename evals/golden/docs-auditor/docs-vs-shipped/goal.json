@@ -17,5 +17,5 @@
   ],
   "constraints": [],
   "context": "Diff shipped product files against docs and list missing or stale pages.",
-  "task_class": "docs_auditor"
+  "task_class": "docs-auditor"
 }

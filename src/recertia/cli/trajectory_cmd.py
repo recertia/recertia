@@ -46,3 +46,35 @@ def trajectory_import_cmd(
             indent=2,
         )
     )
+
+
+@trajectory_app.command("distill")
+def trajectory_distill_cmd(
+    path: Path = typer.Argument(..., exists=True, readable=True, dir_okay=False),
+    skills_root: Path = typer.Option(Path("skills"), "--skills-root"),
+    actor: str = typer.Option("cli", "--actor"),
+) -> None:
+    """Author a candidate from a reexecutable import. Does not promote."""
+
+    from recertia.distill.imported import DistillRejected, distill_imported_file
+    from recertia.memory.procedural.store import SkillStore
+
+    store = SkillStore(skills_root)
+    try:
+        version = distill_imported_file(path, store, actor=actor)
+    except (DistillRejected, ValueError) as exc:
+        typer.echo(f"rejected: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    status = store.get_status(version.skill_id, version.version)
+    typer.echo(
+        json.dumps(
+            {
+                "skill_id": version.skill_id,
+                "version": version.version,
+                "lifecycle": status.lifecycle,
+                "active": status.active,
+                "promoted": False,
+            },
+            indent=2,
+        )
+    )

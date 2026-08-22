@@ -1,0 +1,24 @@
+{
+  "skill_id": "repro-evidence-pack",
+  "version": 1,
+  "predictive_trust": {
+    "applications": 0,
+    "successes": 0,
+    "last_used_at": null,
+    "decayed_score": null
+  },
+  "contribution": {
+    "applications": 0,
+    "successes": 0,
+    "suppressed_applications": 0,
+    "suppressed_successes": 0,
+    "interval_low": null,
+    "interval_high": null,
+    "last_evaluated_at": null
+  },
+  "apply_diversity": {
+    "distinct_apply_sessions": 0,
+    "apply_session_sample": [],
+    "floor": 30
+  }
+}

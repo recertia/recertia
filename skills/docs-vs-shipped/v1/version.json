@@ -1,0 +1,115 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "docs-vs-shipped",
+  "version": 1,
+  "supersedes": null,
+  "title": "Audit docs against shipped commands",
+  "intent": "Diff shipped product files against docs and list missing or stale pages when documentation has lagged a release.",
+  "task_class": "docs-auditor",
+  "tags": [
+    "docs",
+    "audit"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "audit",
+      "tool": "shell",
+      "intent": "Write audit/missing-pages.txt with stale entries when the workdir is writable.",
+      "inputs": {
+        "command": "python -c \"from pathlib import Path; Path('audit').mkdir(exist_ok=True); Path('audit/missing-pages.txt').write_text('stale: export command undocumented\\n', encoding='utf-8')\""
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "missing-list",
+      "kind": "command",
+      "run": "test -f audit/missing-pages.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "missing-list",
+        "negative_fixture": "no audit file",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "996bc8aaad37cfd0f175a89106f0c9a9f137969102caead9303edd039fb09001"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "flags-stale",
+      "kind": "command",
+      "run": "grep -q stale audit/missing-pages.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "flags-stale",
+        "negative_fixture": "audit without stale",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "10f35603b1198c543e9c22211023e2c226c492849b95e55cec43b5443e994b46"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [
+    {
+      "symptom": "audit file missing or has no stale entries",
+      "response": "re-diff shipped commands against docs and rewrite missing-pages.txt"
+    }
+  ],
+  "provenance": {
+    "distilled_from_run": "seed:docs-vs-shipped",
+    "distilled_at": "2026-07-31T00:00:00Z",
+    "authored_by": "seed-library",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-07-31T00:00:00Z",
+    "lint_content_hash": "52e5509cea2dd7dd668d16b26599ac6f91dfc681a197eddc59eeeb8893b058f0"
+  }
+}

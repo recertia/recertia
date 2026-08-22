@@ -17,5 +17,5 @@
   ],
   "constraints": [],
   "context": "Drive the login path and record UI assertions plus a final state predicate.",
-  "task_class": "playtest_operator"
+  "task_class": "playtest-operator"
 }

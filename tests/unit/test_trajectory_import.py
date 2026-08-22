@@ -10,10 +10,12 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.goal import Goal, compile_goal
-from contracts.policy import IsolationSettings, Policy
+from contracts.policy import IsolationSettings, JobQuota, Policy
 from contracts.trajectory_import import TrajectoryImport
+from recertia.distill.imported import DistillRejected, distill_imported
 from recertia.evals.golden import list_goldens_for_task_class
 from recertia.evals.task_classes import COMPUTER_USE_TASK_CLASSES
+from recertia.memory.procedural.store import SkillStore
 from recertia.ops.operator_brief import brief_from_events
 from recertia.policy_load import load_policy
 from recertia.telemetry import SpanEvent
@@ -40,7 +42,7 @@ def _valid_payload(**overrides: object) -> dict:
         },
         "artifacts": [],
         "reexecutable": False,
-        "task_class": "bug_reproduction",
+        "task_class": "bug-reproduction",
     }
     base.update(overrides)
     return base
@@ -139,7 +141,7 @@ def test_operator_brief_honest_when_no_lift() -> None:
         SpanEvent(name="tool.invoked", attributes={"canonical_key": "a"}),
         SpanEvent(name="tool.invoked", attributes={"canonical_key": "a"}),
     ]
-    brief = brief_from_events(events, task_classes=["bug_reproduction"])
+    brief = brief_from_events(events, task_classes=["bug-reproduction"])
     assert brief.lift_by_task_class[0].established is False
     assert "not established" in brief.lift_by_task_class[0].detail
     assert brief.redundancy["tool_redundancy_rate"] == 0.5
@@ -155,23 +157,34 @@ def test_cli_import_rejects_and_accepts(tmp_path: Path) -> None:
     bad.write_text("{}", encoding="utf-8")
     denied = runner.invoke(app, ["trajectory", "import", str(bad), "--runs-root", str(tmp_path)])
     assert denied.exit_code == 1
-    assert "rejected" in denied.output.lower() or "rejected" in (denied.stdout + denied.stderr).lower()
+    assert "rejected" in (denied.output + denied.stdout + denied.stderr).lower()
 
     good = tmp_path / "good.json"
     good.write_text(json.dumps(_valid_payload(import_id="imp-cli")), encoding="utf-8")
     ok = runner.invoke(app, ["trajectory", "import", str(good), "--runs-root", str(tmp_path)])
     assert ok.exit_code == 0, ok.output
-    assert '"promoted": false' in ok.stdout.lower() or '"promoted": false' in ok.output.lower()
+    assert '"promoted": false' in ok.output.lower()
 
 
 def test_computer_use_quota_share() -> None:
-    from contracts.policy import JobQuota
-
     quota = JobQuota(weekly_token_cap=1000, computer_use_practice_share=0.1)
     assert quota.computer_use_remaining() == 100
-    assert quota.can_admit("practice_band", task_class="bug_reproduction", tokens=101) is False
-    charged = quota.charge("practice_band", 40, task_class="bug_reproduction")
+    assert quota.can_admit("practice_band", task_class="bug-reproduction", tokens=101) is False
+    charged = quota.charge("practice_band", 40, task_class="bug-reproduction")
     assert charged.computer_use_tokens_spent == 40
-    assert charged.can_admit("practice_band", task_class="docs_auditor", tokens=70) is False
-    # Ordinary practice is not capped by the computer-use share.
+    assert charged.can_admit("practice_band", task_class="docs-auditor", tokens=70) is False
     assert quota.can_admit("practice_band", task_class="repo-chore", tokens=200) is True
+
+
+def test_distill_imported_never_promotes(tmp_path: Path) -> None:
+    frozen = TrajectoryImport.model_validate(_valid_payload(reexecutable=False))
+    store = SkillStore(tmp_path / "skills")
+    with pytest.raises(DistillRejected):
+        distill_imported(frozen, store)
+    imported = TrajectoryImport.model_validate(
+        _valid_payload(import_id="imp-d", reexecutable=True)
+    )
+    version = distill_imported(imported, store)
+    status = store.get_status(version.skill_id, version.version)
+    assert status.lifecycle == "candidate"
+    assert status.active is False

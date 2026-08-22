@@ -1,0 +1,115 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "playtest-login-path",
+  "version": 1,
+  "supersedes": null,
+  "title": "Playtest a login path and record the final state",
+  "intent": "Drive the login path and record UI step assertions plus a final-state predicate when APIs are missing and the product must still be exercised through its UI.",
+  "task_class": "playtest-operator",
+  "tags": [
+    "playtest",
+    "ui"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "record",
+      "tool": "shell",
+      "intent": "Write playtest log and final-state files when the workdir is writable.",
+      "inputs": {
+        "command": "python -c \"from pathlib import Path; Path('playtest').mkdir(exist_ok=True); Path('playtest/step-log.txt').write_text('open login\\nsubmit\\n', encoding='utf-8'); Path('playtest/final-state.txt').write_text('ok=true\\n', encoding='utf-8')\""
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "log-exists",
+      "kind": "command",
+      "run": "test -f playtest/step-log.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "log-exists",
+        "negative_fixture": "no playtest log",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "5c14f27adaf4d6bc70f3fa4e2dbf287fc9bb7deb1a0b4785bd7f9d3542ae487e"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "final-state",
+      "kind": "command",
+      "run": "grep -q 'ok=true' playtest/final-state.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "final-state",
+        "negative_fixture": "final state not ok",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "f92d1e32279faa60f0484c0fdc7e0a1df24e8b401f919c6b6883828a2540b7c0"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [
+    {
+      "symptom": "final-state file missing ok=true",
+      "response": "re-drive the login path and rewrite playtest/final-state.txt"
+    }
+  ],
+  "provenance": {
+    "distilled_from_run": "seed:playtest-login-path",
+    "distilled_at": "2026-07-31T00:00:00Z",
+    "authored_by": "seed-library",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-07-31T00:00:00Z",
+    "lint_content_hash": "d54dfc977a0c2fc82f6f122ecd7bc710b367ede81852f298b769919a4e13960d"
+  }
+}

@@ -16,5 +16,5 @@
   ],
   "constraints": [],
   "context": "Produce a self-contained bug-reproduction evidence pack from the failing fixture.",
-  "task_class": "bug_reproduction"
+  "task_class": "bug-reproduction"
 }

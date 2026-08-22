@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 COMPUTER_USE_TASK_CLASSES: tuple[str, ...] = (
-    "bug_reproduction",
-    "playtest_operator",
-    "docs_auditor",
+    "bug-reproduction",
+    "playtest-operator",
+    "docs-auditor",
 )
 
 KNOWN_TASK_CLASSES: tuple[str, ...] = (

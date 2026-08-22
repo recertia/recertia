@@ -151,7 +151,11 @@ def install_versions(store: SkillStore, *, rewrite: bool = False) -> list[str]:
 
 def promote_all(store: SkillStore, golden_root: Path, runs_root: Path, log_dir: Path) -> None:
     for version in SEED_SKILLS:
-        golden = golden_root / "repo-chore" / version.skill_id
+        status = store.get_status(version.skill_id, version.version)
+        if status is not None and status.lifecycle == "approved" and status.certification.golden_set_ref:
+            print(f"skip {version.skill_id}@v{version.version} already approved")
+            continue
+        golden = golden_root / (version.task_class or "repo-chore") / version.skill_id
         try:
             status = promote_to_approved(
                 store,

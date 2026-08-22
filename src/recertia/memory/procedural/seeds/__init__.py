@@ -1,12 +1,17 @@
-"""Hand-authored repo-chore seed skills for M1 (8–10 skills).
+"""Hand-authored seed skills for M1 plus ADR-0019 computer-use goldens.
 
 Each skill is ``curation: human_authored``, has a passed hygiene stamp, and carries a
 hand-authored sensitivity proof per required certification criterion. Golden fixtures live
-under ``evals/golden/repo-chore/<skill_id>/`` and are the evidence of the promotion gate.
+under ``evals/golden/<task_class>/<skill_id>/`` and are the evidence of the promotion gate.
 """
 
 from __future__ import annotations
 
+from recertia.memory.procedural.seeds.computer_use import (
+    docs_vs_shipped,
+    playtest_login_path,
+    repro_evidence_pack,
+)
 from recertia.memory.procedural.seeds.factories import (
     SEED_SKILLS,
     add_editorconfig,
@@ -35,8 +40,11 @@ __all__ = [
     "add_pytest_config",
     "add_readme_section",
     "bump_action_checkout",
+    "docs_vs_shipped",
     "ensure_src_layout",
     "pin_python_version",
+    "playtest_login_path",
+    "repro_evidence_pack",
     "seed_approved_for_tests",
     "seed_stats",
     "seed_status_draft",

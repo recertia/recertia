@@ -1,0 +1,15 @@
+{
+  "all_passed": true,
+  "results": [
+    {
+      "skill_id": "playtest-login-path",
+      "version": 1,
+      "golden_path": "evals/golden/playtest-operator/playtest-login-path",
+      "passed": true,
+      "terminal": "solved",
+      "run_id": "golden-playtest-login-path-v1-737c7f",
+      "detail": "expected terminal='solved', got 'solved'; snapshot=None model='m4-harness'",
+      "at": "2026-08-22T22:14:35.223941+00:00"
+    }
+  ]
+}
