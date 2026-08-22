@@ -105,15 +105,17 @@ class JobQuota(BaseModel):
     def remaining(self) -> int:
         return max(0, self.weekly_token_cap - self.tokens_spent)
 
+    def _share_remaining(self, spent: int, share: float) -> int:
+        cap = int(self.weekly_token_cap * share)
+        return max(0, min(cap - spent, self.remaining()))
+
     def hex_remaining(self) -> int:
-        cap = int(self.weekly_token_cap * self.hex_share)
-        leftover = self.remaining()
-        return max(0, min(cap - self.hex_tokens_spent, leftover))
+        return self._share_remaining(self.hex_tokens_spent, self.hex_share)
 
     def computer_use_remaining(self) -> int:
-        cap = int(self.weekly_token_cap * self.computer_use_practice_share)
-        leftover = self.remaining()
-        return max(0, min(cap - self.computer_use_tokens_spent, leftover))
+        return self._share_remaining(
+            self.computer_use_tokens_spent, self.computer_use_practice_share
+        )
 
     @staticmethod
     def _computer_use_class(task_class: str | None) -> bool:

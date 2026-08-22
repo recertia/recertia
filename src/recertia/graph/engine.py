@@ -9,7 +9,6 @@ class only validates that a node's chosen route is legal and walks the resulting
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -408,20 +407,7 @@ class GraphOrchestrator:
         hop_started = time.monotonic()
         handle = packs.pack(workdir, ref=f"{state.run_id}-workdir")
         self._offload_handles[state.run_id] = handle
-        sidecar = self.runs_root / "offload" / f"{state.run_id}.json"
-        sidecar.write_text(
-            json.dumps(
-                {
-                    "ref": handle.ref,
-                    "archive": handle.archive,
-                    "sha256": handle.sha256,
-                    "bytes_offloaded": handle.bytes_offloaded,
-                    "offloaded_at": handle.offloaded_at,
-                    "original_bytes": handle.original_bytes,
-                }
-            ),
-            encoding="utf-8",
-        )
+        packs.write_sidecar(state.run_id, handle)
         with telemetry_run(tenant_id=self.tenant_id, run_id=state.run_id):
             emit_in_run(
                 "idle.offload",
@@ -431,21 +417,15 @@ class GraphOrchestrator:
             )
 
     def _maybe_restore_idle(self, run_id: str, workdir: Path) -> None:
-        from recertia.workspace.offload import OffloadHandle, WorkingSetOffload
+        from recertia.workspace.offload import WorkingSetOffload
 
-        handle = self._offload_handles.get(run_id)
-        sidecar = self.runs_root / "offload" / f"{run_id}.json"
-        if handle is None and sidecar.exists():
-            import json
-
-            payload = json.loads(sidecar.read_text(encoding="utf-8"))
-            handle = OffloadHandle(**payload)
+        packs = WorkingSetOffload(self.runs_root / "offload")
+        handle = self._offload_handles.get(run_id) or packs.read_sidecar(run_id)
         if handle is None:
             return
 
         from recertia.telemetry import emit_in_run, telemetry_run
 
-        packs = WorkingSetOffload(self.runs_root / "offload")
         hop_started = time.monotonic()
         with telemetry_run(tenant_id=self.tenant_id, run_id=run_id):
             packs.restore(handle, workdir)
@@ -455,5 +435,4 @@ class GraphOrchestrator:
                 latency_ms=round((time.monotonic() - hop_started) * 1000.0, 3),
             )
         self._offload_handles.pop(run_id, None)
-        if sidecar.exists():
-            sidecar.unlink()
+        packs.drop_sidecar(run_id)

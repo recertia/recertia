@@ -7,9 +7,10 @@ Approved skills, policy, and criteria are never packed here.
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import tarfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,6 +29,9 @@ class OffloadHandle:
     bytes_offloaded: int
     offloaded_at: str
     original_bytes: int
+
+    def as_dict(self) -> dict:
+        return asdict(self)
 
 
 def _sha256_file(path: Path) -> str:
@@ -57,6 +61,25 @@ class WorkingSetOffload:
     def __init__(self, packs_root: Path | str) -> None:
         self.packs_root = Path(packs_root)
         self.packs_root.mkdir(parents=True, exist_ok=True)
+
+    def sidecar_path(self, run_id: str) -> Path:
+        return contained_path(self.packs_root, f"{run_id}.json")
+
+    def write_sidecar(self, run_id: str, handle: OffloadHandle) -> Path:
+        dest = self.sidecar_path(run_id)
+        dest.write_text(json.dumps(handle.as_dict()) + "\n", encoding="utf-8")
+        return dest
+
+    def read_sidecar(self, run_id: str) -> OffloadHandle | None:
+        dest = self.sidecar_path(run_id)
+        if not dest.exists():
+            return None
+        return OffloadHandle(**json.loads(dest.read_text(encoding="utf-8")))
+
+    def drop_sidecar(self, run_id: str) -> None:
+        dest = self.sidecar_path(run_id)
+        if dest.exists():
+            dest.unlink()
 
     def pack(self, src: Path, *, ref: str) -> OffloadHandle:
         if not ref or "/" in ref or ".." in ref or "\\" in ref:

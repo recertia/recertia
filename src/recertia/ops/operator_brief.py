@@ -71,7 +71,7 @@ def brief_from_events(
 def brief_from_runs_root(runs_root: Path | str) -> OperatorBrief:
     """Best-effort folder scan. Honest empty when stores are missing."""
 
-    from recertia.evals.task_classes import COMPUTER_USE_TASK_CLASSES
+    from contracts.policy import COMPUTER_USE_TASK_CLASSES
     from recertia.graph.store import CheckpointStore
 
     root = Path(runs_root)

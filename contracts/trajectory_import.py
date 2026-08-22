@@ -100,3 +100,13 @@ class TrajectoryImport(BaseModel):
         if not self.environment.os.strip() or not self.environment.network_policy.strip():
             raise ValueError("environment.os and environment.network_policy are required")
         return self
+
+    @property
+    def imported_skill_id(self) -> str:
+        return f"import-{self.import_id}"
+
+    @property
+    def task_class_kebab(self) -> str | None:
+        if self.task_class is None:
+            return None
+        return self.task_class.replace("_", "-")

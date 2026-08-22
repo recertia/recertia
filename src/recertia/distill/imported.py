@@ -84,14 +84,14 @@ def distill_imported(
     if not steps:
         raise DistillRejected("no replayable shell steps; refuse to author a true-noop skill")
     version = SkillVersion(
-        skill_id=f"import-{imported.import_id}",
+        skill_id=imported.imported_skill_id,
         version=1,
         title=f"Imported {imported.source} {imported.import_id}",
         intent=(
             f"Replay imported trajectory {imported.import_id} when Recertia re-validates it "
             "under locked criteria; not a standing Bot."
         ),
-        task_class=(imported.task_class or "repo-chore").replace("_", "-"),
+        task_class=imported.task_class_kebab or "repo-chore",
         tags=["imported", imported.source],
         steps=steps,
         certification_criteria=criteria,

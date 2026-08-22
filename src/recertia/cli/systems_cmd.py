@@ -36,7 +36,7 @@ def systems_cmd(
         events = list(get_telemetry().events)
     snap = snapshot_from_events(events)
     if brief:
-        from recertia.evals.task_classes import COMPUTER_USE_TASK_CLASSES
+        from contracts.policy import COMPUTER_USE_TASK_CLASSES
         from recertia.ops.operator_brief import brief_from_events
 
         payload = brief_from_events(

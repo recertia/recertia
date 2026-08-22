@@ -37,12 +37,6 @@ def _outcome(value: str) -> str:
     return "abandoned"
 
 
-def _kebab(value: str | None) -> str | None:
-    if value is None:
-        return None
-    return value.replace("_", "-")
-
-
 def ingest_trajectory(
     payload: dict | TrajectoryImport,
     *,
@@ -75,7 +69,7 @@ def ingest_trajectory(
         case_id=case_id,
         run_id=f"import:{imported.import_id}",
         attempt_no=0,
-        task_class=_kebab(imported.task_class),
+        task_class=imported.task_class_kebab,
         request_excerpt=imported.source_ref[:240],
         outcome=_outcome(imported.outcome),
         transcript_ref=str(dest),
@@ -95,7 +89,7 @@ def ingest_trajectory(
                 ProposalRecord(
                     proposal_id=uuid4().hex[:12],
                     kind="external_trajectory",
-                    skill_id=f"import-{imported.import_id}",
+                    skill_id=imported.imported_skill_id,
                     version=0,
                     rationale=(
                         "Imported trajectory queued for Recertia re-validation. "

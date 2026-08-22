@@ -131,7 +131,7 @@ def _https_get(url: str, *, timeout_s: float, max_bytes: int) -> bytes:
 
 
 def default_registry() -> ToolRegistry:
-    """First-domain tools for repo-chore (shell, edit_file, read_file, grep, fetch, agent_subtask)."""
+    """First-domain tools plus the gated external_computer affordance (ADR-0019)."""
 
     registry = ToolRegistry()
 
