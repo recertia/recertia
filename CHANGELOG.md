@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Design: External Trajectories & Computer-Use Goldens** (2026-08-22) — accepted plan for
+  `TrajectoryImport` (provenance-required), three computer-use golden task classes
+  (`bug_reproduction`, `playtest_operator`, `docs_auditor`), optional
+  `external_computer` Affordance, and Systems/Tower operator briefs (stuck / lift /
+  redundancy). Recertia remains the measuring orchestrator; no new graph nodes, no Bot
+  fleet, no persistent-VM default. Engineering not started. Plan:
+  [`docs/plans/2026-08-22-external-trajectories-and-computer-use-goldens.md`](docs/plans/2026-08-22-external-trajectories-and-computer-use-goldens.md).
+
 - **Variance-aware causal lift** — `RunVariance` on `CausalLiftResult` (std-dev, best,
   worst, best–worst gap); `low_run_count` when independent trials are below
   `Policy.min_independent_runs` (default 5). `EvalStore` exposes Bernoulli vectors
@@ -80,6 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Paper candidates are retrieval stubs. Promotion still requires the golden gate;
   this path does not claim lift.
+- External-trajectory design is accepted but not yet engineered; it must not delay
+  RW-GA soak weeks or probe cadence.
 
 ## [0.1.0] - 2026-08-15
 

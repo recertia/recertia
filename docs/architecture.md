@@ -24,6 +24,11 @@
 - [Product console architecture](architecture/product-console.md)
 - [Goal packs (migration programs)](architecture/goal-packs.md)
 
+**Plans (design, not yet engineering):**
+
+- [High-confidence measurement items (Ye/Zhao)](plans/2026-08-high-confidence-items-implementation.md)
+- [External trajectories & computer-use goldens (2026-08-22)](plans/2026-08-22-external-trajectories-and-computer-use-goldens.md)
+
 Normative requirements are in the [specifications index](specifications.md).
 Forward work is in the
 [remaining-work implementation plan](architecture/remaining-work.md).
