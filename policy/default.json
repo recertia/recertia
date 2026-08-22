@@ -20,7 +20,9 @@
     "deterministic_guide": false,
     "curator_compress": false,
     "compose_chain_review": true,
-    "practice_hex_search": false
+    "practice_hex_search": false,
+    "external_trajectory_import": true,
+    "long_lived_computer_backend": false
   },
   "improvement_limits": {
     "fail_cluster_min_runs": 3,
@@ -39,7 +41,8 @@
     "hex_share": 0.25,
     "max_hex_jobs_per_task_class": 1,
     "max_status_writes_per_tick": 50,
-    "max_compress_candidates_per_tick": 1
+    "max_compress_candidates_per_tick": 1,
+    "computer_use_practice_share": 0.15
   },
   "state_management": {
     "idle_offload_enabled": false,
@@ -51,11 +54,17 @@
     "retrieval_cache_enabled": true,
     "retrieval_cache_ttl_s": 30.0
   },
+  "isolation": {
+    "default_backend": "container",
+    "allow_external_computer": false,
+    "external_computer_ttl_seconds": 3600
+  },
   "notes": [
     "P0″ default policy. HEX and compress remain off until a lift interval exists.",
     "JobQuota spend lives in .recertia/job_quota.json (T0 sidecar), not this document.",
     "min_independent_runs is the observation/trial floor before established lift language is allowed.",
     "faithfulness_interventions_enabled stays false on the production path; the eval CLI may still run tagged trials.",
-    "state_management.idle_offload_enabled stays false until a Phase 0 RSS baseline exists (ADR-0018)."
+    "state_management.idle_offload_enabled stays false until a Phase 0 RSS baseline exists (ADR-0018).",
+    "isolation.allow_external_computer stays false; long-lived computers are never the security boundary (ADR-0019)."
   ]
 }

@@ -1,0 +1,25 @@
+# Technical Plan: Grok Bot Patterns → Recertia
+
+Status: implementing (ADR-0019 companion). Recertia remains the sole measuring
+orchestrator. No new planes, no new graph nodes, no always-on fleet.
+
+## Five patterns (only)
+
+1. Teach-once recording / solved run → promotion-gated skill
+2. Bug Reproduction, Playtest Operator, Docs Auditor as golden task classes
+3. Writes/spend always behind approval (already present)
+4. Many practice runs + summarize under JobQuota
+5. Operator brief: stuck jobs, lift, redundancy (Systems projection only)
+
+## Non-goals
+
+Standing teammates, persistent-VM default, auto-write of approved state,
+consumer/GTM surfaces, graph growth past 15 nodes, any relaxation of
+retrieve-before-invent / criteria lock / control-arm lift / plane separation.
+
+## Phases
+
+- **0** contracts + goldens + `recertia trajectory import` (this commit)
+- **1** import → episodic → pending proposal (never approved from this path)
+- **2** operator projections + optional executor contract (flag off)
+- **3** cost control / retirement — not started

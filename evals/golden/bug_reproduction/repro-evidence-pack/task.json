@@ -1,0 +1,4 @@
+{
+  "request": "Produce a self-contained bug-reproduction evidence pack from the failing fixture.",
+  "expected_skill_id": "repro-evidence-pack"
+}

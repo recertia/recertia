@@ -1,0 +1,21 @@
+{
+  "goal_id": "playtest-login-path-v1",
+  "desired": [
+    {
+      "id": "log-exists",
+      "kind": "file_exists",
+      "path": "playtest/step-log.txt",
+      "weight": 1.0
+    },
+    {
+      "id": "final-state",
+      "kind": "file_contains",
+      "path": "playtest/final-state.txt",
+      "pattern": "ok=true",
+      "weight": 1.0
+    }
+  ],
+  "constraints": [],
+  "context": "Drive the login path and record UI assertions plus a final state predicate.",
+  "task_class": "playtest_operator"
+}

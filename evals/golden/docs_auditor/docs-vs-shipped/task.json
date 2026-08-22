@@ -1,0 +1,4 @@
+{
+  "request": "Diff shipped product files against docs and list missing or stale pages.",
+  "expected_skill_id": "docs-vs-shipped"
+}

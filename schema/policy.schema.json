@@ -40,6 +40,16 @@
           "default": false,
           "title": "Practice Hex Search",
           "type": "boolean"
+        },
+        "external_trajectory_import": {
+          "default": true,
+          "title": "External Trajectory Import",
+          "type": "boolean"
+        },
+        "long_lived_computer_backend": {
+          "default": false,
+          "title": "Long Lived Computer Backend",
+          "type": "boolean"
         }
       },
       "title": "ImprovementFlags",
@@ -114,6 +124,34 @@
       "title": "ImprovementLimits",
       "type": "object"
     },
+    "IsolationSettings": {
+      "additionalProperties": false,
+      "description": "Default execution isolation. External computer is opt-in only (ADR-0019).",
+      "properties": {
+        "default_backend": {
+          "default": "container",
+          "enum": [
+            "container",
+            "local"
+          ],
+          "title": "Default Backend",
+          "type": "string"
+        },
+        "allow_external_computer": {
+          "default": false,
+          "title": "Allow External Computer",
+          "type": "boolean"
+        },
+        "external_computer_ttl_seconds": {
+          "default": 3600,
+          "minimum": 1,
+          "title": "External Computer Ttl Seconds",
+          "type": "integer"
+        }
+      },
+      "title": "IsolationSettings",
+      "type": "object"
+    },
     "JobQuota": {
       "additionalProperties": false,
       "description": "Weekly improvement-plane token QoS (ADR-0015). HEX/compress are leftover-only.",
@@ -149,6 +187,13 @@
           "title": "Max Compress Candidates Per Tick",
           "type": "integer"
         },
+        "computer_use_practice_share": {
+          "default": 0.15,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Computer Use Practice Share",
+          "type": "number"
+        },
         "tokens_spent": {
           "default": 0,
           "minimum": 0,
@@ -159,6 +204,12 @@
           "default": 0,
           "minimum": 0,
           "title": "Hex Tokens Spent",
+          "type": "integer"
+        },
+        "computer_use_tokens_spent": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Computer Use Tokens Spent",
           "type": "integer"
         },
         "hex_jobs_by_class": {
@@ -321,6 +372,9 @@
     },
     "state_management": {
       "$ref": "#/$defs/StateManagement"
+    },
+    "isolation": {
+      "$ref": "#/$defs/IsolationSettings"
     },
     "notes": {
       "items": {

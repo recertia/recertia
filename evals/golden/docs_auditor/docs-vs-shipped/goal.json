@@ -1,0 +1,21 @@
+{
+  "goal_id": "docs-vs-shipped-v1",
+  "desired": [
+    {
+      "id": "missing-list",
+      "kind": "file_exists",
+      "path": "audit/missing-pages.txt",
+      "weight": 1.0
+    },
+    {
+      "id": "flags-stale",
+      "kind": "file_contains",
+      "path": "audit/missing-pages.txt",
+      "pattern": "stale",
+      "weight": 1.0
+    }
+  ],
+  "constraints": [],
+  "context": "Diff shipped product files against docs and list missing or stale pages.",
+  "task_class": "docs_auditor"
+}

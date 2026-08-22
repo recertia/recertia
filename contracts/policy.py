@@ -61,6 +61,8 @@ class ImprovementFlags(BaseModel):
     curator_compress: bool = False
     compose_chain_review: bool = True
     practice_hex_search: bool = False
+    external_trajectory_import: bool = True
+    long_lived_computer_backend: bool = False
 
 
 class ImprovementLimits(BaseModel):
@@ -88,8 +90,10 @@ class JobQuota(BaseModel):
     max_hex_jobs_per_task_class: int = Field(default=1, ge=0)
     max_status_writes_per_tick: int = Field(default=50, ge=1)
     max_compress_candidates_per_tick: int = Field(default=1, ge=0)
+    computer_use_practice_share: float = Field(default=0.15, ge=0.0, le=1.0)
     tokens_spent: int = Field(default=0, ge=0)
     hex_tokens_spent: int = Field(default=0, ge=0)
+    computer_use_tokens_spent: int = Field(default=0, ge=0)
     hex_jobs_by_class: dict[str, int] = Field(default_factory=dict)
 
     def remaining(self) -> int:
@@ -99,6 +103,11 @@ class JobQuota(BaseModel):
         cap = int(self.weekly_token_cap * self.hex_share)
         leftover = self.remaining()
         return max(0, min(cap - self.hex_tokens_spent, leftover))
+
+    def computer_use_remaining(self) -> int:
+        cap = int(self.weekly_token_cap * self.computer_use_practice_share)
+        leftover = self.remaining()
+        return max(0, min(cap - self.computer_use_tokens_spent, leftover))
 
     def can_admit(self, job: JobPriority, *, task_class: str | None = None, tokens: int = 0) -> bool:
         if job in ("recertifier", "curator_retire", "fail_cluster_author", "practice_band"):
@@ -144,6 +153,16 @@ class StateManagement(BaseModel):
     retrieval_cache_ttl_s: float = Field(default=30.0, ge=0.0)
 
 
+class IsolationSettings(BaseModel):
+    """Default execution isolation. External computer is opt-in only (ADR-0019)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    default_backend: Literal["container", "local"] = "container"
+    allow_external_computer: bool = False
+    external_computer_ttl_seconds: int = Field(default=3600, ge=1)
+
+
 class Policy(BaseModel):
     """Versioned T2 policy document: thresholds, budgets, and authoring prior pointer."""
 
@@ -163,4 +182,5 @@ class Policy(BaseModel):
     improvement_limits: ImprovementLimits = Field(default_factory=ImprovementLimits)
     job_quota: JobQuota = Field(default_factory=JobQuota)
     state_management: StateManagement = Field(default_factory=StateManagement)
+    isolation: IsolationSettings = Field(default_factory=IsolationSettings)
     notes: list[str] = Field(default_factory=list)

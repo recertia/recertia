@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **External trajectories (ADR-0019)** — `TrajectoryImport` contract; `recertia
+  trajectory import` writes append-only episodic cases and, when reexecutable,
+  a *pending* proposal. Never promotes. Golden fixtures for
+  `bug_reproduction`, `playtest_operator`, `docs_auditor`. Policy:
+  `improvement.external_trajectory_import`, `long_lived_computer_backend`
+  (default false), `isolation.allow_external_computer` (default false),
+  `job_quota.computer_use_practice_share`. `recertia systems --brief` prints
+  stuck/lift/redundancy with honest "not established".
+
 - **Systems efficiency (ADR-0018, AgentSysBench / ClawGym II)** — hop telemetry now
   emits `component_class`, `rss_bytes`, `workdir_bytes`, `idle_gap_ms` on
   `node.finished`; `tool.invoked` / `retrieve.queried` carry a canonical key so

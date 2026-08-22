@@ -1,0 +1,531 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/recertia/recertia/schema/TrajectoryImport",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "ref": {
+          "minLength": 1,
+          "title": "Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "EnvironmentDescriptor": {
+      "additionalProperties": false,
+      "description": "Where the external run happened. Required for import.",
+      "properties": {
+        "os": {
+          "minLength": 1,
+          "title": "Os",
+          "type": "string"
+        },
+        "browser": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Browser"
+        },
+        "tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tools",
+          "type": "array"
+        },
+        "versions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Versions",
+          "type": "object"
+        },
+        "network_policy": {
+          "minLength": 1,
+          "title": "Network Policy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "os",
+        "network_policy"
+      ],
+      "title": "EnvironmentDescriptor",
+      "type": "object"
+    },
+    "ProvenanceBundle": {
+      "additionalProperties": false,
+      "description": "Who captured the trajectory, when, and any attestation.",
+      "properties": {
+        "actor": {
+          "minLength": 1,
+          "title": "Actor",
+          "type": "string"
+        },
+        "captured_at": {
+          "format": "date-time",
+          "title": "Captured At",
+          "type": "string"
+        },
+        "attestation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attestation"
+        },
+        "signature": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Signature"
+        }
+      },
+      "required": [
+        "actor",
+        "captured_at"
+      ],
+      "title": "ProvenanceBundle",
+      "type": "object"
+    },
+    "SensitivityProof": {
+      "additionalProperties": false,
+      "description": "Evidence that a criterion rejects a known-bad artifact (specs \u00a715.2).",
+      "properties": {
+        "criterion_id": {
+          "title": "Criterion Id",
+          "type": "string"
+        },
+        "negative_fixture": {
+          "title": "Negative Fixture",
+          "type": "string"
+        },
+        "rejected": {
+          "title": "Rejected",
+          "type": "boolean"
+        },
+        "checked_at": {
+          "format": "date-time",
+          "title": "Checked At",
+          "type": "string"
+        },
+        "checked_against": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checked Against"
+        },
+        "evidence_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "sha256 hash binding the criterion definition to the negative-fixture fingerprint used for this proof",
+          "title": "Evidence Hash"
+        }
+      },
+      "required": [
+        "criterion_id",
+        "negative_fixture",
+        "rejected",
+        "checked_at"
+      ],
+      "title": "SensitivityProof",
+      "type": "object"
+    },
+    "TaskCriterion": {
+      "additionalProperties": false,
+      "description": "Locked at ``intake`` for one run. Never authored by a chosen skill.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "command",
+            "assertion",
+            "schema",
+            "metric",
+            "judge"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "run": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run"
+        },
+        "expect_exit": {
+          "default": 0,
+          "title": "Expect Exit",
+          "type": "integer"
+        },
+        "expr": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expr"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "schema_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schema Ref"
+        },
+        "metric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric"
+        },
+        "op": {
+          "anyOf": [
+            {
+              "enum": [
+                "lt",
+                "lte",
+                "gt",
+                "gte",
+                "eq"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Op"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold"
+        },
+        "rubric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rubric"
+        },
+        "isolation": {
+          "default": "fresh_context",
+          "enum": [
+            "fresh_context",
+            "inherits_context"
+          ],
+          "title": "Isolation",
+          "type": "string"
+        },
+        "lens": {
+          "anyOf": [
+            {
+              "enum": [
+                "correctness",
+                "currency",
+                "provenance",
+                "scope",
+                "safety"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lens"
+        },
+        "timeout_s": {
+          "default": 300,
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Timeout S",
+          "type": "integer"
+        },
+        "weight": {
+          "default": 1.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Weight",
+          "type": "number"
+        },
+        "sensitivity_proof": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SensitivityProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source": {
+          "enum": [
+            "caller",
+            "task_class_template",
+            "critic"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "preregistered": {
+          "default": true,
+          "title": "Preregistered",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "source"
+      ],
+      "title": "TaskCriterion",
+      "type": "object"
+    },
+    "TrajectoryStep": {
+      "additionalProperties": false,
+      "description": "One tool/action plus observation. Not a Recertia graph event.",
+      "properties": {
+        "seq": {
+          "minimum": 0,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "action": {
+          "minLength": 1,
+          "title": "Action",
+          "type": "string"
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool"
+        },
+        "observation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observation"
+        },
+        "ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ok"
+        }
+      },
+      "required": [
+        "seq",
+        "action"
+      ],
+      "title": "TrajectoryStep",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Append-only import record. Never mutates an existing Recertia run.",
+  "properties": {
+    "import_id": {
+      "minLength": 1,
+      "title": "Import Id",
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "grok_bot_recording",
+        "grok_bot_run",
+        "external_demo",
+        "synthetic"
+      ],
+      "title": "Source",
+      "type": "string"
+    },
+    "source_ref": {
+      "minLength": 1,
+      "title": "Source Ref",
+      "type": "string"
+    },
+    "captured_at": {
+      "format": "date-time",
+      "title": "Captured At",
+      "type": "string"
+    },
+    "environment": {
+      "$ref": "#/$defs/EnvironmentDescriptor"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/TrajectoryStep"
+      },
+      "title": "Steps",
+      "type": "array"
+    },
+    "outcome": {
+      "enum": [
+        "solved",
+        "failed",
+        "partial"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "criteria_snapshot": {
+      "items": {
+        "$ref": "#/$defs/TaskCriterion"
+      },
+      "title": "Criteria Snapshot",
+      "type": "array"
+    },
+    "provenance": {
+      "$ref": "#/$defs/ProvenanceBundle"
+    },
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/ArtifactRef"
+      },
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "reexecutable": {
+      "default": false,
+      "title": "Reexecutable",
+      "type": "boolean"
+    },
+    "task_class": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Task Class"
+    }
+  },
+  "required": [
+    "import_id",
+    "source",
+    "source_ref",
+    "captured_at",
+    "environment",
+    "outcome",
+    "provenance"
+  ],
+  "title": "TrajectoryImport",
+  "type": "object"
+}

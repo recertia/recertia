@@ -41,6 +41,7 @@ from contracts.scope import ScopePromotion  # noqa: E402
 from contracts.skill import SkillVersion  # noqa: E402
 from contracts.stats import RetrievalAblationEffect, SkillStats  # noqa: E402
 from contracts.status import SkillStatus  # noqa: E402
+from contracts.trajectory_import import TrajectoryImport  # noqa: E402
 from contracts.workspace import RegisteredWorkspace  # noqa: E402
 
 # Canonical JSON Schema $id prefix (must match the public GitHub org/repo).
@@ -79,6 +80,7 @@ MODELS: dict[str, type] = {
     "goal.schema.json": Goal,
     "migration_program.schema.json": MigrationProgram,
     "registered_workspace.schema.json": RegisteredWorkspace,
+    "trajectory_import.schema.json": TrajectoryImport,
 }
 
 

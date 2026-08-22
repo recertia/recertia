@@ -1,0 +1,4 @@
+{
+  "request": "Drive the login path and record UI assertions plus a final state predicate.",
+  "expected_skill_id": "playtest-login-path"
+}

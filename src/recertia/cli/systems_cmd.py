@@ -16,6 +16,7 @@ def register_systems_commands(app: typer.Typer) -> None:
 def systems_cmd(
     spans: Optional[Path] = typer.Option(None, "--spans", help="Telemetry JSONL to fold."),
     output: Optional[Path] = typer.Option(None, "--output"),
+    brief: bool = typer.Option(False, "--brief", help="Stuck jobs, lift-by-class, redundancy."),
 ) -> None:
     """Print the six-property snapshot. Does not claim lift or a 4.6× memory cut."""
 
@@ -34,7 +35,17 @@ def systems_cmd(
     else:
         events = list(get_telemetry().events)
     snap = snapshot_from_events(events)
-    text = json.dumps(snap.as_dict(), indent=2)
+    if brief:
+        from recertia.evals.task_classes import COMPUTER_USE_TASK_CLASSES
+        from recertia.ops.operator_brief import brief_from_events
+
+        payload = brief_from_events(
+            events, task_classes=list(COMPUTER_USE_TASK_CLASSES)
+        ).as_dict()
+        payload["six_properties"] = snap.as_dict()
+        text = json.dumps(payload, indent=2)
+    else:
+        text = json.dumps(snap.as_dict(), indent=2)
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text + "\n", encoding="utf-8")
