@@ -52,6 +52,13 @@ class Task(BaseModel):
             "recursively learn from itself."
         ),
     )
+    execution_strategy: Literal["single", "mea"] = Field(
+        default="single",
+        description=(
+            "Runtime MEA layer. 'mea' takes effect only with policy.mea_enabled "
+            "and Goal.mea_opt_in. Default 'single' is the zero-cost ordinary path."
+        ),
+    )
 
     @model_validator(mode="after")
     def _require_goal_or_request(self) -> "Task":
@@ -227,6 +234,14 @@ class RunState(BaseModel):
     reserved: BudgetReservation = BudgetReservation()
     route_log: list[RouteEntry] = Field(default_factory=list)
     terminal: Terminal | None = None
+    mea_active: bool = Field(
+        default=False,
+        description="True when three-layer MEA activation succeeded at intake.",
+    )
+    mea_fallback_reason: str | None = Field(
+        default=None,
+        description="Set when MEA was requested but any activation layer was missing.",
+    )
 
     @model_validator(mode="after")
     def _control_arm_suppresses_bundle(self) -> "RunState":

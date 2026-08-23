@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MEA graph wiring** — intake binds an `AuditedTaskState` sidecar when three-layer
+  activation is true (`policy.mea_enabled` + `Goal.mea_opt_in` +
+  `Task.execution_strategy=="mea"`); validate is the fresh-context auditor (CAS);
+  the trajectory emitter writes `audited_state_delta` on accept; the ledger notes
+  `mea_activation_fallback` only when MEA was requested but incomplete. Default
+  single-request path is unchanged (no sidecar, no ledger note, no extra events).
+  No new graph nodes.
+
 - **Design: External Trajectories & Computer-Use Goldens** (2026-08-22) — accepted plan for
   `TrajectoryImport` (provenance-required), three computer-use golden task classes
   (`bug_reproduction`, `playtest_operator`, `docs_auditor`), optional

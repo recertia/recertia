@@ -308,6 +308,12 @@
       ],
       "default": null,
       "title": "Strategy Hint"
+    },
+    "mea_opt_in": {
+      "default": false,
+      "description": "Per-Goal MEA layer of three-layer activation (policy.mea_enabled + this flag + Task.execution_strategy). Default false.",
+      "title": "Mea Opt In",
+      "type": "boolean"
     }
   },
   "required": [

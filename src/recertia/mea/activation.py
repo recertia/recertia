@@ -64,3 +64,18 @@ def resolve_mea_activation(
         active=True,
         fallback_reason=None,
     )
+
+
+def should_note_fallback(activation: MeaActivation) -> bool:
+    """Ledger note only when MEA was requested but any layer was missing.
+
+    Default-off (all layers false) is the ordinary path — not a fallback event.
+    """
+
+    if activation.active:
+        return False
+    return (
+        activation.policy_enabled
+        or activation.goal_opt_in
+        or activation.runtime_strategy == "mea"
+    )

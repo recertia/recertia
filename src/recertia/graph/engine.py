@@ -19,9 +19,12 @@ from contracts.common import Arm
 from contracts.criteria import TaskCriterion
 from contracts.graph import legal_routes
 from contracts.run import RouteEntry, RunManifest, RunState, Task, WorkspaceSnapshot
+from contracts.trajectory import TrajectoryEvent
 from recertia.graph.ops import OperationLedger
 from recertia.graph.store import CheckpointStore
 from recertia.ledger import HashChainLedger
+from recertia.mea.runtime import audit_after_validate, bind_after_intake
+from recertia.mea.store import AuditedStateStore
 from recertia.memory.procedural.capability import CandidateSkillStoreAdapter
 from recertia.nodes import NODE_FUNCS, NodeContext, NodeOutcome
 from recertia.trajectory.emitter import TrajectoryEmitter
@@ -94,6 +97,7 @@ class GraphOrchestrator:
         self.on_finalize = on_finalize
         self.trajectories = TrajectoryStore(self.runs_root / "trajectories")
         self._trajectory_emitter = TrajectoryEmitter()
+        self.audited_states = AuditedStateStore(self.runs_root / "audited_states")
 
     def close(self) -> None:
         self.checkpoints.close()
@@ -108,6 +112,7 @@ class GraphOrchestrator:
         attempt_no: int,
         route: str | None,
         note: str | None,
+        extra_events: list[TrajectoryEvent] | None = None,
     ) -> None:
         """Best-effort trajectory append; never fails the run (ADR-0011)."""
 
@@ -128,6 +133,8 @@ class GraphOrchestrator:
                 route=route,
                 note=note,
             )
+            if extra_events:
+                events = [*events, *extra_events]
             if events:
                 self.trajectories.append_many(new_state.run_id, events)
         except Exception:  # noqa: BLE001 — trajectory must not fail runs
@@ -335,6 +342,30 @@ class GraphOrchestrator:
             )
             new_state = new_state.model_copy(update={"route_log": [*new_state.route_log, route_entry]})
 
+            extra_events: list[TrajectoryEvent] = []
+            if node_name == "intake":
+                new_state = bind_after_intake(
+                    new_state,
+                    policy=self.policy,
+                    store=self.audited_states,
+                    ledger=self.ledger,
+                )
+            elif node_name == "validate":
+                new_state, delta = audit_after_validate(
+                    new_state,
+                    store=self.audited_states,
+                    attempt_no=attempt_no_for_ctx,
+                )
+                if delta is not None:
+                    extra_events.append(
+                        self._trajectory_emitter.from_auditor_delta(
+                            new_state,
+                            node=node_name,
+                            attempt_no=attempt_no_for_ctx,
+                            delta=delta,
+                        )
+                    )
+
             self._emit_trajectory(
                 prior=state,
                 new_state=new_state,
@@ -342,6 +373,7 @@ class GraphOrchestrator:
                 attempt_no=attempt_no_for_ctx,
                 route=chosen.predicate_name,
                 note=outcome.note,
+                extra_events=extra_events,
             )
             self.checkpoints.save(state.run_id, next_seq, node_name, chosen.target, new_state)
             next_seq += 1

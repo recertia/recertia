@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from contracts.audited_task_state import AuditorDelta
 from contracts.run import RunState
 from contracts.trajectory import TrajectoryEvent
 
@@ -181,3 +182,25 @@ class TrajectoryEmitter:
         # Ignore unused prior in signature for API stability with engine.
         _ = prior
         return events
+
+    def from_auditor_delta(
+        self,
+        state: RunState,
+        *,
+        node: str,
+        attempt_no: int,
+        delta: AuditorDelta,
+    ) -> TrajectoryEvent:
+        """Emit an accepted MEA CAS as ``audited_state_delta`` (ADR-0011)."""
+
+        return self._base(
+            state,
+            node=node,
+            attempt_no=attempt_no,
+            event_kind="audited_state_delta",
+            summary=(
+                f"v{delta.parent_version}->{delta.proposed_version} "
+                f"phase={delta.current_phase}"
+            ),
+            payload_inline=delta.model_dump(mode="json"),
+        )
