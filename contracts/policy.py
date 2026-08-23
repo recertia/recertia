@@ -50,7 +50,12 @@ class PolicyBudgets(BaseModel):
 
 
 class ImprovementFlags(BaseModel):
-    """T2 algorithm flags. These MUST NOT gate graph topology (ADR-0015)."""
+    """T2 algorithm flags. These MUST NOT gate graph topology (ADR-0015).
+
+    ``mea_enabled`` is the global policy layer of three-layer MEA activation
+    (policy + Goal opt-in + runtime strategy). Default false keeps the
+    single-request path as the zero-cost ordinary path.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -61,6 +66,7 @@ class ImprovementFlags(BaseModel):
     curator_compress: bool = False
     compose_chain_review: bool = True
     practice_hex_search: bool = False
+    mea_enabled: bool = False
 
 
 class ImprovementLimits(BaseModel):
@@ -142,6 +148,12 @@ class Policy(BaseModel):
     require_tool_approval_for_non_read: bool = True
     min_independent_runs: int = Field(default=5, ge=1)
     faithfulness_interventions_enabled: bool = False
+    mea_max_rounds: int = Field(
+        default=12,
+        ge=1,
+        le=64,
+        description="Hard round cap when MEA is activated (controller-enforced).",
+    )
     improvement: ImprovementFlags = Field(default_factory=ImprovementFlags)
     improvement_limits: ImprovementLimits = Field(default_factory=ImprovementLimits)
     job_quota: JobQuota = Field(default_factory=JobQuota)
