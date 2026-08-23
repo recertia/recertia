@@ -6319,6 +6319,36 @@ weight updates, multi-tenant data proxies, and multi-surface evolution control p
 out of scope (ADR-0005). The adaptation is scaffolding-only and non-parametric: trajectories
 measure and support library hygiene; they do not train weights.
 
+### 1.10 Strategy lock-in is already encoded — confirming, not changing
+
+> "What agents lack is neither experience, guidance, nor reasoning compute, but a
+> mechanism for spontaneously reevaluating their strategy during execution."
+
+— **What is Missing from AI Post-Training AI: An Empirical Analysis**, Lim, Huang, Peng,
+Lu, Cong, Zhang, Sun, and Lin, arXiv:2608.19072, 19 August 2026 **[F]**
+
+The paper separates *execution-level* capability (iterate inside a chosen training
+strategy) from *strategy-level* capability (revise the high-level plan as evidence
+accumulates). Across 1,338 PostTrainBench trajectories, strategy is locked in before the
+first training run; remaining budget is local adjustment. Experience scaffolds lift
+execution (+12.6 GSM8K, +40.8 HumanEval) but leave strategy static. Human guidance
+redirects the *initial* strategy, then erodes once training starts. Extra inference
+compute helps easy tasks and plateaus on hard ones.
+
+**Confirmed rather than changed.** Recertia already encodes that split. [`plan`](../src/recertia/nodes/plan.py)
+chooses `apply` / `adapt` / `scratch` / `portfolio` / `decomposition` / `abstain` once.
+[`evolve`](../src/recertia/nodes/evolve.py) is class-gated local repair: only `plan` and
+`retrieval` failure classes switch strategy; `environment` / `tool` / `execution` /
+`merge` keep it. A Practice-published `PatchTemplate` apply is O(1) and does not change
+strategy ([ADR-0015](adr/0015-improvement-plane-search.md)). Strategy-level search (HEX)
+is Practice-only, offline, default-off — the paper's "experience scaffold" result is why
+HEX was not put on the task graph. Full take/decline in [§12](#12-attached-papers-reviewed-for-applicability-2026-08-23).
+
+**What we deliberately did not take:** PostTrainBench's object is weight updates of
+another LLM. Recertia's explicit non-goal remains "no model weight training"
+([overview](architecture/overview.md) §1). No 16th `replan` node. No new assumption —
+`strategy_change_rate` is unscheduled telemetry, not a remaining-work item.
+
 ## 2. Skill libraries and lifecycle management
 
 | Work | Relevance |
@@ -6502,3 +6532,132 @@ Inner / outer / meta loops stay distinct; “graphs supersede loops” remains t
 already ignored in §1.7; the scarce 10-year good is a falsifiable loop, not a larger graph.
 It cites primaries already in this file. It is **not** an ADR, not remaining work, and it
 does not update `a1`–`a4`. No topology, engine, HEX, or C5 change follows from it.
+
+## 12. Attached papers reviewed for applicability (2026-08-23)
+
+Four preprints were attached as first pages, then fetched from arXiv **[F]** and scored
+against the existing rubric in
+[`../research/preprints-self-improving-agents.scored.json`](../research/preprints-self-improving-agents.scored.json)
+(1–10, scaffolding-only, `repo-chore` domain, no weight training, 15-node T3 graph). None
+was in the 2026-07-30 scored survey. None is remaining work. Fifteen nodes stay T3. The
+first domain stays repository chores
+([measurement-and-scope.md](architecture/measurement-and-scope.md) §17).
+
+| Paper | arXiv | Relevance | Importance | Verdict |
+| --- | --- | --- | --- | --- |
+| **What is Missing from AI Post-Training AI** | [2608.19072](https://arxiv.org/abs/2608.19072) | 8 | 7 | **Confirm.** Strategy lock-in is already encoded; see [§1.10](#110-strategy-lock-in-is-already-encoded-confirming-not-changing). |
+| **What makes prompts a graph** | [2607.27578](https://arxiv.org/abs/2607.27578) | 7 | 4 | **Vocabulary.** Recertia already passes T1–T4; distinctive stance is T3 freeze of the *task* graph. |
+| **MerchantBench** | [2607.28956](https://arxiv.org/abs/2607.28956) | 4 | 3 | **Decline for design.** Domain-locked e-commerce; keep the delayed-feedback analogy only. |
+| **Recirculation** | [2608.17981](https://arxiv.org/abs/2608.17981) | 2 | 2 | **Decline.** Inference-time model architecture; Recertia does not own the forward pass. |
+
+Relevance is topical fit to Recertia's scaffolding, graph, and memory planes.
+Importance is whether the paper should change a load-bearing decision. Cite only if both
+are high — the same bar as §9.
+
+### 12.1 What is Missing from AI Post-Training AI (score 8) — confirm
+
+**Lim, Huang, Peng, Lu, Cong, Zhang, Sun, and Lin**, arXiv:2608.19072, 19 August 2026
+**[F]**. Empirical analysis of 1,338 PostTrainBench trajectories (seven benchmarks, four
+base models, 20 agent configurations). Agents conflate execution-level capability
+(iterate inside a chosen strategy) with strategy-level capability (revise the high-level
+plan as evidence accumulates). Strategy is locked in before the first training run;
+remaining budget is local adjustment. Experience scaffolds lift execution but leave
+strategy static. Human guidance redirects the initial strategy, then erodes once training
+starts. Extra inference compute helps easy tasks and plateaus on hard ones. What is
+missing is a mechanism that reopens strategic choice during execution.
+
+**Take:** independent empirical support for keeping `plan` a one-shot node, refusing
+in-run tree search, treating `evolve` as execution-level except on `plan` / `retrieval`
+classes, and putting genuine strategy revision on the improvement plane. Design impact is
+recorded in [§1.10](#110-strategy-lock-in-is-already-encoded-confirming-not-changing);
+this subsection is the longer reading note.
+
+**Decline:** PostTrainBench's object is weight updates of another LLM. Do not add an
+AI-for-AI post-training domain. Do not add a `replan` node. Do not add an assumption
+unless we later choose to *measure* `strategy_change_rate` on live traffic — `route_log`
+already records evolve moves; that derived metric is unscheduled.
+
+### 12.2 What makes prompts a graph (score 7) — vocabulary
+
+**Macedo**, *What makes prompts a graph: necessary and sufficient conditions for prompt
+graph engineering*, arXiv:2607.27578, 30 July 2026 **[F]**. Definitional; no
+measurements. Four conditions: (T1) explicit enumerable structure; (T2) separation of
+topology from prompt text; (T3) executable semantics including cycles; (T4) graph as a
+first-class artifact (inspect / version / check / optimize). Inclusion test: LangGraph,
+DSPy, Prompt Flow in; AutoGen / CrewAI mode-split; Claude Code subagents out (authored
+nodes, emergent flow).
+
+Recertia against the test:
+
+| Condition | Task graph (15 nodes, T3) | Skill step graphs |
+| --- | --- | --- |
+| T1 explicit | Yes: [`contracts/graph.py`](../contracts/graph.py) | Yes: `input_bindings` → waves |
+| T2 structure vs content | Yes: frozen topology vs skill/prompt text | Yes: Curator parallelise/serialise vs step prose |
+| T3 executable + cycles | Yes: in-house engine, back-edge `evolve → solve` | Yes: dependency waves |
+| T4 first-class artifact | Partial: inspectable and versioned, **not optimizable** (T3) | Yes: Curator proposals, golden gate |
+
+The paper's object clause is "prompt-parameterized model invocations as nodes." Recertia's
+**task** graph is a concern graph (`intake`, `retrieve`, `plan`, `solve`, …) with LLM
+calls as leaves — closer to a cyclic workflow engine than to DSPy modules. Skill step
+graphs are the closer prompt-graph. That is a fifth design position the six evaluated
+systems do not occupy: the control graph is T3-frozen; the skill graphs are the
+improvable artifacts.
+
+**Take:** cite next to Kopadze (§1.7) and DSPy (§4) as the operational definition Recertia
+already satisfies, and as independent support for [ADR-0001](adr/0001-graph-with-loops.md)'s
+rejection of LangGraph (own the state schema). Use T1–T4 as the vocabulary when someone
+asks whether Recertia is doing prompt graph engineering.
+
+**Decline:** the paper's research agenda (search over graph topology, emergent→explicit
+lift, automatic graph optimization) is exactly what Recertia declined for the *task*
+graph (remaining-work rule 3; [ADR-0005](adr/0005-self-modification-boundary.md) T3). Do
+not grow `contracts.graph.NODES`. Definitional papers with no measurements do not enter
+§1 as design-shaping.
+
+### 12.3 MerchantBench (score 4) — decline for design
+
+**Shi, Tao, Jin, Kang, Dou, Zhu, Pan, Fu, Wang, Li, Cheng, Weng, and Huo**,
+*MerchantBench: Benchmarking LLM Agents for Long-Term Coherence in E-Commerce
+Operations*, arXiv:2607.28956, 4 August 2026 **[F]**. 365-day seller simulation grounded
+in 98,843 product records and 26 tools; best LLM configuration reaches 27.3% of human
+mean final net assets.
+
+**Long-term coherence** (preserve purpose across a long horizon while adapting to delayed
+evidence) is Recertia's *outer* loop in prose: memory written by one run is read by the
+next. The delayed-feedback mechanic (orders commit cash before settlement; rating damage
+arrives later) is the same shape as Recertia's Recertifier + episodic dead ends: action
+now, outcome later, incoherent behavior compounds.
+
+**Why it does not shape design.** Rubric band 3–4 (domain-locked trading/ops). Recertia's
+evaluation unit is a **bounded run** with machine-checkable criteria on `repo-chore`, not
+a 365-day persistent operator
+([measurement-and-scope.md](architecture/measurement-and-scope.md) §17). Opening
+e-commerce would be a third task class before Phase 4 — remaining work lists that as out
+of scope. Recertia already refused to be a long-running daemon; improvement is scheduled
+jobs ([ADR-0004](adr/0004-offline-improvement-plane.md)). The headline gap (27.3% of human
+net assets) does not transfer: Recertia does not optimize net assets.
+
+**Take (one sentence):** delayed, heterogeneous feedback is why Recertifier and negative
+knowledge exist; MerchantBench is a domain-locked measurement of that failure mode, not a
+benchmark Recertia should run.
+
+**Decline:** no MerchantBench evals, no cash-flow tools, no 365-day soak as a product
+goal. RW-GA soak stays four weeks of `repo-chore`.
+
+### 12.4 Recirculation (score 2) — decline
+
+**Mozer, Siddiqui, Sawyer, Sanyal, and Liu**, *Recirculation*, arXiv:2608.17981, 18 August
+2026 **[F]**. Training-free inference-time recurrence: leak a deep residual-stream
+activation into a shallower layer so the model tracks belief state. Gemma 3: −23%
+perplexity, +21% GSM8K. Requires changing the **forward pass** (serial prefill); vLLM has
+an experimental RFC.
+
+**Why it is out of scope.** Recertia consumes OpenAI-compatible gateways
+([ADR-0013](adr/0013-openai-compat-gateways.md)). It does not own weights, KV cache, or
+layer execution. Belief-state tracking is already Recertia's job **outside** the model:
+`RunState`, plural memory, checkpoints. Recirculation would be a serving-stack choice for
+an operator who self-hosts Gemma 3; it cannot be implemented in this repo without
+violating the scaffolding-only non-goal
+([overview](architecture/overview.md) §1).
+
+**Decline.** Do not add remaining work. Do not propose a Recertia serving feature.
