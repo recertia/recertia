@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from contracts.audited_task_state import AuditedTaskState, Blocker
+from contracts.audited_task_state import AuditedTaskState
 
 
 @dataclass(frozen=True)
