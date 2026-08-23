@@ -6349,6 +6349,67 @@ another LLM. Recertia's explicit non-goal remains "no model weight training"
 ([overview](architecture/overview.md) §1). No 16th `replan` node. No new assumption —
 `strategy_change_rate` is unscheduled telemetry, not a remaining-work item.
 
+### 1.11 Phantom Gains: every transition statistic needs a measured null — confirming, not changing
+
+> "Transition-level auditing therefore requires a separately measured null for every
+> statistic it reports."
+
+— **Phantom Gains: Auditing Self-Improvement Against a Measured Null**, Xu, Yan, Chen,
+and Kechadi, arXiv:2608.20290, 20 August 2026 **[F]**
+
+Item-level "learned / corrupted" ledgers are differences of two noisy estimates. Auditing
+three rounds of LoRA self-training against a frozen copy pushed through the identical
+pipeline, the authors isolate seven measurement failures, each of which **inverts a
+reported finding** when its control is absent. A single greedy decode manufactures
+capability changes on an untrained model (largely an inference-batching artifact). The
+expansion statistic that separates acquisition from sharpening assigns that same frozen
+model a rate of 0.280; the obvious threshold repair still has a non-zero measured null.
+The repair is a per-problem exact test against a pooled baseline under FDR, which detects
+nothing on held-out replicates. Applied to matched arms, external distillation improves
+problems the base model rarely reaches; three self-training arms do not, and self-training
+corrupts baseline-solved problems well above the measured floor.
+
+**Confirmed rather than changed.** Recertia already refuses "the score went up": Wilson
+intervals, `not established`, the ablation arm, and contribution from non-`judge`
+criteria only ([§1.8](#18-a-biased-judge-silently-disables-retirement), ADR-0003). This
+paper is the item-level version of that honesty. It supports RW-M2 / `a1` reporting:
+multi-run lift, order stress, and not treating a single greedy pass as a state. Full
+take/decline in [§13](#13-five-day-arxiv-scan-2026-08-18-to-2026-08-23).
+
+**What we deliberately did not take:** the object they audit is LoRA self-training — a
+Recertia non-goal. No weight-update loop. No remaining-work item for a transition ledger;
+`route_log` already records per-run outcomes. A per-task ledger against the control arm
+is unscheduled telemetry.
+
+### 1.12 Skill-set packing under a token budget is retrieve-time, not a new node — not implemented
+
+> Loading reusable skill documents into a bounded context window is now the primary way
+> LLM agents acquire task-specific capabilities, which makes skill selection a first-order
+> determinant of task performance and token cost.
+
+— **Optimal Skill Selection for LLM Agents with Provable Bicriteria Guarantees**, Chen,
+Chen, Wang, Li, and Huang, arXiv:2608.19993, 20 August 2026 **[F]**
+
+Independent top-*k* / greedy packing ignores complementarity, redundancy, and context
+tax. The authors maximize monotone-submodular benefit minus a linear length penalty
+under a hard token budget; **Best Prefix Selection (BPS)** is a polynomial bicriteria
+\((1-1/e, 1)\) guarantee. On a contamination-controlled BigCodeBench-style coding setup:
+**0.73** task success vs **0.20–0.52** for released routers, retrievers, and the
+executor's own selection, on **28% fewer tokens**. Wrong or extra skills can drop
+success **below** the no-skill baseline.
+
+**What this does not change today.** Recertia's bounded active set (ADR-0006) is
+*library* capacity, not *prompt* capacity. `retrieve` still returns a federated bundle
+behind a score floor. BPS is scaffolding (frozen executor, no weight updates, coding
+domain) and would live **inside** the existing `retrieve` node as a packer — not a 16th
+node, and not the deferred learned ranker (remaining-work rule 3; ADR-0015). Fit the
+benefit from Recertia's own pass/fail traces before claiming lift. Full take/decline in
+[§13](#13-five-day-arxiv-scan-2026-08-18-to-2026-08-23).
+
+**What we deliberately did not take:** implementing BPS in this change; growing the
+installed library because "selection is now optimal"; fitting a capability model from
+live traffic without the ablation firewall.
+
 ## 2. Skill libraries and lifecycle management
 
 | Work | Relevance |
@@ -6362,6 +6423,9 @@ another LLM. Recertia's explicit non-goal remains "no model weight training"
 | **CASCADE: Cumulative Agentic Skill Creation**, Huang et al., arXiv:2512.23880, 2025 **[B]** | Autonomous skill development and evolution |
 | **Self-Evolving LLM Agents through an Experience-Driven Lifecycle**, Wu et al., arXiv:2510.16079, 2025 **[B]** | Lifecycle framing of experience accumulation |
 | **Self-Improvements in Modern Agentic Systems** — [survey hub](https://selfimproving-agent.github.io/) **[F]** | Taxonomy separating foundation-model improvement from scaffolding improvement (~166 scaffolding papers); our design is entirely in the scaffolding branch |
+| **Break It Down, Pass It On: Cross-Task Skill Transfer in LLM Agents**, Feng, Bijoy, Balasubramanian, and Zhou, arXiv:2608.20274, 2026 **[F]** | Task-level induced skills often fall *below* the no-memory baseline; subtask-level skills raise it. Text transfers better than code. Skill utility (specificity × abstractness) predicts transfer before a new run. Confirms pitfall/subtask-shaped `failure_modes` and a possible advisory retrieve pre-filter — not a new node. See [§13](#13-five-day-arxiv-scan-2026-08-18-to-2026-08-23) |
+| **SkillForge: Self-Distilling Agents for Project-Specific Issue Resolution**, Chen, Li, Gu, Shi, and Guan, arXiv:2608.18933, 2026 **[F]** | Synthesizes project issues from test-covered core functions, then distills entity-grounded skills. SWE-bench Verified +5.6–5.8pp over Mini-SWE-Agent. Repo-chore cousin of Miner + Practice; do not add a synthetic-issue generator until Practice conversion is a measured number |
+| **Optimal Skill Selection for LLM Agents with Provable Bicriteria Guarantees**, Chen, Chen, Wang, Li, and Huang, arXiv:2608.19993, 2026 **[F]** | Set-level packing under a token budget with a bicriteria guarantee; bad extras can beat the empty-bundle control the wrong way. Retrieve-time packer candidate; not implemented. See [§1.12](#112-skill-set-packing-under-a-token-budget-is-retrieve-time-not-a-new-node-not-implemented) |
 
 ### 2.1 Improvement-plane search and packaging (ADR-0015)
 
@@ -6390,6 +6454,7 @@ interval are numbers.
 | **ExpeL: LLM Agents Are Experiential Learners**, Zhao et al., AAAI 2024 **[B]** | Cross-task insight extraction without weight updates |
 | **AutoManual: Generating Instruction Manuals by LLM Agents**, Chen et al., NeurIPS 2024 **[B]** | Rule/manual induction from interaction; kin to our semantic plane |
 | **Agent Workflow Memory**, Wang et al., arXiv:2409.07429, 2024 **[B]** | Reusable workflows induced from experience; kin to composite skills |
+| **MemTrapBench: Benchmarking Cognitive Traps in LLM Memory Use**, Wang et al., arXiv:2608.20202, 2026 **[F]** | Faithfully stored, semantically relevant memories can still distort reasoning (fixation, belief distortion); all evaluated memory stacks lost >10pp vs no-memory. Independent support for the empty-bundle floor and Zhao faithfulness tests. AdaptiveMem is a prompt, not a new plane |
 
 ## 4. Self-improving scaffolding and optimisation
 
@@ -6413,6 +6478,7 @@ interval are numbers.
 | **The Bitter Lesson**, Sutton, 2019 **[B]** | The standing argument against elaborate hand-built scaffolding; the reason `architecture/overview.md` defers parametric learning rather than dismissing it |
 | **Next-Generation Agentic Reinforcement Learning Systems Enable Self-Evolving Agents**, Yan et al., arXiv:2607.01120, 2026 **[F]** | ATDP / trajectory substrate for step-granular learning signals and offline replay; informed ADR-0011. Weight-update loop and evolution control plane rejected (ADR-0005); scaffolding-only adaptation only |
 | **On the Fragility of Self-Improving Agents: Variance, Task Order, and Underspecification**, Ye et al., arXiv:2608.18066, 2026 **[F]** | Memory-based self-improvers amplify evaluation variance (71% of cases) and degrade under shuffled task order; underspecification produces inapplicable memories. Directly supports multi-run lift reporting, order stress-tests, stronger criteria/env specification at distillation, and pre-promotion filtering |
+| **Phantom Gains: Auditing Self-Improvement Against a Measured Null**, Xu, Yan, Chen, and Kechadi, arXiv:2608.20290, 2026 **[F]** | Item-level learned/corrupted ledgers invert findings without a measured null; greedy+batching manufactures transitions on a frozen model. Confirms Wilson / `not established` / ablation-arm honesty at transition grain. See [§1.11](#111-phantom-gains-every-transition-statistic-needs-a-measured-null-confirming-not-changing) |
 | **Large Language Model Agents Are Not Always Faithful Self-Evolvers**, Zhao et al., arXiv:2601.22436, 2026 **[F]** | Causal interventions show agents depend on raw experience but frequently ignore or misinterpret condensed experience. Supports faithfulness tests on retrieved skills via trajectory events, more specific/actionable skill content, and uncertainty-gated retrieval |
 | **Building Multi-Agent Systems: When and How to Use Them**, Morgan et al., ICIS 2025 **[F]** | Practical decision checklist (context overflow, specialization, parallelism, high risk, maintainability). Supports keeping single-agent default and using structured handoffs / local-context protection only if measurement shows a clear ceiling |
 
@@ -6661,3 +6727,102 @@ violating the scaffolding-only non-goal
 ([overview](architecture/overview.md) §1).
 
 **Decline.** Do not add remaining work. Do not propose a Recertia serving feature.
+
+## 13. Five-day arXiv scan (2026-08-18 to 2026-08-23)
+
+Papers first posted (or first seen in the cs.AI/cs.SE new listings) from 18 through 23
+August 2026, scored against the same rubric as §12. Already in this file and skipped
+here: Ye et al. fragility (`2608.18066`, §5), Lim et al. strategy lock-in (`2608.19072`,
+§1.10 / §12), Recirculation (`2608.17981`, §12.4). None of the rows below is remaining
+work. Fifteen nodes stay T3. No learned ranker, no weight-update loop, no third domain.
+
+| Paper | arXiv | Relevance | Importance | Verdict |
+| --- | --- | --- | --- | --- |
+| **Optimal Skill Selection for LLM Agents with Provable Bicriteria Guarantees** | [2608.19993](https://arxiv.org/abs/2608.19993) | 9 | 8 | **Cite; packer later.** Set-level retrieve packing. See [§1.12](#112-skill-set-packing-under-a-token-budget-is-retrieve-time-not-a-new-node-not-implemented). |
+| **Phantom Gains: Auditing Self-Improvement Against a Measured Null** | [2608.20290](https://arxiv.org/abs/2608.20290) | 8 | 8 | **Confirm.** Item-level measured nulls. See [§1.11](#111-phantom-gains-every-transition-statistic-needs-a-measured-null-confirming-not-changing). |
+| **Break It Down, Pass It On: Cross-Task Skill Transfer in LLM Agents** | [2608.20274](https://arxiv.org/abs/2608.20274) | 8 | 7 | **Confirm.** Subtask-grain distill; utility as advisory retrieve filter. |
+| **SkillForge: Self-Distilling Agents for Project-Specific Issue Resolution** | [2608.18933](https://arxiv.org/abs/2608.18933) | 7 | 5 | **Cite.** SWE cousin of Miner + Practice; no synthetic-issue generator yet. |
+| **MemTrapBench: Benchmarking Cognitive Traps in LLM Memory Use** | [2608.20202](https://arxiv.org/abs/2608.20202) | 7 | 5 | **Cite.** Retrieved memory can hurt; supports the empty-bundle floor. |
+| **Measuring What a Specification Determines** | [2608.19475](https://arxiv.org/abs/2608.19475) | 6 | 4 | **Decline for design.** Execution-judged spec quality; 14.4pp noise floor. Kin to criteria preregistration only. |
+| **SkillGate: Training In-Policy Skill Selection in Long-Horizon Agents** | [2608.18852](https://arxiv.org/abs/2608.18852) | 5 | 3 | **Decline mechanism.** Selector credit starvation is real; the fix is RL on weights (ADR-0005). |
+| **Write, Execute, Refine** | [2608.17587](https://arxiv.org/abs/2608.17587) | 5 | 3 | **Decline mechanism.** Skill optimizer via RL from execution feedback. |
+| **From Agent Behaviour to Agent-Friendly Documentation** | [2608.20195](https://arxiv.org/abs/2608.20195) | 4 | 2 | **Decline.** Agents prefer instruction files over API docs; Miner already prefers owner-repo artifacts. |
+| **AI4AI-Bench** | [2608.20318](https://arxiv.org/abs/2608.20318) | 4 | 2 | **Decline.** Recursive algorithm-design self-improvement; weight/search non-goal. |
+| **Learning When to Think** | [2608.20256](https://arxiv.org/abs/2608.20256) | 3 | 2 | **Decline.** GRPO mode routing inside the model. |
+| **Repo0 / Loreley** | [2608.19854](https://arxiv.org/abs/2608.19854) / [2608.19703](https://arxiv.org/abs/2608.19703) | 3 | 2 | **Decline.** Zero-to-all codegen and QD repo search; not Recertia's bounded-run loop. |
+
+### 13.1 Optimal skill selection (score 9) — cite; packer not implemented
+
+**Chen, Chen, Wang, Li, and Huang**, arXiv:2608.19993, 20 August 2026 **[F]**. Skills as
+documents under a hard token budget. Independent top-*k* wastes tokens and can degrade
+success. BPS packs a complementary set with a bicriteria \((1-1/e, 1)\) guarantee; 0.73
+vs 0.20–0.52 on a contamination-controlled coding setup, 28% fewer tokens than the
+strongest released router.
+
+**Take:** independent evidence that retrieval is a *set* decision, that extras can beat
+the empty-bundle control the wrong way, and that a retrieve-time packer belongs inside
+`retrieve` — not as a 16th node and not as the deferred learned ranker. Design note in
+[§1.12](#112-skill-set-packing-under-a-token-budget-is-retrieve-time-not-a-new-node-not-implemented).
+
+**Decline for this change:** do not implement BPS; do not grow the installed library;
+do not fit a capability model from live traffic without the ablation firewall. Enable
+only after `a1` has an interval and a retrieve ablation can host the packer.
+
+### 13.2 Phantom Gains (score 8) — confirm
+
+**Xu, Yan, Chen, and Kechadi**, arXiv:2608.20290, 20 August 2026 **[F]**. Seven
+measurement failures for item-level self-improvement ledgers, each reversing a finding
+without its control. Repair: a separately measured null per statistic from baseline
+replicates the study already owns; per-problem tests + FDR.
+
+**Take:** confirms Wilson / `not established` / ablation-arm practice at transition
+grain. Supports RW-M2 reporting. Design note in
+[§1.11](#111-phantom-gains-every-transition-statistic-needs-a-measured-null-confirming-not-changing).
+
+**Decline:** LoRA self-training remains a non-goal. No remaining-work item for a
+transition ledger.
+
+### 13.3 Cross-task skill transfer (score 8) — confirm
+
+**Feng, Bijoy, Balasubramanian, and Zhou**, arXiv:2608.20274, 20 August 2026 **[F]**.
+Controlled comparison: task-level vs subtask-level induction, text vs code, three
+long-horizon benches, eleven models. Task-level skills often fall below the no-memory
+baseline; subtask-level skills raise it. Text transfers better than code. Neither
+specificity nor abstractness alone predicts success; their product (skill utility) does,
+and can be scored from skill + task text before a new run.
+
+**Take:** prefer pitfall/subtask-shaped `failure_modes` (already in the authoring prior).
+Utility is an advisory retrieve signal later, next to the score floor and Zhao
+faithfulness — still inside `retrieve` / Curator.
+
+**Decline:** do not make executable code-skills the primary library; do not add a node.
+
+### 13.4 SkillForge (score 7) — cite only
+
+**Chen, Li, Gu, Shi, and Guan**, arXiv:2608.18933, 19 August 2026 **[F]**. Synthesizes
+issues from test-covered core functions, distills entity-grounded skills. SWE-bench
+Verified +5.6–5.8pp over Mini-SWE-Agent.
+
+**Take:** SWE-specific cousin of Miner (human artifacts) and Practice (curriculum). Cite
+in §2.
+
+**Decline:** no synthetic-issue generator until Practice conversion is a measured number.
+
+### 13.5 MemTrapBench (score 7) — cite only
+
+**Wang et al.**, arXiv:2608.20202, 20 August 2026 **[F]**. Faithfully stored, semantically
+relevant memories can still distort reasoning (fixation, belief distortion). Evaluated
+memory stacks lost >10pp versus no-memory. AdaptiveMem (retrieve vs overwrite vs ignore)
+is a prompt policy, not a Recertia plane.
+
+**Take:** independent evidence that "always retrieve" is not free. Supports the
+empty-bundle floor and Zhao faithfulness tests already in [§3](#3-memory-and-experiential-learning).
+
+**Decline:** do not add AdaptiveMem as a node or a new memory plane.
+
+### 13.6 Just outside the window (17 August)
+
+Not this batch: **VCE-Skill** ([2608.16544](https://arxiv.org/abs/2608.16544)) — public
+version-diff priors fused with trajectory evolution; Recertia already versions skills
+and mines reviewer diffs. **HyperSkill** ([2608.16114](https://arxiv.org/abs/2608.16114))
+— hypergraph memory; composition is already `uses` / step graphs.
