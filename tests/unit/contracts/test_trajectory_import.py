@@ -35,20 +35,20 @@ def _step() -> TrajectoryStep:
 
 
 def _imp(**kwargs) -> TrajectoryImport:
-    defaults = dict(
-        import_id="imp_1",
-        source="synthetic",
-        source_ref="fixture/1",
-        captured_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
-        environment=EnvironmentDescriptor(os="linux", tools=["browser"]),
-        steps=[_step()],
-        outcome="solved",
-        criteria_snapshot=[_crit()],
-        provenance=ProvenanceBundle(source="synthetic", source_ref="fixture/1"),
-        reexecutable=True,
-        require_auditor_reverify=True,
-        mea_goal_id="g_1",
-    )
+    defaults = {
+        "import_id": "imp_1",
+        "source": "synthetic",
+        "source_ref": "fixture/1",
+        "captured_at": datetime(2026, 8, 23, tzinfo=timezone.utc),
+        "environment": EnvironmentDescriptor(os="linux", tools=["browser"]),
+        "steps": [_step()],
+        "outcome": "solved",
+        "criteria_snapshot": [_crit()],
+        "provenance": ProvenanceBundle(source="synthetic", source_ref="fixture/1"),
+        "reexecutable": True,
+        "require_auditor_reverify": True,
+        "mea_goal_id": "g_1",
+    }
     defaults.update(kwargs)
     return TrajectoryImport(**defaults)
 

@@ -5,11 +5,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from contracts.audited_task_state import (
+    ArtifactRef,
     AuditedTaskState,
     Blocker,
     ProvenanceBundle,
     VerifiedDecision,
-    ArtifactRef,
 )
 from contracts.criteria import TaskCriterion
 from recertia.ops.mea_systems import (
@@ -32,18 +32,18 @@ def _crit(cid: str = "c1") -> TaskCriterion:
 
 
 def _state(**kwargs) -> AuditedTaskState:
-    defaults = dict(
-        state_id="st_1",
-        goal_id="g_1",
-        version=1,
-        objective="obj",
-        acceptance_criteria=[_crit("c1"), _crit("c2")],
-        criteria_snapshot_hash="hash",
-        provenance=ProvenanceBundle(source="synthetic"),
-        updated_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
-        max_rounds=12,
-        rounds_consumed=1,
-    )
+    defaults = {
+        "state_id": "st_1",
+        "goal_id": "g_1",
+        "version": 1,
+        "objective": "obj",
+        "acceptance_criteria": [_crit("c1"), _crit("c2")],
+        "criteria_snapshot_hash": "hash",
+        "provenance": ProvenanceBundle(source="synthetic"),
+        "updated_at": datetime(2026, 8, 23, tzinfo=timezone.utc),
+        "max_rounds": 12,
+        "rounds_consumed": 1,
+    }
     defaults.update(kwargs)
     return AuditedTaskState(**defaults)
 
