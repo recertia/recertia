@@ -3,6 +3,9 @@
 Structural definition only. Append/storage live in ``src/recertia/trajectory/``.
 Events are emitted by the graph engine from node outcomes — nodes themselves never write
 the trajectory store (same separation as the memory ledger).
+
+``audited_state_delta`` was added for the MEA / AuditedTaskState projection
+(see contracts/audited_task_state.py and the 2026-08-23 plan).
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ EventKind = Literal[
     "merge_audit",
     "terminal",
     "late_signal",
+    "audited_state_delta",  # MEA: accepted controller-owned state projection update
 ]
 
 ArmName = Literal["treatment", "control", "shadow", "practice"]
