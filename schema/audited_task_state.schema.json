@@ -1,0 +1,837 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/recertia/recertia/schema/AuditedTaskState",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "screenshot",
+            "har",
+            "terminal_log",
+            "diff",
+            "file",
+            "json",
+            "text",
+            "other"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "Blocker": {
+      "additionalProperties": false,
+      "properties": {
+        "blocker_id": {
+          "title": "Blocker Id",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "since_version": {
+          "minimum": 0,
+          "title": "Since Version",
+          "type": "integer"
+        },
+        "evidence_refs": {
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "blocker_id",
+        "description",
+        "since_version"
+      ],
+      "title": "Blocker",
+      "type": "object"
+    },
+    "FailedApproach": {
+      "additionalProperties": false,
+      "description": "An approach that was tried and independently observed to fail.",
+      "properties": {
+        "approach_id": {
+          "title": "Approach Id",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "observed_failure": {
+          "title": "Observed Failure",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "approach_id",
+        "description",
+        "observed_failure",
+        "recorded_at"
+      ],
+      "title": "FailedApproach",
+      "type": "object"
+    },
+    "ModelHarnessRoute": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider"
+        },
+        "model_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Id"
+        },
+        "route_label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Route Label"
+        }
+      },
+      "title": "ModelHarnessRoute",
+      "type": "object"
+    },
+    "ProvenanceBundle": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "enum": [
+            "mea_loop",
+            "trajectory_import",
+            "synthetic",
+            "operator",
+            "external_demo"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "source_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Ref"
+        },
+        "captured_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Captured At"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "title": "ProvenanceBundle",
+      "type": "object"
+    },
+    "ResidualBudget": {
+      "additionalProperties": false,
+      "description": "Remaining capacity. Exhaustion is representable (zeros allowed).\n\nDistinct from Goal ``Budget`` so ``max_attempts=0`` cannot leak into\nrun/branch/node JSON Schema (those stay ``ge=1``).",
+      "properties": {
+        "max_attempts": {
+          "default": 4,
+          "minimum": 0,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "max_tool_calls": {
+          "default": 200,
+          "minimum": 0,
+          "title": "Max Tool Calls",
+          "type": "integer"
+        },
+        "max_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Tokens"
+        },
+        "max_wall_clock_s": {
+          "default": 900,
+          "minimum": 0,
+          "title": "Max Wall Clock S",
+          "type": "integer"
+        },
+        "max_cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Cost Usd"
+        },
+        "max_branches": {
+          "default": 3,
+          "maximum": 16,
+          "minimum": 0,
+          "title": "Max Branches",
+          "type": "integer"
+        },
+        "max_parallel_steps": {
+          "default": 8,
+          "minimum": 0,
+          "title": "Max Parallel Steps",
+          "type": "integer"
+        },
+        "claim_timeout_s": {
+          "default": 60,
+          "minimum": 0,
+          "title": "Claim Timeout S",
+          "type": "integer"
+        },
+        "max_versions_written": {
+          "default": 2,
+          "minimum": 0,
+          "title": "Max Versions Written",
+          "type": "integer"
+        }
+      },
+      "title": "ResidualBudget",
+      "type": "object"
+    },
+    "ScopeDescriptor": {
+      "additionalProperties": false,
+      "description": "Files, commands, network, and permissions in scope for a phase or subtask.\n\nMust reuse the existing resource-claim machinery at runtime; this contract\nonly carries the declared bounds.",
+      "properties": {
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Files",
+          "type": "array"
+        },
+        "commands": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
+        "network": {
+          "default": "none",
+          "enum": [
+            "none",
+            "allowlist",
+            "open"
+          ],
+          "title": "Network",
+          "type": "string"
+        },
+        "permissions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Permissions",
+          "type": "array"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        }
+      },
+      "title": "ScopeDescriptor",
+      "type": "object"
+    },
+    "SensitivityProof": {
+      "additionalProperties": false,
+      "description": "Evidence that a criterion rejects a known-bad artifact (specs \u00a715.2).",
+      "properties": {
+        "criterion_id": {
+          "title": "Criterion Id",
+          "type": "string"
+        },
+        "negative_fixture": {
+          "title": "Negative Fixture",
+          "type": "string"
+        },
+        "rejected": {
+          "title": "Rejected",
+          "type": "boolean"
+        },
+        "checked_at": {
+          "format": "date-time",
+          "title": "Checked At",
+          "type": "string"
+        },
+        "checked_against": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checked Against"
+        },
+        "evidence_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "sha256 hash binding the criterion definition to the negative-fixture fingerprint used for this proof",
+          "title": "Evidence Hash"
+        }
+      },
+      "required": [
+        "criterion_id",
+        "negative_fixture",
+        "rejected",
+        "checked_at"
+      ],
+      "title": "SensitivityProof",
+      "type": "object"
+    },
+    "TaskCriterion": {
+      "additionalProperties": false,
+      "description": "Locked at ``intake`` for one run. Never authored by a chosen skill.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "command",
+            "assertion",
+            "schema",
+            "metric",
+            "judge"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "run": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run"
+        },
+        "expect_exit": {
+          "default": 0,
+          "title": "Expect Exit",
+          "type": "integer"
+        },
+        "expr": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expr"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "schema_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schema Ref"
+        },
+        "metric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric"
+        },
+        "op": {
+          "anyOf": [
+            {
+              "enum": [
+                "lt",
+                "lte",
+                "gt",
+                "gte",
+                "eq"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Op"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold"
+        },
+        "rubric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rubric"
+        },
+        "isolation": {
+          "default": "fresh_context",
+          "enum": [
+            "fresh_context",
+            "inherits_context"
+          ],
+          "title": "Isolation",
+          "type": "string"
+        },
+        "lens": {
+          "anyOf": [
+            {
+              "enum": [
+                "correctness",
+                "currency",
+                "provenance",
+                "scope",
+                "safety"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lens"
+        },
+        "timeout_s": {
+          "default": 300,
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Timeout S",
+          "type": "integer"
+        },
+        "weight": {
+          "default": 1.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Weight",
+          "type": "number"
+        },
+        "sensitivity_proof": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SensitivityProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source": {
+          "enum": [
+            "caller",
+            "task_class_template",
+            "critic"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "preregistered": {
+          "default": true,
+          "title": "Preregistered",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "source"
+      ],
+      "title": "TaskCriterion",
+      "type": "object"
+    },
+    "VerifiedDecision": {
+      "additionalProperties": false,
+      "description": "A fact independently verified from the environment or locked criteria.",
+      "properties": {
+        "decision_id": {
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          },
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "verified_at": {
+          "format": "date-time",
+          "title": "Verified At",
+          "type": "string"
+        },
+        "applicability": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Applicability"
+        },
+        "revalidation_rule": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revalidation Rule"
+        }
+      },
+      "required": [
+        "decision_id",
+        "statement",
+        "evidence_refs",
+        "verified_at"
+      ],
+      "title": "VerifiedDecision",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Controller-owned, versioned projection of long-horizon progress.\n\nNot a second source of truth: every accepted delta is also emitted as a\ntrajectory event of kind ``audited_state_delta`` so the state is fully\nrecoverable from the ledger + trajectory events alone.",
+  "properties": {
+    "state_id": {
+      "title": "State Id",
+      "type": "string"
+    },
+    "goal_id": {
+      "title": "Goal Id",
+      "type": "string"
+    },
+    "version": {
+      "minimum": 0,
+      "title": "Version",
+      "type": "integer"
+    },
+    "objective": {
+      "title": "Objective",
+      "type": "string"
+    },
+    "non_negotiable_constraints": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Non Negotiable Constraints",
+      "type": "array"
+    },
+    "acceptance_criteria": {
+      "items": {
+        "$ref": "#/$defs/TaskCriterion"
+      },
+      "minItems": 1,
+      "title": "Acceptance Criteria",
+      "type": "array"
+    },
+    "criteria_snapshot_hash": {
+      "description": "sha256 of the locked TaskCriterion[] at intake; rejects drift",
+      "minLength": 1,
+      "title": "Criteria Snapshot Hash",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/ScopeDescriptor"
+    },
+    "isolation_policy_ref": {
+      "default": "container_default",
+      "description": "Must match the default container isolation policy unless an explicit, allow-listed exception is present",
+      "title": "Isolation Policy Ref",
+      "type": "string"
+    },
+    "accepted_commit": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Accepted Commit"
+    },
+    "verified_decisions": {
+      "items": {
+        "$ref": "#/$defs/VerifiedDecision"
+      },
+      "title": "Verified Decisions",
+      "type": "array"
+    },
+    "failed_approaches": {
+      "items": {
+        "$ref": "#/$defs/FailedApproach"
+      },
+      "title": "Failed Approaches",
+      "type": "array"
+    },
+    "current_blockers": {
+      "items": {
+        "$ref": "#/$defs/Blocker"
+      },
+      "title": "Current Blockers",
+      "type": "array"
+    },
+    "current_phase": {
+      "default": "intake",
+      "title": "Current Phase",
+      "type": "string"
+    },
+    "assigned_route": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ModelHarnessRoute"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "evidence_refs": {
+      "items": {
+        "$ref": "#/$defs/ArtifactRef"
+      },
+      "title": "Evidence Refs",
+      "type": "array"
+    },
+    "budget_residual": {
+      "$ref": "#/$defs/ResidualBudget"
+    },
+    "last_auditor_report_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Auditor Report Id"
+    },
+    "provenance": {
+      "$ref": "#/$defs/ProvenanceBundle"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "rounds_consumed": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Rounds Consumed",
+      "type": "integer"
+    },
+    "max_rounds": {
+      "default": 12,
+      "minimum": 1,
+      "title": "Max Rounds",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "state_id",
+    "goal_id",
+    "version",
+    "objective",
+    "acceptance_criteria",
+    "criteria_snapshot_hash",
+    "provenance",
+    "updated_at"
+  ],
+  "title": "AuditedTaskState",
+  "type": "object"
+}

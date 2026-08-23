@@ -15,7 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the trajectory emitter writes `audited_state_delta` on accept; the ledger notes
   `mea_activation_fallback` only when MEA was requested but incomplete. Default
   single-request path is unchanged (no sidecar, no ledger note, no extra events).
-  No new graph nodes.
+  No new graph nodes. `AuditedTaskState` and `TrajectoryImport` are generated
+  into `schema/`. Skill-free golden
+  `evals/golden/mea/synthetic-multiphase/` runs under `recertia eval run
+  --task-class mea`; observations are eval-firewalled and cannot enter
+  `causal_lift`. Not on the repo-chore promotion gate.
 
 - **Design: External Trajectories & Computer-Use Goldens** (2026-08-22) — accepted plan for
   `TrajectoryImport` (provenance-required), three computer-use golden task classes

@@ -1,0 +1,21 @@
+{
+  "goal_id": "g_synthetic_multiphase",
+  "desired": [
+    {
+      "id": "phase1_file",
+      "kind": "file_exists",
+      "path": "phase1.done",
+      "weight": 1.0
+    },
+    {
+      "id": "phase2_file",
+      "kind": "file_exists",
+      "path": "phase2.done",
+      "weight": 1.0
+    }
+  ],
+  "constraints": [],
+  "context": "Synthetic multi-phase Goal for MEA lift-harness readiness",
+  "task_class": "mea",
+  "mea_opt_in": true
+}
