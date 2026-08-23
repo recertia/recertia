@@ -1,35 +1,23 @@
-"""Optional MEA (Manage-Execute-Audit) subtask loop.
+"""Optional MEA (Manage-Execute-Audit) subtask loop helpers.
 
-Off by default. Three-layer activation required: global policy flag +
-per-Goal opt-in + runtime strategy. No new graph nodes.
+Controller-owned scaffolding only. No graph nodes. Activation is three-layer:
+global policy flag + per-Goal opt-in + runtime strategy. Default remains
+single-request.
 """
 
-from recertia.mea.activation import (
-    MeaActivation,
-    MeaPolicyFlags,
-    activation_decision,
-)
+from recertia.mea.activation import MeaActivation, resolve_mea_activation
 from recertia.mea.controller import (
-    MeaControllerResult,
-    MeaRoundOutcome,
-    early_stop_reason,
-    run_mea_round,
-)
-from recertia.mea.auditor_gate import (
-    AuditorInstance,
-    require_distinct_auditor,
-    require_fresh_context,
+    MeaEarlyStop,
+    enforce_round_budget,
+    propose_subtask,
+    require_fresh_auditor_context,
 )
 
 __all__ = [
-    "AuditorInstance",
     "MeaActivation",
-    "MeaControllerResult",
-    "MeaPolicyFlags",
-    "MeaRoundOutcome",
-    "activation_decision",
-    "early_stop_reason",
-    "require_distinct_auditor",
-    "require_fresh_context",
-    "run_mea_round",
+    "MeaEarlyStop",
+    "enforce_round_budget",
+    "propose_subtask",
+    "require_fresh_auditor_context",
+    "resolve_mea_activation",
 ]
