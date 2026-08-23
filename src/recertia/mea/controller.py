@@ -14,7 +14,6 @@ from contracts.audited_task_state import (
     ScopeDescriptor,
     SubtaskContract,
 )
-from contracts.budget import Budget
 from contracts.criteria import TaskCriterion
 
 
@@ -110,17 +109,13 @@ def propose_subtask(
             ),
         )
     # SubtaskContract uses Goal Budget (max_attempts ge=1); clamp residual slice.
-    sub_budget = Budget(
-        max_attempts=max(1, slice_attempts),
-        max_tool_calls=max(1, tool_slice),
-        max_tokens=residual.max_tokens,
-        max_wall_clock_s=max(1, residual.max_wall_clock_s or 1),
-        max_cost_usd=residual.max_cost_usd,
-        max_branches=max(1, residual.max_branches or 1),
-        max_parallel_steps=max(1, residual.max_parallel_steps or 1),
-        claim_timeout_s=max(1, residual.claim_timeout_s or 1),
-        max_versions_written=residual.max_versions_written,
+    sliced = residual.model_copy(
+        update={
+            "max_attempts": slice_attempts,
+            "max_tool_calls": max(1, tool_slice),
+        }
     )
+    sub_budget = sliced.as_admission_budget()
 
     contract = SubtaskContract(
         subtask_id=subtask_id,

@@ -17,7 +17,7 @@ from contracts.audited_task_state import (
     VerifiedDecision,
     apply_auditor_delta,
 )
-from contracts.budget import Budget
+from contracts.budget import Budget, ResidualBudget
 from contracts.criteria import TaskCriterion
 
 
@@ -60,7 +60,7 @@ def _delta(parent: int = 0, **kwargs) -> AuditorDelta:
         "proposed_version": parent + 1,
         "criteria_snapshot_hash": "abc123",
         "isolation_policy_ref": "container_default",
-        "budget_residual": Budget(),
+        "budget_residual": ResidualBudget(),
         "produced_at": datetime(2026, 8, 23, 12, tzinfo=timezone.utc),
     }
     defaults.update(kwargs)
@@ -167,3 +167,20 @@ class TestSubtaskContract:
         )
         assert st.max_steps == 50
         assert st.budget.max_attempts == 4
+
+
+class TestResidualBudgetIsolation:
+    def test_zero_attempts_allowed_on_residual(self):
+        r = ResidualBudget(max_attempts=0)
+        assert r.max_attempts == 0
+
+    def test_goal_budget_rejects_zero_attempts(self):
+        with pytest.raises(ValidationError):
+            Budget(max_attempts=0)
+
+    def test_as_admission_budget_clamps_zeros(self):
+        r = ResidualBudget(max_attempts=0, max_tool_calls=0, max_wall_clock_s=0)
+        b = r.as_admission_budget()
+        assert b.max_attempts >= 1
+        assert b.max_tool_calls >= 1
+        assert b.max_wall_clock_s >= 1

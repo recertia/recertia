@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from contracts.audited_task_state import AuditedTaskState, ProvenanceBundle
-from contracts.budget import Budget
+from contracts.budget import ResidualBudget
 from contracts.computer_use_goldens import mea_derived_promotion_evidence_floor
 from contracts.criteria import TaskCriterion
 from contracts.policy import Policy
@@ -40,7 +40,7 @@ def _state(**kwargs) -> AuditedTaskState:
         "updated_at": datetime(2026, 8, 23, tzinfo=timezone.utc),
         "max_rounds": 3,
         "rounds_consumed": 0,
-        "budget_residual": Budget(max_attempts=4),
+        "budget_residual": ResidualBudget(max_attempts=4),
     }
     defaults.update(kwargs)
     return AuditedTaskState(**defaults)
@@ -53,7 +53,7 @@ def test_enforce_max_rounds():
 
 
 def test_enforce_residual_attempts():
-    st = _state(budget_residual=Budget(max_attempts=0))
+    st = _state(budget_residual=ResidualBudget(max_attempts=0))
     stop = enforce_round_budget(st)
     assert stop is not None and stop.reason == "residual_attempts_exhausted"
 

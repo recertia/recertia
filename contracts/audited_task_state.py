@@ -15,7 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from contracts.budget import Budget
+from contracts.budget import Budget, ResidualBudget
 from contracts.criteria import TaskCriterion
 
 
@@ -137,8 +137,9 @@ class AuditedTaskState(BaseModel):
     current_phase: str = "intake"
     assigned_route: ModelHarnessRoute | None = None
     evidence_refs: list[ArtifactRef] = Field(default_factory=list)
-    # Residual capacity (remaining). max_attempts may be 0 when exhausted.
-    budget_residual: Budget = Field(default_factory=Budget)
+    # Remaining capacity. Exhaustion is representable (ResidualBudget.max_attempts ge=0).
+    # Goal / run / branch Budget stays ge=1 so those schemas are not dirtied.
+    budget_residual: ResidualBudget = Field(default_factory=ResidualBudget)
     last_auditor_report_id: str | None = None
     provenance: ProvenanceBundle
     updated_at: datetime
@@ -191,7 +192,7 @@ class AuditorDelta(BaseModel):
     evidence_refs_added: list[ArtifactRef] = Field(default_factory=list)
     criteria_snapshot_hash: str
     isolation_policy_ref: str
-    budget_residual: Budget
+    budget_residual: ResidualBudget
     produced_at: datetime
 
     @model_validator(mode="after")

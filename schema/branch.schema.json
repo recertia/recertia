@@ -1,1 +1,504 @@
-PLACEHOLDER
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/recertia/recertia/schema/BranchState",
+  "$defs": {
+    "Budget": {
+      "additionalProperties": false,
+      "properties": {
+        "max_attempts": {
+          "default": 4,
+          "minimum": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "max_tool_calls": {
+          "default": 200,
+          "minimum": 1,
+          "title": "Max Tool Calls",
+          "type": "integer"
+        },
+        "max_tokens": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Tokens"
+        },
+        "max_wall_clock_s": {
+          "default": 900,
+          "minimum": 1,
+          "title": "Max Wall Clock S",
+          "type": "integer"
+        },
+        "max_cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Cost Usd"
+        },
+        "max_branches": {
+          "default": 3,
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Max Branches",
+          "type": "integer"
+        },
+        "max_parallel_steps": {
+          "default": 8,
+          "minimum": 1,
+          "title": "Max Parallel Steps",
+          "type": "integer"
+        },
+        "claim_timeout_s": {
+          "default": 60,
+          "minimum": 1,
+          "title": "Claim Timeout S",
+          "type": "integer"
+        },
+        "max_versions_written": {
+          "default": 2,
+          "minimum": 0,
+          "title": "Max Versions Written",
+          "type": "integer"
+        }
+      },
+      "title": "Budget",
+      "type": "object"
+    },
+    "BudgetReservation": {
+      "additionalProperties": false,
+      "description": "Resources promised to work which has not completed yet.\n\nReservations make concurrent branch dispatch safe: an admission decision counts both\nrecorded spend and work already admitted elsewhere.",
+      "properties": {
+        "attempts": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "tool_calls": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Tool Calls",
+          "type": "integer"
+        },
+        "tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Tokens",
+          "type": "integer"
+        },
+        "wall_clock_s": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Wall Clock S",
+          "type": "number"
+        },
+        "cost_usd": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Cost Usd",
+          "type": "number"
+        },
+        "versions_written": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Versions Written",
+          "type": "integer"
+        }
+      },
+      "title": "BudgetReservation",
+      "type": "object"
+    },
+    "CriterionResult": {
+      "additionalProperties": false,
+      "description": "One scored criterion, for a run's result vector or a certification observation.",
+      "properties": {
+        "criterion_id": {
+          "title": "Criterion Id",
+          "type": "string"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "command",
+                "assertion",
+                "schema",
+                "metric",
+                "judge"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kind"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "weight": {
+          "default": 1.0,
+          "title": "Weight",
+          "type": "number"
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "enum": [
+                "fresh_context",
+                "inherits_context"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Isolation"
+        },
+        "lens": {
+          "anyOf": [
+            {
+              "enum": [
+                "correctness",
+                "currency",
+                "provenance",
+                "scope",
+                "safety"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lens"
+        },
+        "context_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Hash of the exact context a judge saw; makes an isolation violation provable.",
+          "title": "Context Hash"
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exit Code"
+        },
+        "output_excerpt": {
+          "default": "",
+          "maxLength": 32768,
+          "title": "Output Excerpt",
+          "type": "string"
+        },
+        "errored": {
+          "default": false,
+          "title": "Errored",
+          "type": "boolean"
+        },
+        "duration_s": {
+          "default": 0.0,
+          "title": "Duration S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "criterion_id",
+        "passed"
+      ],
+      "title": "CriterionResult",
+      "type": "object"
+    },
+    "ResourceClaim": {
+      "additionalProperties": false,
+      "description": "A declared claim on something shared outside the workspace.\n\nTwo units conflict when they claim the same ``id`` and at least one ``mode`` is ``write``\nor ``exclusive`` \u2014 whether or not an ``input_bindings``-derived dependency exists between them.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "file",
+            "path",
+            "service",
+            "rate_limit",
+            "lock",
+            "external_system"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "read",
+            "write",
+            "exclusive"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "mode"
+      ],
+      "title": "ResourceClaim",
+      "type": "object"
+    },
+    "Spend": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "tool_calls": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Tool Calls",
+          "type": "integer"
+        },
+        "tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Tokens",
+          "type": "integer"
+        },
+        "wall_clock_s": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Wall Clock S",
+          "type": "number"
+        },
+        "cost_usd": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Cost Usd",
+          "type": "number"
+        },
+        "versions_written": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Versions Written",
+          "type": "integer"
+        }
+      },
+      "title": "Spend",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One dispatched unit of a fan-out (specs \u00a718).",
+  "properties": {
+    "branch_id": {
+      "title": "Branch Id",
+      "type": "string"
+    },
+    "kind": {
+      "default": "portfolio",
+      "enum": [
+        "portfolio",
+        "decomposition"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "strategy": {
+      "enum": [
+        "apply",
+        "adapt",
+        "scratch"
+      ],
+      "title": "Strategy",
+      "type": "string"
+    },
+    "subtask": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "decomposition only: the part of the work this branch owns.",
+      "title": "Subtask"
+    },
+    "candidate": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate"
+    },
+    "workspace_ref": {
+      "title": "Workspace Ref",
+      "type": "string"
+    },
+    "snapshot_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Snapshot Ref"
+    },
+    "transcript_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Transcript Ref"
+    },
+    "status": {
+      "default": "dispatched",
+      "enum": [
+        "dispatched",
+        "running",
+        "succeeded",
+        "failed",
+        "timed_out"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "resources": {
+      "items": {
+        "$ref": "#/$defs/ResourceClaim"
+      },
+      "title": "Resources",
+      "type": "array"
+    },
+    "budget": {
+      "$ref": "#/$defs/Budget"
+    },
+    "spent": {
+      "$ref": "#/$defs/Spend",
+      "default": {
+        "attempts": 0,
+        "tool_calls": 0,
+        "tokens": 0,
+        "wall_clock_s": 0.0,
+        "cost_usd": 0.0,
+        "versions_written": 0
+      }
+    },
+    "reserved": {
+      "$ref": "#/$defs/BudgetReservation",
+      "default": {
+        "attempts": 0,
+        "tool_calls": 0,
+        "tokens": 0,
+        "wall_clock_s": 0.0,
+        "cost_usd": 0.0,
+        "versions_written": 0
+      }
+    },
+    "results": {
+      "items": {
+        "$ref": "#/$defs/CriterionResult"
+      },
+      "title": "Results",
+      "type": "array"
+    },
+    "selected": {
+      "default": false,
+      "title": "Selected",
+      "type": "boolean"
+    },
+    "margin": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Winner score minus runner-up.",
+      "title": "Margin"
+    },
+    "cost_usd": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cost Usd"
+    },
+    "owned_criteria": {
+      "description": "decomposition only: ids of the run's TaskCriterion this branch is accountable for. Every locked criterion MUST be owned by exactly one branch or retained at the join (specs \u00a718).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Owned Criteria",
+      "type": "array"
+    }
+  },
+  "required": [
+    "branch_id",
+    "strategy",
+    "workspace_ref",
+    "budget"
+  ],
+  "title": "BranchState",
+  "type": "object"
+}
