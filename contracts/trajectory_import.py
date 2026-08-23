@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from contracts.audited_task_state import ArtifactRef, ProvenanceBundle, ScopeDescriptor
+from contracts.audited_task_state import ArtifactRef, ProvenanceBundle
 from contracts.criteria import TaskCriterion
 
 
@@ -63,7 +63,6 @@ class TrajectoryImport(BaseModel):
     provenance: ProvenanceBundle
     artifacts: list[ArtifactRef] = Field(default_factory=list)
     reexecutable: bool = False
-    # MEA attachment (Phase 2)
     mea_goal_id: str | None = Field(
         default=None,
         description="When set, import may be replayed under an AuditedTaskState for this Goal",
@@ -74,12 +73,11 @@ class TrajectoryImport(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _provenance_and_environment_required(self) -> "TrajectoryImport":
+    def _provenance_and_environment_required(self) -> TrajectoryImport:
         if not self.provenance.source:
             raise ValueError("provenance.source is required")
         if not self.source_ref.strip():
             raise ValueError("source_ref must be non-empty")
-        # environment must be present (model already requires it); soft check on emptiness
         env = self.environment
         if (
             not env.os
@@ -91,11 +89,6 @@ class TrajectoryImport(BaseModel):
         ):
             raise ValueError("environment descriptor is incomplete")
         return self
-
-
-def import_may_enter_episodic(imp: TrajectoryImport) -> bool:
-    """Any complete import may enter Episodic."""
-    return True
 
 
 def import_may_promote(imp: TrajectoryImport) -> tuple[bool, str]:

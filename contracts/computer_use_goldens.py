@@ -8,13 +8,16 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 ComputerUseTaskClass = Literal[
     "bug_reproduction",
     "playtest_operator",
     "docs_auditor",
 ]
+
+# Must match Policy.evidence_floor default. MEA provenance must not lower the bar.
+DEFAULT_EVIDENCE_FLOOR = 30
 
 
 class GoldenTaskClassDescriptor(BaseModel):
@@ -55,6 +58,6 @@ def mea_derived_promotion_evidence_floor() -> int:
 
     Returns the evidence_floor applications required before contribution
     intervals may drive retirement or promotion decisions. MEA provenance
-    does not lower this bar.
+    does not lower this bar. Value must match Policy.evidence_floor default.
     """
-    return 5  # matches Policy default used elsewhere; never reduced for MEA
+    return DEFAULT_EVIDENCE_FLOOR

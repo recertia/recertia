@@ -14,8 +14,6 @@ from contracts.audited_task_state import (
     ScopeDescriptor,
     SubtaskContract,
 )
-from contracts.budget import Budget, Spend, budget_excess
-from contracts.budget import BudgetReservation
 from contracts.criteria import TaskCriterion
 
 
@@ -29,7 +27,9 @@ class MeaEarlyStop:
 def enforce_round_budget(state: AuditedTaskState) -> MeaEarlyStop | None:
     """Hard controller limit: max_rounds and residual budget.
 
-    Returns an early-stop reason when the next round must not start.
+    ``budget_residual`` is remaining capacity. Exhaustion is representable
+    (Budget.max_attempts may be 0). Returns an early-stop reason when the
+    next round must not start.
     """
 
     if state.rounds_consumed >= state.max_rounds:
@@ -39,18 +39,9 @@ def enforce_round_budget(state: AuditedTaskState) -> MeaEarlyStop | None:
             max_rounds=state.max_rounds,
         )
     residual = state.budget_residual
-    spent = Spend()  # residual already accounts for prior spend at the Goal level
-    # Treat residual max_* as remaining capacity; if attempts are already 0, stop.
     if residual.max_attempts <= 0:
         return MeaEarlyStop(
             reason="residual_attempts_exhausted",
-            rounds_consumed=state.rounds_consumed,
-            max_rounds=state.max_rounds,
-        )
-    excess = budget_excess(residual, spent, BudgetReservation(), BudgetReservation(attempts=1))
-    if excess is not None:
-        return MeaEarlyStop(
-            reason=f"residual_budget_excess:{excess}",
             rounds_consumed=state.rounds_consumed,
             max_rounds=state.max_rounds,
         )
@@ -66,21 +57,17 @@ def require_fresh_auditor_context(
 ) -> str | None:
     """Return a rejection reason if auditor is not independent.
 
-    Architect review: auditor must use a fresh context and a distinct model
-    instance (or at minimum a distinct conversation) from the executor.
+    Fresh conversation is required. Distinct model_ref is preferred but not
+    mandatory when conversations already differ (same model, new context is OK).
     """
 
     if auditor_conversation_id is None:
         return "auditor_missing_conversation"
-    if executor_conversation_id is not None and auditor_conversation_id == executor_conversation_id:
-        return "auditor_shares_executor_conversation"
     if (
-        executor_model_ref is not None
-        and auditor_model_ref is not None
-        and executor_model_ref == auditor_model_ref
-        and executor_conversation_id == auditor_conversation_id
+        executor_conversation_id is not None
+        and auditor_conversation_id == executor_conversation_id
     ):
-        return "auditor_shares_executor_instance"
+        return "auditor_shares_executor_conversation"
     return None
 
 
@@ -103,10 +90,32 @@ def propose_subtask(
         return None, stop
 
     criteria = acceptance_criteria or list(state.acceptance_criteria)
-    # Residual slice: leave at least one attempt for later rounds when possible.
     residual = state.budget_residual
-    slice_attempts = max(1, min(residual.max_attempts, max(1, residual.max_attempts // max(1, state.max_rounds - state.rounds_consumed))))
-    sub_budget = residual.model_copy(update={"max_attempts": slice_attempts})
+    remaining_rounds = max(1, state.max_rounds - state.rounds_consumed)
+    # Slice attempts across remaining rounds; leave capacity for later phases.
+    slice_attempts = max(
+        1,
+        min(
+            residual.max_attempts,
+            max(1, residual.max_attempts // remaining_rounds),
+        ),
+    )
+    # Also bound tool calls proportionally when residual has them.
+    tool_slice = residual.max_tool_calls
+    if residual.max_tool_calls > 0:
+        tool_slice = max(
+            1,
+            min(
+                residual.max_tool_calls,
+                max(1, residual.max_tool_calls // remaining_rounds),
+            ),
+        )
+    sub_budget = residual.model_copy(
+        update={
+            "max_attempts": slice_attempts,
+            "max_tool_calls": tool_slice,
+        }
+    )
 
     contract = SubtaskContract(
         subtask_id=subtask_id,
