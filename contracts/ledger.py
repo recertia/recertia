@@ -28,6 +28,7 @@ LedgerAction = Literal[
     "lift_report",
     "faithfulness_report",
     "applicability_reject",
+    "mea_activation_fallback",
 ]
 
 

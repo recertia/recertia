@@ -945,6 +945,12 @@
           ],
           "default": null,
           "title": "Strategy Hint"
+        },
+        "mea_opt_in": {
+          "default": false,
+          "description": "Per-Goal MEA layer of three-layer activation (policy.mea_enabled + this flag + Task.execution_strategy). Default false.",
+          "title": "Mea Opt In",
+          "type": "boolean"
         }
       },
       "required": [
@@ -1785,6 +1791,25 @@
           ],
           "default": null,
           "title": "Terminal"
+        },
+        "mea_active": {
+          "default": false,
+          "description": "True when three-layer MEA activation succeeded at intake.",
+          "title": "Mea Active",
+          "type": "boolean"
+        },
+        "mea_fallback_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Set when MEA was requested but any activation layer was missing.",
+          "title": "Mea Fallback Reason"
         }
       },
       "required": [
@@ -2105,6 +2130,16 @@
           "description": "When true, distill must not author library memory (M3 firewall ahead of M4's full eval firewall). Golden / promotion runs set this so the regression gate cannot recursively learn from itself.",
           "title": "Is Eval Fixture",
           "type": "boolean"
+        },
+        "execution_strategy": {
+          "default": "single",
+          "description": "Runtime MEA layer. 'mea' takes effect only with policy.mea_enabled and Goal.mea_opt_in. Default 'single' is the zero-cost ordinary path.",
+          "enum": [
+            "single",
+            "mea"
+          ],
+          "title": "Execution Strategy",
+          "type": "string"
         }
       },
       "required": [

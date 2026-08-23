@@ -114,6 +114,13 @@ class Goal(BaseModel):
         description="Soft guidance (style, verbosity, preferred tools). Advisory only.",
     )
     strategy_hint: Literal["abstain", "portfolio", "decomposition"] | None = None
+    mea_opt_in: bool = Field(
+        default=False,
+        description=(
+            "Per-Goal MEA layer of three-layer activation "
+            "(policy.mea_enabled + this flag + Task.execution_strategy). Default false."
+        ),
+    )
 
     @model_validator(mode="after")
     def _at_least_one_hard_criterion(self) -> "Goal":
