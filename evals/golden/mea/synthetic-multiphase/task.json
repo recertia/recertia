@@ -1,0 +1,7 @@
+{
+  "request": "Synthetic multi-phase Goal for MEA lift-harness readiness",
+  "execution_strategy": "mea",
+  "script": [
+    "python3 -c \"open('phase1.done','w').write('ok'); open('phase2.done','w').write('ok')\""
+  ]
+}

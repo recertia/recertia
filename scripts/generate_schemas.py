@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from contracts.applicability import ApplicabilityReport, EnvironmentModel  # noqa: E402
+from contracts.audited_task_state import AuditedTaskState  # noqa: E402
 from contracts.branch import BranchState, MergeAudit  # noqa: E402
 from contracts.cluster import FailureClusterRow  # noqa: E402
 from contracts.eval import CausalLiftResult, ControlBaseline, EvalObservation, MetricReport  # noqa: E402
@@ -41,6 +42,7 @@ from contracts.scope import ScopePromotion  # noqa: E402
 from contracts.skill import SkillVersion  # noqa: E402
 from contracts.stats import RetrievalAblationEffect, SkillStats  # noqa: E402
 from contracts.status import SkillStatus  # noqa: E402
+from contracts.trajectory_import import TrajectoryImport  # noqa: E402
 from contracts.workspace import RegisteredWorkspace  # noqa: E402
 
 # Canonical JSON Schema $id prefix (must match the public GitHub org/repo).
@@ -79,6 +81,8 @@ MODELS: dict[str, type] = {
     "goal.schema.json": Goal,
     "migration_program.schema.json": MigrationProgram,
     "registered_workspace.schema.json": RegisteredWorkspace,
+    "audited_task_state.schema.json": AuditedTaskState,
+    "trajectory_import.schema.json": TrajectoryImport,
 }
 
 

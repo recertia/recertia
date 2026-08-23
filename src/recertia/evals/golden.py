@@ -31,7 +31,8 @@ from typing import TYPE_CHECKING
 from contracts.budget import Budget
 from contracts.criteria import TaskCriterion
 from contracts.goal import Goal, compile_goal
-from contracts.run import Task
+from contracts.policy import ImprovementFlags, Policy
+from contracts.run import RunManifest, Task
 from contracts.skill import SkillVersion
 from recertia.graph.engine import GraphOrchestrator
 from recertia.memory.procedural.apply import script_from_skill
@@ -232,6 +233,154 @@ def run_golden_for_skill(
         detail=(
             f"expected terminal={expected_terminal!r}, got {state.terminal!r}; "
             f"snapshot={pinned.index_snapshot_id!r} model={pinned.model_version!r}"
+        ),
+    )
+
+
+def _policy_for_mea_fixture(goal: Goal | None, task_spec: dict) -> Policy | None:
+    """Supply the policy layer only when the fixture requested MEA.
+
+    The other two layers stay on the Goal / Task. Default goldens are unchanged.
+    """
+
+    strategy = task_spec.get("execution_strategy", "single")
+    opt_in = bool(goal is not None and goal.mea_opt_in)
+    if strategy != "mea" and not opt_in:
+        return None
+    return Policy(
+        version="mea-golden",
+        authoring_prior_version="mea-golden",
+        improvement=ImprovementFlags(mea_enabled=True),
+    )
+
+
+def run_goal_fixture(
+    golden_dir: Path,
+    *,
+    runs_root: Path,
+    eval_store: "EvalStore | None" = None,
+    snapshot_id: str | None = None,
+    model_version: str | None = None,
+) -> GoldenResult:
+    """Run a skill-free Goal golden (MEA multiphase and similar).
+
+    Not a promotion-gate fixture: ``run_task_class_gate`` is skill-scoped and
+    must not pick these up. Eval observations are recorded with
+    ``is_eval_fixture=True`` so they cannot enter causal_lift samples.
+    """
+
+    task_spec: dict = {}
+    if (golden_dir / "task.json").exists():
+        task_spec = json.loads((golden_dir / "task.json").read_text(encoding="utf-8"))
+
+    goal: Goal | None = None
+    if (golden_dir / "goal.json").exists():
+        goal = Goal.model_validate_json((golden_dir / "goal.json").read_text(encoding="utf-8"))
+
+    expect = {}
+    expect_path = golden_dir / "expect.json"
+    if expect_path.exists():
+        expect = json.loads(expect_path.read_text(encoding="utf-8"))
+    expected_terminal = expect.get("terminal", "solved")
+
+    workdir = (
+        runs_root
+        / "golden-workspaces"
+        / f"{golden_dir.name}-{uuid.uuid4().hex[:8]}"
+    )
+    if workdir.exists():
+        shutil.rmtree(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    fixture = golden_dir / "workspace"
+    if fixture.exists():
+        for item in fixture.iterdir():
+            dest = workdir / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest)
+            else:
+                shutil.copy2(item, dest)
+
+    label = golden_dir.name
+    try:
+        if goal is None:
+            raise ValueError("skill-free golden requires goal.json")
+        criteria = compile_goal(goal, source="caller")
+    except ValueError as exc:
+        return GoldenResult(
+            skill_id=label,
+            version=0,
+            golden_path=str(golden_dir),
+            passed=False,
+            terminal=None,
+            run_id="",
+            detail=str(exc),
+        )
+
+    script = task_spec.get("script") or ["true"]
+    if isinstance(script, str):
+        script = [script]
+    strategy = task_spec.get("execution_strategy", "single")
+    if strategy not in ("single", "mea"):
+        strategy = "single"
+    run_id = f"golden-{label}-{uuid.uuid4().hex[:6]}"
+    pinned = RunManifest(
+        model_version=model_version or "m4-harness",
+        index_snapshot_id=snapshot_id or "mea-golden",
+        library_commit=snapshot_id or "mea-golden",
+    )
+    request = task_spec.get("request") or goal.context
+    orch = GraphOrchestrator(
+        runs_root / "golden-runs",
+        policy=_policy_for_mea_fixture(goal, task_spec),
+    )
+    previous_backend = os.environ.get("RECERTIA_EXECUTION_BACKEND")
+    if previous_backend is None:
+        os.environ["RECERTIA_EXECUTION_BACKEND"] = "local"
+    try:
+        state = orch.start(
+            run_id,
+            Task(
+                task_id=run_id,
+                goal=goal,
+                request=request,
+                task_class=goal.task_class or task_spec.get("task_class") or label,
+                submitted_at=datetime.now(timezone.utc),
+                is_eval_fixture=True,
+                execution_strategy="mea" if strategy == "mea" else "single",
+            ),
+            criteria,
+            budget=Budget(max_attempts=2),
+            workdir=workdir,
+            script=script,
+            manifest=pinned,
+            arm="treatment",
+        )
+    finally:
+        orch.close()
+        if previous_backend is None:
+            os.environ.pop("RECERTIA_EXECUTION_BACKEND", None)
+        if workdir.exists():
+            shutil.rmtree(workdir, ignore_errors=True)
+
+    if eval_store is not None:
+        from recertia.evals.store import ObservationError
+
+        try:
+            eval_store.append_run(state)
+        except ObservationError:
+            pass
+
+    passed = state.terminal == expected_terminal
+    return GoldenResult(
+        skill_id=label,
+        version=0,
+        golden_path=str(golden_dir),
+        passed=passed,
+        terminal=state.terminal,
+        run_id=run_id,
+        detail=(
+            f"expected terminal={expected_terminal!r}, got {state.terminal!r}; "
+            f"mea_active={state.mea_active}"
         ),
     )
 
@@ -479,6 +628,17 @@ def run_eval_suite(
 
             loaded = [v for v in SEED_SKILLS if v.skill_id == skill_id]
         if not loaded:
+            if (golden_dir / "goal.json").exists() or (golden_dir / "task.json").exists():
+                report.results.append(
+                    run_goal_fixture(
+                        golden_dir,
+                        runs_root=runs_root,
+                        eval_store=eval_store,
+                        snapshot_id=snapshot_id,
+                        model_version=model_version,
+                    )
+                )
+                return report
             report.results.append(
                 GoldenResult(
                     skill_id=skill_id,
@@ -503,9 +663,11 @@ def run_eval_suite(
         )
         return report
 
+    matched = False
     for version, _status, _stats in store.iter_loaded():
         if version.task_class != task_class:
             continue
+        matched = True
         golden = discover_golden(golden_root, version.skill_id, task_class)
         if golden is None:
             continue
@@ -519,5 +681,16 @@ def run_eval_suite(
                 eval_store=eval_store,
             )
         )
+    if not matched:
+        for gdir in list_goldens_for_task_class(golden_root, task_class):
+            report.results.append(
+                run_goal_fixture(
+                    gdir,
+                    runs_root=runs_root,
+                    eval_store=eval_store,
+                    snapshot_id=snapshot_id,
+                    model_version=model_version,
+                )
+            )
     return report
 
