@@ -4,7 +4,7 @@
   "$defs": {
     "ImprovementFlags": {
       "additionalProperties": false,
-      "description": "T2 algorithm flags. These MUST NOT gate graph topology (ADR-0015).",
+      "description": "T2 algorithm flags. These MUST NOT gate graph topology (ADR-0015).\n\n``mea_enabled`` is the global policy layer of three-layer MEA activation\n(policy + Goal opt-in + runtime strategy). Default false keeps the\nsingle-request path as the zero-cost ordinary path.",
       "properties": {
         "miner_lint": {
           "default": true,
@@ -39,6 +39,11 @@
         "practice_hex_search": {
           "default": false,
           "title": "Practice Hex Search",
+          "type": "boolean"
+        },
+        "mea_enabled": {
+          "default": false,
+          "title": "Mea Enabled",
           "type": "boolean"
         }
       },
@@ -254,6 +259,14 @@
       "default": false,
       "title": "Faithfulness Interventions Enabled",
       "type": "boolean"
+    },
+    "mea_max_rounds": {
+      "default": 12,
+      "description": "Hard round cap when MEA is activated (controller-enforced).",
+      "maximum": 64,
+      "minimum": 1,
+      "title": "Mea Max Rounds",
+      "type": "integer"
     },
     "improvement": {
       "$ref": "#/$defs/ImprovementFlags"
