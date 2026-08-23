@@ -137,6 +137,7 @@ class AuditedTaskState(BaseModel):
     current_phase: str = "intake"
     assigned_route: ModelHarnessRoute | None = None
     evidence_refs: list[ArtifactRef] = Field(default_factory=list)
+    # Residual capacity (remaining). max_attempts may be 0 when exhausted.
     budget_residual: Budget = Field(default_factory=Budget)
     last_auditor_report_id: str | None = None
     provenance: ProvenanceBundle
@@ -145,7 +146,7 @@ class AuditedTaskState(BaseModel):
     max_rounds: int = Field(default=12, ge=1)
 
     @model_validator(mode="after")
-    def _rounds_within_cap(self) -> "AuditedTaskState":
+    def _rounds_within_cap(self) -> AuditedTaskState:
         if self.rounds_consumed > self.max_rounds:
             raise ValueError(
                 f"rounds_consumed ({self.rounds_consumed}) exceeds max_rounds ({self.max_rounds})"
@@ -194,7 +195,7 @@ class AuditorDelta(BaseModel):
     produced_at: datetime
 
     @model_validator(mode="after")
-    def _version_advances(self) -> "AuditorDelta":
+    def _version_advances(self) -> AuditorDelta:
         if self.proposed_version != self.parent_version + 1:
             raise ValueError(
                 f"proposed_version must be parent_version + 1 "
@@ -211,25 +212,29 @@ def apply_auditor_delta(
     Rejects when:
     - parent_version does not match current version
     - criteria_snapshot_hash drifts
-    - isolation_policy_ref mismatches without an allow-listed exception
+    - isolation_policy_ref mismatches (must match state)
     - any verified_decision lacks evidence_refs (enforced by model)
     - rounds would exceed max_rounds
     """
 
     if delta.parent_version != state.version:
-        return None, f"cas_mismatch: state.version={state.version} delta.parent={delta.parent_version}"
+        return None, (
+            f"cas_mismatch: state.version={state.version} "
+            f"delta.parent={delta.parent_version}"
+        )
 
     if delta.criteria_snapshot_hash != state.criteria_snapshot_hash:
         return None, "criteria_snapshot_hash_drift"
 
-    if (
-        delta.isolation_policy_ref != state.isolation_policy_ref
-        and delta.isolation_policy_ref != "container_default"
-    ):
-        # Allow-list check is a runtime policy concern; contract layer only
-        # records the mismatch as a soft signal. Hard reject only on empty.
-        if not delta.isolation_policy_ref:
-            return None, "isolation_policy_ref_empty"
+    # Hard reject isolation drift. Allow-list is runtime policy; contract layer
+    # only accepts an exact match.
+    if delta.isolation_policy_ref != state.isolation_policy_ref:
+        return None, (
+            f"isolation_policy_ref_mismatch: "
+            f"state={state.isolation_policy_ref!r} delta={delta.isolation_policy_ref!r}"
+        )
+    if not delta.isolation_policy_ref:
+        return None, "isolation_policy_ref_empty"
 
     new_rounds = state.rounds_consumed + 1
     if new_rounds > state.max_rounds:
@@ -242,8 +247,10 @@ def apply_auditor_delta(
     new_state = state.model_copy(
         update={
             "version": delta.proposed_version,
-            "verified_decisions": list(state.verified_decisions) + list(delta.verified_decisions_added),
-            "failed_approaches": list(state.failed_approaches) + list(delta.failed_approaches_added),
+            "verified_decisions": list(state.verified_decisions)
+            + list(delta.verified_decisions_added),
+            "failed_approaches": list(state.failed_approaches)
+            + list(delta.failed_approaches_added),
             "current_blockers": remaining_blockers,
             "current_phase": delta.current_phase or state.current_phase,
             "accepted_commit": delta.accepted_commit

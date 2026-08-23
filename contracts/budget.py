@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field
 class Budget(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    max_attempts: int = Field(default=4, ge=1)
+    # ge=0 so residual capacity can be exhausted (0 remaining attempts).
+    # Admission paths must still require >= 1 when allocating a fresh Goal budget.
+    max_attempts: int = Field(default=4, ge=0)
     max_tool_calls: int = Field(default=200, ge=1)
     max_tokens: int | None = Field(default=None, ge=1)
     max_wall_clock_s: int = Field(default=900, ge=1)
