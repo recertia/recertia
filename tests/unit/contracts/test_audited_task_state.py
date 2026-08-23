@@ -38,31 +38,31 @@ def _provenance() -> ProvenanceBundle:
 
 
 def _base_state(**kwargs) -> AuditedTaskState:
-    defaults = dict(
-        state_id="st_1",
-        goal_id="g_1",
-        version=0,
-        objective="test objective",
-        acceptance_criteria=[_criterion()],
-        criteria_snapshot_hash="abc123",
-        provenance=_provenance(),
-        updated_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
-        max_rounds=3,
-    )
+    defaults = {
+        "state_id": "st_1",
+        "goal_id": "g_1",
+        "version": 0,
+        "objective": "test objective",
+        "acceptance_criteria": [_criterion()],
+        "criteria_snapshot_hash": "abc123",
+        "provenance": _provenance(),
+        "updated_at": datetime(2026, 8, 23, tzinfo=timezone.utc),
+        "max_rounds": 3,
+    }
     defaults.update(kwargs)
     return AuditedTaskState(**defaults)
 
 
 def _delta(parent: int = 0, **kwargs) -> AuditorDelta:
-    defaults = dict(
-        report_id="ar_1",
-        parent_version=parent,
-        proposed_version=parent + 1,
-        criteria_snapshot_hash="abc123",
-        isolation_policy_ref="container_default",
-        budget_residual=Budget(),
-        produced_at=datetime(2026, 8, 23, 12, tzinfo=timezone.utc),
-    )
+    defaults = {
+        "report_id": "ar_1",
+        "parent_version": parent,
+        "proposed_version": parent + 1,
+        "criteria_snapshot_hash": "abc123",
+        "isolation_policy_ref": "container_default",
+        "budget_residual": Budget(),
+        "produced_at": datetime(2026, 8, 23, 12, tzinfo=timezone.utc),
+    }
     defaults.update(kwargs)
     return AuditorDelta(**defaults)
 
@@ -99,6 +99,13 @@ class TestAuditedTaskStateCAS:
         new_state, err = apply_auditor_delta(state, delta)
         assert new_state is None
         assert err == "criteria_snapshot_hash_drift"
+
+    def test_cas_rejects_isolation_mismatch(self):
+        state = _base_state(isolation_policy_ref="container_default")
+        delta = _delta(isolation_policy_ref="external_computer")
+        new_state, err = apply_auditor_delta(state, delta)
+        assert new_state is None
+        assert err is not None and "isolation_policy_ref_mismatch" in err
 
     def test_cas_rejects_max_rounds_exceeded(self):
         state = _base_state(rounds_consumed=3, max_rounds=3)

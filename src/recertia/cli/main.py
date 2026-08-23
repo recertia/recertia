@@ -1,4 +1,5 @@
-"""``recertia`` CLI wiring: ``run``, ``runs``, ``ledger``, ``skills``, ``keys``, ``lift``, ``jobs``, ``gc``, ``task-state``.
+"""``recertia`` CLI wiring: ``run``, ``runs``, ``ledger``, ``skills``, ``keys``,
+``lift``, ``jobs``, ``gc``, ``task-state``.
 
 Command implementations live in sibling modules; this file builds the Typer app and
 re-exports the historical command callables for tests that import them from ``main``.

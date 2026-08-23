@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 
 from contracts.audited_task_state import AuditedTaskState, ProvenanceBundle
 from contracts.budget import Budget
+from contracts.computer_use_goldens import mea_derived_promotion_evidence_floor
 from contracts.criteria import TaskCriterion
+from contracts.policy import Policy
 from recertia.mea.controller import (
     enforce_round_budget,
     propose_subtask,
@@ -27,19 +29,19 @@ def _crit() -> TaskCriterion:
 
 
 def _state(**kwargs) -> AuditedTaskState:
-    defaults = dict(
-        state_id="st_1",
-        goal_id="g_1",
-        version=0,
-        objective="obj",
-        acceptance_criteria=[_crit()],
-        criteria_snapshot_hash="h",
-        provenance=ProvenanceBundle(source="synthetic"),
-        updated_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
-        max_rounds=3,
-        rounds_consumed=0,
-        budget_residual=Budget(max_attempts=4),
-    )
+    defaults = {
+        "state_id": "st_1",
+        "goal_id": "g_1",
+        "version": 0,
+        "objective": "obj",
+        "acceptance_criteria": [_crit()],
+        "criteria_snapshot_hash": "h",
+        "provenance": ProvenanceBundle(source="synthetic"),
+        "updated_at": datetime(2026, 8, 23, tzinfo=timezone.utc),
+        "max_rounds": 3,
+        "rounds_consumed": 0,
+        "budget_residual": Budget(max_attempts=4),
+    }
     defaults.update(kwargs)
     return AuditedTaskState(**defaults)
 
@@ -82,3 +84,9 @@ def test_auditor_ok_when_distinct():
         auditor_model_ref="m2",
     )
     assert reason is None
+
+
+def test_mea_evidence_floor_matches_policy():
+    assert mea_derived_promotion_evidence_floor() == Policy.model_fields[
+        "evidence_floor"
+    ].default
