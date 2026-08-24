@@ -1,0 +1,11 @@
+{
+  "goal_id": "g_synthetic_playtest_operator",
+  "desired": [
+    {"id": "step_log", "kind": "file_exists", "path": "step_log.json", "weight": 1.0},
+    {"id": "screenshot", "kind": "file_exists", "path": "screenshot.png", "weight": 1.0},
+    {"id": "final_state", "kind": "file_exists", "path": "final_state.json", "weight": 1.0}
+  ],
+  "constraints": [],
+  "context": "Synthetic playtest-operator golden: UI assertion sequence plus final state snapshot",
+  "task_class": "playtest_operator"
+}

@@ -21,12 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   --task-class mea`; observations are eval-firewalled and cannot enter
   `causal_lift`. Not on the repo-chore promotion gate.
 
-- **Design: External Trajectories & Computer-Use Goldens** (2026-08-22) — accepted plan for
-  `TrajectoryImport` (provenance-required), three computer-use golden task classes
-  (`bug_reproduction`, `playtest_operator`, `docs_auditor`), optional
-  `external_computer` Affordance, and Systems/Tower operator briefs (stuck / lift /
-  redundancy). Recertia remains the measuring orchestrator; no new graph nodes, no Bot
-  fleet, no persistent-VM default. Engineering not started. Plan:
+- **External trajectories Phase 0** — `recertia trajectory import` validates
+  the existing `TrajectoryImport` contract (incomplete provenance / empty
+  environment rejected), persists append-only under
+  `{runs_root}/runs/{tenant}/imports/`,
+  and writes an episodic case. Never promotes. Skill-free computer-use
+  goldens `evals/golden/{bug_reproduction,playtest_operator,docs_auditor}/`
+  run under `recertia eval run --task-class …`; observations are
+  eval-firewalled and cannot enter `causal_lift`. Not on the repo-chore
+  promotion gate. Phase 1 distill, optional `external_computer`, and the
+  ADR remain open. Plan:
   [`docs/plans/2026-08-22-external-trajectories-and-computer-use-goldens.md`](docs/plans/2026-08-22-external-trajectories-and-computer-use-goldens.md).
 
 - **Variance-aware causal lift** — `RunVariance` on `CausalLiftResult` (std-dev, best,
@@ -100,8 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Paper candidates are retrieval stubs. Promotion still requires the golden gate;
   this path does not claim lift.
-- External-trajectory design is accepted but not yet engineered; it must not delay
-  RW-GA soak weeks or probe cadence.
+- External-trajectory Phase 0 (import CLI + computer-use goldens) must not delay
+  RW-GA soak weeks or probe cadence. Distill/promotion is still Phase 1.
 
 ## [0.1.0] - 2026-08-15
 

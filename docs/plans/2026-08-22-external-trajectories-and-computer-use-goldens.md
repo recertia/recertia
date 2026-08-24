@@ -1,7 +1,7 @@
 # External Trajectories & Computer-Use Goldens — Implementation Plan
 
 **Date:** 2026-08-22  
-**Status:** Design accepted; engineering not started  
+**Status:** Phase 0 landed (contracts, `recertia trajectory import`, skill-free computer-use goldens). Phase 1 distill / Phase 2 optional computer backend / ADR still open.  
 **Sources:**  
 - Architect review of filtered Grok Bot use-case patterns (teach-once, bug-repro, playtest, docs-auditor, practice density, operator briefs)  
 - Technical implementation plan & contracts (this document)  
@@ -15,11 +15,11 @@
 
 | # | Item | Landing surface | Status |
 |---|------|-----------------|--------|
-| 1 | Teach-once trajectory → promotion-gated skill | Episodic → Distill → Review → Procedural | Design |
-| 2 | Bug Reproduction / Playtest Operator / Docs Auditor goldens | Task-class registry + evals | Design |
-| 3 | Writes/spend behind approval | Already present (review node + PR-33) | No change |
+| 1 | Teach-once trajectory → promotion-gated skill | Episodic → Distill → Review → Procedural | Phase 0: import CLI writes episodic; distill/promotion is Phase 1 |
+| 2 | Bug Reproduction / Playtest Operator / Docs Auditor goldens | Task-class registry + evals | Phase 0: descriptors + skill-free fixtures under `evals/golden/` |
+| 3 | Writes/spend behind approval | Already present (review node) | No change |
 | 4 | Practice density under JobQuota (no 16th node) | Improvement plane | Design |
-| 5 | Operator brief (stuck / lift / redundancy) | Systems / Tower projection | Design |
+| 5 | Operator brief (stuck / lift / redundancy) | Systems / Tower projection | MEA Systems brief shipped; computer-use lift/redundancy still design |
 
 Recertia stays the measuring orchestrator. External agents supply trajectories and specialized executors; only Recertia decides what enters durable memory and whether it still works.
 
@@ -101,11 +101,11 @@ Optional executor kind `external_computer` (backend, allowlist policy, session T
 
 ## Phased Implementation
 
-### Phase 0 – Foundation (contracts + goldens)
-- Author `TrajectoryImport` contract and provenance schema.  
-- Define the three golden task-class contracts and minimal synthetic fixtures.  
-- CLI: `recertia trajectory import <path>` with strict validation.  
-**Exit:** Import rejects incomplete provenance; golden suite runs under existing lift harness; no isolation regressions on default path.
+### Phase 0 – Foundation (contracts + goldens) — **landed**
+- [x] Author `TrajectoryImport` contract and provenance schema.  
+- [x] Define the three golden task-class contracts and minimal synthetic fixtures.  
+- [x] CLI: `recertia trajectory import <path>` with strict validation.  
+**Exit:** Import rejects incomplete provenance; golden suite runs under existing lift harness (`recertia eval run --task-class {bug_reproduction,playtest_operator,docs_auditor}`); fixtures are eval-firewalled and not on the repo-chore promotion gate; no isolation regressions on default path. Distill and promotion remain Phase 1.
 
 ### Phase 1 – Distill Path
 - End-to-end: TrajectoryImport → Episodic → Distill candidate → Review → control-arm → possible promotion.  

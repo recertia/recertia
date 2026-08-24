@@ -1,0 +1,12 @@
+{
+  "goal_id": "g_synthetic_bug_reproduction",
+  "desired": [
+    {"id": "steps", "kind": "file_exists", "path": "steps.txt", "weight": 1.0},
+    {"id": "screenshot", "kind": "file_exists", "path": "screenshot.png", "weight": 1.0},
+    {"id": "har", "kind": "file_exists", "path": "capture.har", "weight": 1.0},
+    {"id": "terminal_log", "kind": "file_exists", "path": "terminal.log", "weight": 1.0}
+  ],
+  "constraints": [],
+  "context": "Synthetic bug-reproduction golden: evidence pack with steps, screenshot, HAR, terminal log",
+  "task_class": "bug_reproduction"
+}

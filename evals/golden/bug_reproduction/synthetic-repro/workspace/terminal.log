@@ -1,0 +1,2 @@
+$ curl -sS http://127.0.0.1:9/login
+500 Internal Server Error

@@ -1,0 +1,10 @@
+{
+  "goal_id": "g_synthetic_docs_auditor",
+  "desired": [
+    {"id": "before_after_diffs", "kind": "file_exists", "path": "before_after.diff", "weight": 1.0},
+    {"id": "missing_page_list", "kind": "file_exists", "path": "missing_pages.json", "weight": 1.0}
+  ],
+  "constraints": [],
+  "context": "Synthetic docs-auditor golden: product-vs-docs diff plus missing-page list",
+  "task_class": "docs_auditor"
+}
