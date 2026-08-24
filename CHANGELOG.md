@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **2026-08-24 landing extract prompt** — executable Cloud Agent prompt + ADR-0014
+  Goal pack for the dual-path extract after today's MEA / trajectory / systems stack.
+  Not a GA gate. Plan:
+  [`docs/plans/2026-08-24-todays-work-refactor.md`](docs/plans/2026-08-24-todays-work-refactor.md).
+
 - **Systems residency (ADR-0018)** — hop telemetry emits `component_class`,
   `rss_bytes`, `workdir_bytes`, `idle_gap_ms` on `node.finished`; canonical keys
   on `tool.invoked` / `retrieve.queried`; `model.completed` from `ModelClient.complete`.
@@ -51,8 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   goldens `evals/golden/{bug_reproduction,playtest_operator,docs_auditor}/`
   run under `recertia eval run --task-class …`; observations are
   eval-firewalled and cannot enter `causal_lift`. Not on the repo-chore
-  promotion gate. Phase 1 distill, optional `external_computer`, and the
-  ADR remain open. Plan:
+  promotion gate. Candidate distill, HTTP import, and ADR-0019 landed in
+  the Unreleased ADR-0019 rewrite bullet; promotion-with-lift and a live
+  computer backend remain open. Plan:
   [`docs/plans/2026-08-22-external-trajectories-and-computer-use-goldens.md`](docs/plans/2026-08-22-external-trajectories-and-computer-use-goldens.md).
 
 - **Variance-aware causal lift** — `RunVariance` on `CausalLiftResult` (std-dev, best,
