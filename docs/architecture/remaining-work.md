@@ -277,10 +277,11 @@ Status changes to `a1`–`a4` are **commits** to
 ## 14. Post-landing extract (not a GA gate)
 
 The 2026-08-24 stack (MEA `#35`/`#37`/`#38`, trajectory Phase 0 `#39`, ADR-0018/0019 `#41`)
-landed as sequential feature PRs. Dual systems / cache / distill / ingest paths are
-engineering hygiene, not operator-GA and not a reason to skip Monday soak.
+landed as sequential feature PRs. The dual-path extract (ingest `as_public_dict`,
+`skill_task_class`, `ExactMatchTtl`, `hop_finished_attrs`, `not_established_detail`)
+is engineering hygiene, not operator-GA and not a reason to skip Monday soak.
 
-Executable prompt + Goal pack:
+Plan:
 [`docs/plans/2026-08-24-todays-work-refactor.md`](../plans/2026-08-24-todays-work-refactor.md).
 Do not grow the graph. Do not enable idle offload until a golden-class RSS row exists.
 Do not treat an empty-eval-DB `soak record` as a counted week.

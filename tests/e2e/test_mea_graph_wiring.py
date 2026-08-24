@@ -141,3 +141,12 @@ def test_incomplete_activation_notes_ledger_not_sidecar(tmp_path: Path) -> None:
     assert orch.audited_states.load("run-fallback") is None
     assert any(e.action == "mea_activation_fallback" for e in entries)
     assert all(e.event_kind != "audited_state_delta" for e in events)
+
+
+def test_graph_stays_fifteen_nodes() -> None:
+    from contracts.graph import NODES
+    from recertia.nodes import NODE_FUNCS
+
+    assert len(NODES) == 15
+    assert len(NODE_FUNCS) == 15
+    assert set(NODE_FUNCS) == set(NODES)

@@ -318,7 +318,7 @@ class GraphOrchestrator:
             idle_gap_ms = 0.0
             if self._last_hop_ended is not None:
                 idle_gap_ms = (hop_started - self._last_hop_ended) * 1000.0
-            from recertia.ops.systems import component_class, rss_bytes, workdir_bytes
+            from recertia.ops.systems import component_class, hop_finished_attrs
             from recertia.telemetry import emit_in_run, telemetry_run
 
             with telemetry_run(tenant_id=self.tenant_id, run_id=state.run_id):
@@ -339,13 +339,13 @@ class GraphOrchestrator:
                 hop_ms = (time.monotonic() - hop_started) * 1000.0
                 emit_in_run(
                     "node.finished",
-                    node=node_name,
-                    component_class=component_class(node_name),
-                    latency_ms=round(hop_ms, 3),
-                    rss_bytes=rss_bytes(),
-                    workdir_bytes=workdir_bytes(workdir),
-                    idle_gap_ms=round(idle_gap_ms, 3),
-                    tokens=int(getattr(new_state.spent, "tokens", 0) or 0),
+                    **hop_finished_attrs(
+                        node_name,
+                        hop_ms=hop_ms,
+                        workdir=workdir,
+                        idle_gap_ms=idle_gap_ms,
+                        tokens=int(getattr(new_state.spent, "tokens", 0) or 0),
+                    ),
                 )
             self._last_hop_ended = time.monotonic()
             if new_state.spent.versions_written > new_state.budget.max_versions_written:

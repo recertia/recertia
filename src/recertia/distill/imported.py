@@ -12,9 +12,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from contracts.criteria import SkillCertificationCriterion, mint_rejecting_proof
-from contracts.policy import COMPUTER_USE_TASK_CLASSES
 from contracts.skill import Hygiene, Provenance, SkillVersion, Step
 from contracts.trajectory_import import TrajectoryImport, import_may_promote
+from recertia.distill.task_class import is_computer_use_class, skill_task_class
 from recertia.memory.procedural.hygiene import require_clean
 from recertia.memory.procedural.store import SkillStore
 
@@ -32,36 +32,9 @@ def skill_id_for_import(import_id: str) -> str:
     return f"import-{kebab or 'unnamed'}"
 
 
-def skill_task_class(task_class: str) -> str:
-    """Map snake Goal/golden class onto kebab SkillVersion.task_class."""
+def command_criteria_from_import(imported: TrajectoryImport) -> list[SkillCertificationCriterion]:
+    """Command criteria with a rejecting proof. ``true`` / empty runs are skipped."""
 
-    return task_class.replace("_", "-")
-
-
-def distill_imported(
-    imported: TrajectoryImport,
-    store: SkillStore,
-    *,
-    actor: str = "import-distill",
-    task_class: str,
-) -> SkillVersion:
-    """Author a *candidate* from an external trajectory. Promotion stays outside this path."""
-
-    if task_class not in COMPUTER_USE_TASK_CLASSES:
-        raise DistillRejected(
-            f"task_class {task_class!r} is not a computer-use golden class "
-            f"{COMPUTER_USE_TASK_CLASSES}"
-        )
-    may, reason = import_may_promote(imported)
-    if not imported.reexecutable:
-        raise DistillRejected(
-            "reexecutable=false: episodic only; cannot distill until a Recertia re-validation path exists"
-        )
-    if not imported.require_auditor_reverify:
-        raise DistillRejected("require_auditor_reverify is false; imported claims cannot be auditor truth")
-    secrets = _scan_payload(imported)
-    if secrets:
-        raise DistillRejected(f"hygiene scan failed ({', '.join(secrets)})")
     criteria: list[SkillCertificationCriterion] = []
     for raw in imported.criteria_snapshot:
         run = (raw.run or "").strip()
@@ -85,12 +58,14 @@ def distill_imported(
                 }
             )
         )
-    if not criteria:
-        raise DistillRejected(
-            "no command criterion on the import; refuse to author a true-noop skill"
-        )
+    return criteria
+
+
+def replayable_shell_steps(imported: TrajectoryImport, *, limit: int = 12) -> list[Step]:
+    """Shell steps that are not true-noop UI/wait actions."""
+
     steps: list[Step] = []
-    for step in imported.steps[:12]:
+    for step in imported.steps[:limit]:
         cmd = (step.input or step.action or "").strip()
         if not cmd or cmd == "true" or cmd.lower() in _NOOP_ACTIONS:
             continue
@@ -102,6 +77,41 @@ def distill_imported(
                 inputs={"command": cmd},
             )
         )
+    return steps
+
+
+def distill_imported(
+    imported: TrajectoryImport,
+    store: SkillStore,
+    *,
+    actor: str = "import-distill",
+    task_class: str,
+) -> SkillVersion:
+    """Author a *candidate* from an external trajectory. Promotion stays outside this path."""
+
+    if not is_computer_use_class(task_class):
+        from contracts.policy import COMPUTER_USE_TASK_CLASSES
+
+        raise DistillRejected(
+            f"task_class {task_class!r} is not a computer-use golden class "
+            f"{COMPUTER_USE_TASK_CLASSES}"
+        )
+    may, reason = import_may_promote(imported)
+    if not imported.reexecutable:
+        raise DistillRejected(
+            "reexecutable=false: episodic only; cannot distill until a Recertia re-validation path exists"
+        )
+    if not imported.require_auditor_reverify:
+        raise DistillRejected("require_auditor_reverify is false; imported claims cannot be auditor truth")
+    secrets = _scan_payload(imported)
+    if secrets:
+        raise DistillRejected(f"hygiene scan failed ({', '.join(secrets)})")
+    criteria = command_criteria_from_import(imported)
+    if not criteria:
+        raise DistillRejected(
+            "no command criterion on the import; refuse to author a true-noop skill"
+        )
+    steps = replayable_shell_steps(imported)
     if not steps:
         raise DistillRejected("no replayable shell steps; refuse to author a true-noop skill")
     if not may:

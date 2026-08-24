@@ -107,3 +107,13 @@ class TestSystemsBrief:
         assert brief.rounds_remaining == 11
         assert brief.evidence_coverage == 0.0
         assert brief.stuck is False
+
+    def test_mea_policy_defaults_off(self):
+        from contracts.policy import ImprovementFlags, Policy
+        from recertia.policy_load import load_policy
+
+        flags = ImprovementFlags()
+        assert flags.mea_enabled is False
+        policy = load_policy()
+        assert policy.improvement.mea_enabled is False
+        Policy.model_validate(policy.model_dump())

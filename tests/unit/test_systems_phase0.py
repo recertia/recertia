@@ -275,3 +275,48 @@ def test_operator_brief_lists_stuck_from_checkpoints(tmp_path: Path) -> None:
         orch.close()
     brief = brief_from_runs_root(runs)
     assert any(j["run_id"] == "stuck-run" for j in brief.stuck_jobs)
+
+
+def test_hop_finished_attrs_are_the_engine_gauge_owner() -> None:
+    from recertia.nodes import NODE_FUNCS
+    from recertia.ops.systems import hop_finished_attrs
+
+    attrs = hop_finished_attrs(
+        "intake", hop_ms=1.25, workdir=None, idle_gap_ms=0.5, tokens=3
+    )
+    assert attrs["node"] == "intake"
+    assert attrs["component_class"] == "control_plane"
+    assert attrs["latency_ms"] == 1.25
+    assert "rss_bytes" in attrs
+    assert attrs["idle_gap_ms"] == 0.5
+    assert attrs["tokens"] == 3
+    assert len(NODE_FUNCS) == 15
+
+
+def test_retrieval_cache_skips_writes_when_disabled_and_flushes() -> None:
+    from recertia.retrieval.cache import RetrievalCache
+
+    cache = RetrievalCache(enabled=False)
+    cache.store("q", {"hit": 1}, {"why": "x"}, snapshot_id="snap-a")
+    assert cache.stats.stores == 0
+    assert cache.lookup("q", snapshot_id="snap-a") is None
+    assert cache.stats.skipped >= 1
+
+    live = RetrievalCache(ttl_s=60.0, enabled=True)
+    live.store("q", {"hit": 1}, {"why": "x"}, snapshot_id="snap-a")
+    assert live.lookup("q", snapshot_id="snap-a") is not None
+    live.invalidate_snapshot("snap-a")
+    assert live.lookup("q", snapshot_id="snap-a") is None
+
+
+def test_systems_brief_cli_prints_not_established() -> None:
+    from typer.testing import CliRunner
+
+    from recertia.cli.main import app
+    from recertia.ops.systems import NOT_ESTABLISHED
+
+    result = CliRunner().invoke(app, ["systems", "--brief"])
+    assert result.exit_code == 0, result.output
+    assert NOT_ESTABLISHED in result.output
+    assert "4.6×" not in result.output
+    assert "4.6x" not in result.output.lower()

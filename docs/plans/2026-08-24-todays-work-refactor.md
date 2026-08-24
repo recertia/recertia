@@ -1,7 +1,7 @@
 # Agent prompt — 2026-08-24 landing extract
 
 **Date:** 2026-08-24 (Monday)  
-**Status:** prompt + Goal pack only (this file). Implementation is a follow-up Cloud Agent.  
+**Status:** extract landed (characterization tests + seam owners). Not a GA gate.  
 **Audience:** a Recertia Cloud Agent (or equivalent) executing one structural pass.  
 **Goal pack:** [`2026-08-24-todays-work-refactor.program.json`](2026-08-24-todays-work-refactor.program.json) (`MigrationProgram`, ADR-0014).  
 **Baseline:** `origin/main` after `#35`–`#41` (MEA scaffolding + graph wiring + lift golden, paper scoring `#36`, trajectory Phase 0 `#39`, config honesty `#40`, ADR-0018/0019 `#41`). Fetch `origin/main` before you branch.

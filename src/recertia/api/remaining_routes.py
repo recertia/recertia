@@ -314,15 +314,7 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
             )
         except (ImportRejected, ValueError) as exc:
             raise V1HTTPError(400, code="import_rejected", message=str(exc)) from exc
-        return {
-            "import_id": result.import_id,
-            "case_id": result.case_id,
-            "proposal_id": result.proposal_id,
-            "reexecutable": result.reexecutable,
-            "may_promote": result.may_promote,
-            "promote_reason": result.promote_reason,
-            "promoted": False,
-        }
+        return result.as_public_dict()
 
     @app.get("/v1/affordances")
     def list_affordances(

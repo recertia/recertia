@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from recertia.ops.systems import snapshot_from_events
+from recertia.ops.systems import not_established_detail, snapshot_from_events
 
 
 @dataclass
@@ -54,7 +54,7 @@ def brief_from_events(
             LiftCell(
                 task_class=name,
                 established=False,
-                detail="not established: sample size below min_independent_runs",
+                detail=not_established_detail("sample size below min_independent_runs"),
             )
         )
     return OperatorBrief(

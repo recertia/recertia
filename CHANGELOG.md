@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **2026-08-24 landing extract** — one owner per seam: `ingest_trajectory` /
+  `ImportResult.as_public_dict` (CLI + `POST /v1/trajectories/import`),
+  `skill_task_class` (snake Goal/golden → kebab `SkillVersion.task_class`),
+  imported distill hygiene + true-noop refusal, `ExactMatchTtl` for read-only
+  caches (writes still skipped), `hop_finished_attrs` hop gauges, systems/MEA/
+  operator-brief `not_established` language. Import still never promotes;
+  distill stays candidate-only; MEA and idle offload stay default-off; prefix
+  tree stays a view; no 16th graph node. Promotion-with-lift and a live computer
+  backend remain open. Not a GA gate.
+
 ### Added
 
 - **2026-08-24 landing extract prompt** — executable Cloud Agent prompt + ADR-0014
