@@ -7,34 +7,19 @@ tools are never stored. TTL is short; callers invalidate on snapshot change.
 from __future__ import annotations
 
 import copy
-import time
-from dataclasses import dataclass
 from typing import Any, Mapping
 
+from recertia.cache import CACHEABLE_SIDE_EFFECTS, CacheStats, ExactMatchTtl, is_cacheable_side_effect
 from recertia.ops.systems import canonical_tool_key
 from recertia.solver.registry import Tool, ToolResult
 
-CACHEABLE_SIDE_EFFECTS = frozenset({"read", "pure"})
-
-
-@dataclass
-class CacheStats:
-    hits: int = 0
-    misses: int = 0
-    stores: int = 0
-    skipped: int = 0
-
-    @property
-    def hit_rate(self) -> float:
-        total = self.hits + self.misses
-        return self.hits / total if total else 0.0
-
-
-@dataclass
-class _Entry:
-    result: ToolResult
-    stored_at: float
-    snapshot_hash: str
+# Re-export so existing imports keep working.
+__all__ = [
+    "CACHEABLE_SIDE_EFFECTS",
+    "CacheStats",
+    "ToolResultCache",
+    "is_cacheable_side_effect",
+]
 
 
 class ToolResultCache:
@@ -44,10 +29,10 @@ class ToolResultCache:
         self.ttl_s = ttl_s
         self.enabled = enabled
         self.stats = CacheStats()
-        self._entries: dict[str, _Entry] = {}
+        self._store = ExactMatchTtl(ttl_s)
 
     def eligible(self, tool: Tool) -> bool:
-        return tool.side_effect in CACHEABLE_SIDE_EFFECTS
+        return is_cacheable_side_effect(tool.side_effect)
 
     def lookup(
         self,
@@ -60,16 +45,16 @@ class ToolResultCache:
             self.stats.skipped += 1
             return None
         key = canonical_tool_key(tool.name, inputs, snapshot_hash)
-        entry = self._entries.get(key)
-        if entry is None:
+        found = self._store.get(key)
+        if found is None:
             self.stats.misses += 1
             return None
-        if time.monotonic() - entry.stored_at > self.ttl_s:
-            self._entries.pop(key, None)
+        result, stored_snap = found
+        if stored_snap != snapshot_hash:
             self.stats.misses += 1
             return None
         self.stats.hits += 1
-        return copy.copy(entry.result)
+        return copy.copy(result)
 
     def store(
         self,
@@ -83,18 +68,11 @@ class ToolResultCache:
             self.stats.skipped += 1
             return
         key = canonical_tool_key(tool.name, inputs, snapshot_hash)
-        self._entries[key] = _Entry(
-            result=copy.copy(result),
-            stored_at=time.monotonic(),
-            snapshot_hash=snapshot_hash,
-        )
+        self._store.set(key, (copy.copy(result), snapshot_hash))
         self.stats.stores += 1
 
     def invalidate_snapshot(self, snapshot_hash: str) -> int:
-        drop = [k for k, e in self._entries.items() if e.snapshot_hash == snapshot_hash]
-        for key in drop:
-            del self._entries[key]
-        return len(drop)
+        return self._store.drop_if(lambda _k, value: value[1] == snapshot_hash)
 
     def invalidate_all(self) -> None:
-        self._entries.clear()
+        self._store.clear()

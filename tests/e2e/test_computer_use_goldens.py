@@ -61,3 +61,9 @@ def test_run_goal_fixture_direct(tmp_path: Path) -> None:
     assert result.passed
     assert result.terminal == "solved"
     assert "mea_active=False" in result.detail
+
+
+def test_golden_classes_bind_computer_use_task_classes() -> None:
+    from contracts.policy import COMPUTER_USE_TASK_CLASSES
+
+    assert tuple(GOLDEN_TASK_CLASSES) == COMPUTER_USE_TASK_CLASSES

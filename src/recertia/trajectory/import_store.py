@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from contracts.trajectory_import import TrajectoryImport, import_may_promote
@@ -36,6 +36,20 @@ class ImportResult:
     promote_reason: str
     promoted: bool = False
     proposal_id: str | None = None
+
+    def as_public_dict(self) -> dict[str, Any]:
+        """CLI and HTTP ingest payload. ``promoted`` is always false on this path."""
+
+        return {
+            "import_id": self.import_id,
+            "case_id": self.case_id,
+            "stored_path": self.stored_path,
+            "reexecutable": self.reexecutable,
+            "may_promote": self.may_promote,
+            "promote_reason": self.promote_reason,
+            "proposal_id": self.proposal_id,
+            "promoted": False,
+        }
 
 
 def _outcome(value: str) -> Literal["solved", "failed", "abandoned"]:

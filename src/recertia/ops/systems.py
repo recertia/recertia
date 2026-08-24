@@ -100,6 +100,39 @@ def workdir_bytes(path: Path | str | None) -> int:
     return total
 
 
+def hop_finished_attrs(
+    node_name: str,
+    *,
+    hop_ms: float,
+    workdir: Path | str | None,
+    idle_gap_ms: float,
+    tokens: int,
+) -> dict[str, Any]:
+    """Gauges emitted on ``node.finished``. Engine must not inline RSS / workdir / idle."""
+
+    return {
+        "node": node_name,
+        "component_class": component_class(node_name),
+        "latency_ms": round(hop_ms, 3),
+        "rss_bytes": rss_bytes(),
+        "workdir_bytes": workdir_bytes(workdir),
+        "idle_gap_ms": round(idle_gap_ms, 3),
+        "tokens": int(tokens),
+    }
+
+
+NOT_ESTABLISHED = "not established"
+
+
+def not_established_detail(reason: str) -> str:
+    """Honest lift/status language. Never a 4.6× or established-lift claim from fixtures."""
+
+    text = reason.strip()
+    if text.lower().startswith(NOT_ESTABLISHED):
+        return text
+    return f"{NOT_ESTABLISHED}: {text}"
+
+
 def canonical_args_hash(inputs: Mapping[str, Any] | None) -> str:
     """Stable hash of tool/retrieve args so exact-match redundancy is countable."""
 

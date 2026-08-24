@@ -8,6 +8,8 @@ from pathlib import Path
 import typer
 from pydantic import ValidationError
 
+from recertia.distill.task_class import computer_use_class_help
+
 trajectory_app = typer.Typer(help="Import external trajectories (TrajectoryImport).")
 
 
@@ -31,22 +33,7 @@ def trajectory_import_cmd(
     except (ImportRejected, ValidationError, ValueError, json.JSONDecodeError) as exc:
         typer.echo(json.dumps({"ok": False, "rejected": str(exc)}, indent=2), err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(
-        json.dumps(
-            {
-                "ok": True,
-                "import_id": result.import_id,
-                "case_id": result.case_id,
-                "stored_path": result.stored_path,
-                "reexecutable": result.reexecutable,
-                "may_promote": result.may_promote,
-                "promote_reason": result.promote_reason,
-                "proposal_id": result.proposal_id,
-                "promoted": False,
-            },
-            indent=2,
-        )
-    )
+    typer.echo(json.dumps({"ok": True, **result.as_public_dict()}, indent=2))
 
 
 @trajectory_app.command("distill")
@@ -57,7 +44,7 @@ def trajectory_distill_cmd(
     task_class: str = typer.Option(
         ...,
         "--task-class",
-        help="Snake-case computer-use class (bug_reproduction|playtest_operator|docs_auditor).",
+        help=f"Snake-case computer-use class ({computer_use_class_help()}).",
     ),
 ) -> None:
     """Author a candidate from a reexecutable import. Does not promote."""

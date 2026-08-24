@@ -248,3 +248,61 @@ def test_no_external_trajectory_import_policy_flag() -> None:
 
     policy = load_policy()
     assert not hasattr(policy.improvement, "external_trajectory_import")
+
+
+def test_ingest_public_dict_never_promotes(tmp_path: Path) -> None:
+    result = ingest_trajectory(_valid_payload(import_id="imp-pub"), runs_root=tmp_path)
+    public = result.as_public_dict()
+    assert public["promoted"] is False
+    assert public["import_id"] == "imp-pub"
+    assert "stored_path" in public
+
+
+def test_skill_task_class_is_the_only_snake_to_kebab_map() -> None:
+    from contracts.computer_use_goldens import GOLDEN_TASK_CLASSES
+    from contracts.policy import COMPUTER_USE_TASK_CLASSES
+    from recertia.distill.task_class import computer_use_class_help, skill_task_class
+
+    assert frozenset(COMPUTER_USE_TASK_CLASSES) == frozenset(GOLDEN_TASK_CLASSES)
+    assert skill_task_class("bug_reproduction") == "bug-reproduction"
+    assert skill_task_class("playtest_operator") == "playtest-operator"
+    assert skill_task_class("docs_auditor") == "docs-auditor"
+    help_text = computer_use_class_help()
+    for name in COMPUTER_USE_TASK_CLASSES:
+        assert name in help_text
+    assert "bug-reproduction" not in help_text
+
+
+def test_cli_distill_help_binds_computer_use_task_classes() -> None:
+    from contracts.policy import COMPUTER_USE_TASK_CLASSES
+    from recertia.cli import trajectory_cmd
+    from recertia.distill.task_class import computer_use_class_help
+
+    assert computer_use_class_help() == "|".join(COMPUTER_USE_TASK_CLASSES)
+    source = Path(trajectory_cmd.__file__).read_text(encoding="utf-8")
+    assert "computer_use_class_help()" in source
+
+
+def test_external_computer_allowlisted_still_opens_no_standing_vm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from recertia.policy_load import load_policy
+    from recertia.solver.external_computer import external_computer_handler
+
+    policy = load_policy()
+    isolation = policy.isolation.model_copy(
+        update={
+            "allow_external_computer": True,
+            "long_lived_computer_backend": True,
+            "external_computer_allowlist": ["grok_bot"],
+        }
+    )
+    monkeypatch.setattr(
+        "recertia.policy_load.load_policy",
+        lambda: policy.model_copy(update={"isolation": isolation}),
+    )
+    result = external_computer_handler({"backend": "grok_bot"}, tmp_path)
+    assert result.ok is False
+    combined = (result.stderr or "").lower()
+    assert "standing vm" in combined
+    assert "approved state" in combined
