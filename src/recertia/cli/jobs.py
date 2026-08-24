@@ -97,31 +97,17 @@ def jobs_run(
 ) -> None:
     """Run an offline improvement job under a proposal budget."""
 
-    from recertia.evals.store import EvalStore
-    from recertia.jobs import JobBudget, build_job_runner
-    from recertia.jobs.enablement import attach_enablement
-    from recertia.jobs.workers import (
-        correction_miner_from_reviewer_edits,
-        curator_active_set_and_dedup,
-        enqueue_mined_candidate,
-        load_one_off_reasons,
-        load_reviewer_edits,
-        mine_from_arxiv,
-        mine_from_repo_hints,
-        practice_from_fail_clusters,
-        practice_from_one_offs,
-        propose_compress,
-        propose_hex_search,
-        propose_parallelise,
-        propose_serialise,
-        recertify_with_revokes,
-        schedule_shadow_evaluations,
+    from recertia.jobs.dispatch import (
+        JobDispatchError,
+        JobRequest,
+        UnknownJob,
+        canonical_job_name,
+        execute_job,
+        persist_mine_candidates,
     )
-    from recertia.memory.episodic import EpisodicStore
     from recertia.memory.procedural.lineage import LineageServices
     from recertia.memory.procedural.store import SkillStore
     from recertia.policy_load import load_policy
-    from recertia.trajectory.store import TrajectoryStore
 
     policy = load_policy()
     lineage = LineageServices.open(runs_root / "lineage")
@@ -130,171 +116,51 @@ def jobs_run(
         lineage_index=lineage.index,
         revoke_queue=lineage.queue,
     )
-    runner = build_job_runner(store, runs_root=runs_root / "jobs", policy=policy)
-    attach_enablement(
-        runner,
-        eval_db=runs_root / "evals.db",
-        skills_root=skills_root,
-    )
-    budget = JobBudget(max_proposals=max_proposals, max_tokens=max_tokens)
-    name = job.strip().lower()
-    traj_store = TrajectoryStore(runs_root / "trajectories")
+    try:
+        result = execute_job(
+            JobRequest(
+                name=job,
+                dry_run=dry_run,
+                max_proposals=max_proposals,
+                max_tokens=max_tokens,
+                task_class=task_class,
+                hint=list(hint) if hint else None,
+                arxiv_id=list(arxiv_id) if arxiv_id else None,
+                arxiv_query=arxiv_query,
+                arxiv_max=arxiv_max,
+                with_pdf=with_pdf,
+                pdf_sandbox=pdf_sandbox,
+                one_off=list(one_off) if one_off else None,
+                tool_upgraded=tool_upgraded,
+                skill_id=skill_id,
+                skill_version=skill_version,
+                fake_edge_failures=fake_edge_failures,
+                merge_conflicts=merge_conflicts,
+                edits_log=edits_log,
+            ),
+            store=store,
+            runs_root=runs_root,
+            skills_root=skills_root,
+            policy=policy,
+        )
+    except UnknownJob as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    except JobDispatchError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
 
-    def _run(job_name: str, fn, *, budget=budget):
-        return runner.run(job_name, fn, budget=budget, task_class=task_class)
-
-
-    if name in {"mine", "miner"}:
+    if submit and not dry_run and canonical_job_name(job) == "mine":
         use_arxiv = bool(arxiv_id) or bool(arxiv_query and arxiv_query.strip())
-        if use_arxiv:
-
-            def _mine_arxiv() -> list:
-                return mine_from_arxiv(
-                    store,
-                    arxiv_ids=list(arxiv_id or []),
-                    query=arxiv_query,
-                    max_results=arxiv_max,
-                )
-
-            result = _run("mine", _mine_arxiv, budget=budget)
-            if with_pdf and result.proposals:
-                from recertia.jobs.paper_pipeline import enrich_proposals_with_pdf
-
-                result.proposals = enrich_proposals_with_pdf(
-                    result.proposals,
-                    dest_dir=runs_root / "arxiv-pdfs",
-                    use_sandbox=pdf_sandbox,
-                    sandbox_workdir=runs_root / "arxiv-pdf-sandbox",
-                )
-        else:
-            hints = list(hint or ["README.md chore hints"])
-            result = _run(
-                "mine", lambda: mine_from_repo_hints(store, hints=hints), budget=budget
-            )
-        if submit and not dry_run:
-            if distill_paper and use_arxiv:
-                from recertia.jobs.paper_pipeline import submit_paper_proposals
-                from recertia.memory.semantic import FactStore
-
-                fact_store = FactStore(facts_root)
-                written = submit_paper_proposals(
-                    store,
-                    result.proposals,
-                    fact_store=fact_store,
-                    distill=True,
-                )
-                for draft, facts in written:
-                    typer.echo(
-                        f"candidate {draft.skill_id}@v{draft.version} facts={len(facts)}"
-                    )
-            else:
-                for proposal in result.proposals:
-                    draft = enqueue_mined_candidate(store, proposal)
-                    typer.echo(f"candidate {draft.skill_id}@v{draft.version}")
-    elif name in {"curator", "curate"}:
-        eval_store = EvalStore(runs_root / "evals.db")
-        try:
-            result = _run(
-                "curator",
-                lambda: curator_active_set_and_dedup(
-                    store,
-                    trajectory_store=traj_store,
-                    eval_store=eval_store,
-                    proposals_path=runs_root / "proposals.jsonl",
-                ),
-                budget=budget,
-            )
-        finally:
-            eval_store.close()
-    elif name == "practice":
-        explicit = list(one_off) if one_off else None
-        episodic = EpisodicStore(runs_root / "episodic")
-        eligible = (
-            episodic.clusters.eligible()
-            if policy.improvement.fail_cluster_curriculum and not explicit
-            else []
+        written = persist_mine_candidates(
+            store,
+            result,
+            distill_paper=bool(distill_paper and use_arxiv),
+            facts_root=facts_root,
         )
-        if eligible:
-            curriculum = None if dry_run else runs_root / "practice-curriculum"
-            result = _run(
-                "fail_cluster_author",
-                lambda: practice_from_fail_clusters(eligible, curriculum_dir=curriculum),
-                budget=budget,
-            )
-        else:
-            reasons = explicit if explicit else load_one_off_reasons(runs_root / "one_off_log.jsonl")
-            if not reasons:
-                reasons = ["unsolved one-off cluster"]
-            curriculum = None if dry_run else runs_root / "practice-curriculum"
-            result = _run(
-                "practice",
-                lambda: practice_from_one_offs(reasons, curriculum_dir=curriculum),
-                budget=budget,
-            )
-    elif name == "recertify":
-        eval_store = EvalStore(runs_root / "evals.db")
-        try:
-            result = _run(
-                "recertify",
-                lambda: recertify_with_revokes(
-                    store,
-                    lineage_index=lineage.index,
-                    revoke_queue=lineage.queue,
-                    max_writes=runner.quota.max_status_writes_per_tick,
-                    tool_upgraded=tool_upgraded,
-                    eval_store=eval_store,
-                ),
-                budget=budget,
-            )
-        finally:
-            eval_store.close()
-    elif name == "shadow":
-        result = _run(
-            "shadow",
-            lambda: schedule_shadow_evaluations(store),
-            budget=budget,
-        )
-    elif name in {"parallelise", "parallelize"}:
-        if not skill_id:
-            typer.echo("--skill-id is required for parallelise", err=True)
-            raise typer.Exit(code=2)
-        result = _run(
-            "parallelise",
-            lambda: propose_parallelise(
-                skill_id, skill_version, fake_edge_failures=fake_edge_failures or None
-            ),
-            budget=budget,
-        )
-    elif name in {"serialise", "serialize"}:
-        if not skill_id:
-            typer.echo("--skill-id is required for serialise", err=True)
-            raise typer.Exit(code=2)
-        result = _run(
-            "serialise",
-            lambda: propose_serialise(
-                skill_id, skill_version, merge_conflict_count=merge_conflicts or None
-            ),
-            budget=budget,
-        )
-    elif name in {"correction", "correction_miner"}:
-        edits = load_reviewer_edits(edits_log or runs_root / "reviewer_edits.jsonl")
-        result = _run(
-            "correction",
-            lambda: correction_miner_from_reviewer_edits(edits),
-            budget=budget,
-        )
-    elif name in {"hex", "practice_hex"}:
-        result = _run("practice_hex", propose_hex_search, budget=budget)
-    elif name == "compress":
-        result = _run("compress", propose_compress, budget=budget)
-    else:
-        typer.echo(
-            "unknown job "
-            f"{job!r}; expected mine|curator|practice|recertify|shadow|"
-            "parallelise|serialise|correction|hex|compress",
-            err=True,
-        )
-        raise typer.Exit(code=2)
+        for draft, facts in written:
+            extra = f" facts={len(facts)}" if facts else ""
+            typer.echo(f"candidate {draft.skill_id}@v{draft.version}{extra}")
 
     # Strip internal PDF text from JSON echo (can be large).
     safe_proposals = []

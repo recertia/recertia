@@ -505,6 +505,51 @@ def test_job_dry_run_does_not_persist_proposals(tmp_path: Path) -> None:
     assert pending == []
 
 
+def test_http_mine_defaults_to_hints_not_arxiv(tmp_path: Path) -> None:
+    client, app = _client(tmp_path)
+    headers = _issue(app)
+    resp = client.post("/v1/jobs/mine/run", headers=headers, json={"dry_run": True})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "succeeded"
+    proposals = body.get("proposals") or []
+    assert proposals
+    payload = proposals[0].get("payload") or {}
+    assert payload.get("curation") == "mined_from_human_artifact"
+    assert "arxiv_id" not in payload
+    pending = app.state.console_ctx.proposals.list(tenant_id="t1", status="pending")
+    assert pending == []
+
+
+def test_http_mine_arxiv_opt_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from recertia.jobs import Proposal
+
+    def fake_mine(store, **kwargs):
+        del store
+        assert kwargs.get("arxiv_ids") == ["2605.22148"]
+        return [
+            Proposal(
+                kind="mine",
+                skill_id="arxiv-2605-22148",
+                version=1,
+                rationale="mined_from_paper",
+                payload={"curation": "mined_from_paper", "arxiv_id": "2605.22148"},
+            )
+        ]
+
+    monkeypatch.setattr("recertia.jobs.dispatch.mine_from_arxiv", fake_mine)
+    client, _app = _client(tmp_path)
+    headers = _issue(_app)
+    resp = client.post(
+        "/v1/jobs/mine/run",
+        headers=headers,
+        json={"dry_run": True, "arxiv_id": ["2605.22148"]},
+    )
+    assert resp.status_code == 200, resp.text
+    proposals = resp.json().get("proposals") or []
+    assert proposals[0]["payload"]["curation"] == "mined_from_paper"
+
+
 def test_rejected_proposal_cannot_be_reapproved(tmp_path: Path) -> None:
     client, app = _client(tmp_path)
     headers = _issue(app, tenant_id="t1")

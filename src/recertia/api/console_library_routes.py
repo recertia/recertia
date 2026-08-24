@@ -26,23 +26,7 @@ from recertia.evals.metrics import build_metric_report
 from recertia.evals.report import assemble_metric_report
 from recertia.evals.store import EvalStore
 from recertia.graph.engine import GraphOrchestrator
-from recertia.jobs import JobBudget, build_job_runner
-from recertia.jobs.enablement import attach_enablement
-from recertia.jobs.workers import (
-    correction_miner_from_reviewer_edits,
-    curator_active_set_and_dedup,
-    load_one_off_reasons,
-    load_reviewer_edits,
-    mine_from_repo_hints,
-    practice_from_fail_clusters,
-    practice_from_one_offs,
-    propose_compress,
-    propose_hex_search,
-    propose_parallelise,
-    propose_serialise,
-    recertify_with_revokes,
-    schedule_shadow_evaluations,
-)
+from recertia.jobs.dispatch import JobDispatchError, JobRequest, UnknownJob, execute_job
 from recertia.ledger import HashChainLedger
 from recertia.memory.procedural.active_set import recompute_active_set
 from recertia.memory.procedural.composition import mean_composition_depth
@@ -603,7 +587,6 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         _require_library_write(request, principal, scope="jobs", min_role="reviewer")
         name = job.strip().lower()
-        from recertia.memory.episodic import EpisodicStore
         from recertia.memory.procedural.lineage import LineageServices
         from recertia.policy_load import load_policy
 
@@ -615,122 +598,62 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
             lineage_index=lineage.index,
             revoke_queue=lineage.queue,
         )
-        runner = build_job_runner(store, runs_root=runs_root / "jobs", policy=policy)
-        attach_enablement(
-            runner,
-            eval_db=runs_root / "evals.db",
-            skills_root=ctx.tenant_skills_root(tenant_id),
-        )
-        budget = JobBudget(max_proposals=body.max_proposals)
         job_rec = ctx.job_runs.create(
             name, tenant_id=tenant_id, dry_run=body.dry_run
         )
         job_rec.status = "running"
         ctx.job_runs.save(job_rec)
-        traj = TrajectoryStore(runs_root / "trajectories")
+        edits_log = None
+        if body.edits_log:
+            rel = Path(body.edits_log)
+            if rel.is_absolute() or ".." in rel.parts:
+                job_rec.status = "failed"
+                job_rec.error = "edits_log must be a relative path"
+                job_rec.finished_at = datetime.now(timezone.utc).isoformat()
+                ctx.job_runs.save(job_rec)
+                raise HTTPException(
+                    status_code=400, detail="edits_log must be a relative path"
+                )
+            edits_log = runs_root / rel
         try:
-            if name in {"mine", "miner"}:
-                hints = list(body.hint or ["README.md chore hints"])
-                result = runner.run(
-                    "mine", lambda: mine_from_repo_hints(store, hints=hints), budget=budget
-                )
-            elif name in {"curator", "curate"}:
-                result = runner.run(
-                    "curator",
-                    lambda: curator_active_set_and_dedup(
-                        store,
-                        trajectory_store=traj,
-                        proposals_path=runs_root / "proposals.jsonl",
-                    ),
-                    budget=budget,
-                )
-            elif name == "practice":
-                explicit = list(body.one_off) if body.one_off else None
-                episodic = EpisodicStore(runs_root / "episodic")
-                eligible = (
-                    episodic.clusters.eligible()
-                    if policy.improvement.fail_cluster_curriculum and not explicit
-                    else []
-                )
-                if eligible:
-                    curriculum = None if body.dry_run else runs_root / "practice-curriculum"
-                    result = runner.run(
-                        "fail_cluster_author",
-                        lambda: practice_from_fail_clusters(
-                            eligible, curriculum_dir=curriculum
-                        ),
-                        budget=budget,
-                    )
-                else:
-                    reasons = explicit if explicit else load_one_off_reasons(
-                        runs_root / "one_off_log.jsonl"
-                    )
-                    if not reasons:
-                        reasons = ["unsolved one-off cluster"]
-                    curriculum = None if body.dry_run else runs_root / "practice-curriculum"
-                    result = runner.run(
-                        "practice",
-                        lambda: practice_from_one_offs(reasons, curriculum_dir=curriculum),
-                        budget=budget,
-                    )
-            elif name == "recertify":
-                eval_store = EvalStore(runs_root / "evals.db")
-                try:
-                    result = runner.run(
-                        "recertify",
-                        lambda: recertify_with_revokes(
-                            store,
-                            lineage_index=lineage.index,
-                            revoke_queue=lineage.queue,
-                            max_writes=runner.quota.max_status_writes_per_tick,
-                            tool_upgraded=body.tool_upgraded,
-                            eval_store=eval_store,
-                        ),
-                        budget=budget,
-                    )
-                finally:
-                    eval_store.close()
-            elif name == "shadow":
-                result = runner.run(
-                    "shadow", lambda: schedule_shadow_evaluations(store), budget=budget
-                )
-            elif name in {"parallelise", "parallelize"}:
-                if not body.skill_id:
-                    raise HTTPException(status_code=400, detail="skill_id required")
-                result = runner.run(
-                    "parallelise",
-                    lambda: propose_parallelise(
-                        body.skill_id,  # type: ignore[arg-type]
-                        body.skill_version,
-                        fake_edge_failures=body.fake_edge_failures or None,
-                    ),
-                    budget=budget,
-                )
-            elif name in {"serialise", "serialize"}:
-                if not body.skill_id:
-                    raise HTTPException(status_code=400, detail="skill_id required")
-                result = runner.run(
-                    "serialise",
-                    lambda: propose_serialise(
-                        body.skill_id,  # type: ignore[arg-type]
-                        body.skill_version,
-                        merge_conflict_count=body.merge_conflicts or None,
-                    ),
-                    budget=budget,
-                )
-            elif name in {"correction", "correction_miner"}:
-                edits = load_reviewer_edits(runs_root / "reviewer_edits.jsonl")
-                result = runner.run(
-                    "correction",
-                    lambda: correction_miner_from_reviewer_edits(edits),
-                    budget=budget,
-                )
-            elif name in {"hex", "practice_hex"}:
-                result = runner.run("practice_hex", propose_hex_search, budget=budget)
-            elif name == "compress":
-                result = runner.run("compress", propose_compress, budget=budget)
-            else:
-                raise HTTPException(status_code=404, detail=f"unknown job {job}")
+            result = execute_job(
+                JobRequest(
+                    name=name,
+                    dry_run=body.dry_run,
+                    max_proposals=body.max_proposals,
+                    max_tokens=body.max_tokens,
+                    task_class=body.task_class,
+                    hint=list(body.hint) if body.hint else None,
+                    arxiv_id=list(body.arxiv_id) if body.arxiv_id else None,
+                    arxiv_query=body.arxiv_query,
+                    arxiv_max=body.arxiv_max,
+                    with_pdf=body.with_pdf,
+                    pdf_sandbox=body.pdf_sandbox,
+                    one_off=list(body.one_off) if body.one_off else None,
+                    tool_upgraded=body.tool_upgraded,
+                    skill_id=body.skill_id,
+                    skill_version=body.skill_version,
+                    fake_edge_failures=body.fake_edge_failures,
+                    merge_conflicts=body.merge_conflicts,
+                    edits_log=edits_log,
+                ),
+                store=store,
+                runs_root=runs_root,
+                skills_root=ctx.tenant_skills_root(tenant_id),
+                policy=policy,
+            )
+        except UnknownJob as exc:
+            job_rec.status = "failed"
+            job_rec.error = str(exc)
+            job_rec.finished_at = datetime.now(timezone.utc).isoformat()
+            ctx.job_runs.save(job_rec)
+            raise HTTPException(status_code=404, detail=f"unknown job {job}") from exc
+        except JobDispatchError as exc:
+            job_rec.status = "failed"
+            job_rec.error = str(exc)
+            job_rec.finished_at = datetime.now(timezone.utc).isoformat()
+            ctx.job_runs.save(job_rec)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -742,13 +665,15 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
 
         persisted = []
         for p in result.proposals:
+            payload = dict(p.payload or {})
+            payload.pop("_pdf_text", None)
             rec = ProposalRecord(
                 proposal_id=uuid4().hex[:12],
                 kind=p.kind,
                 skill_id=p.skill_id,
                 version=p.version,
                 rationale=p.rationale,
-                payload=p.payload,
+                payload=payload,
                 tenant_id=tenant_id,
                 created_by_job=job_rec.job_run_id,
             )

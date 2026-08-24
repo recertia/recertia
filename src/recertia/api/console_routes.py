@@ -38,13 +38,21 @@ class ProposalDecision(BaseModel):
 class JobTrigger(BaseModel):
     dry_run: bool = True
     max_proposals: int = 10
+    max_tokens: int = 0
+    task_class: str | None = None
     hint: list[str] | None = None
+    arxiv_id: list[str] | None = None
+    arxiv_query: str | None = None
+    arxiv_max: int = 5
+    with_pdf: bool = False
+    pdf_sandbox: bool = False
     one_off: list[str] | None = None
     skill_id: str | None = None
     skill_version: int = 1
     fake_edge_failures: int = 0
     merge_conflicts: int = 0
     tool_upgraded: str | None = None
+    edits_log: str | None = None
 
 
 class TenantSwitch(BaseModel):
