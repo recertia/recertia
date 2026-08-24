@@ -49,7 +49,7 @@ def trajectory_distill_cmd(
 ) -> None:
     """Author a candidate from a reexecutable import. Does not promote."""
 
-    from recertia.distill.imported import DistillRejected, distill_imported_file
+    from recertia.distill.imported import DistillRejected, as_public_dict, distill_imported_file
     from recertia.memory.procedural.store import SkillStore
 
     store = SkillStore(skills_root)
@@ -58,18 +58,6 @@ def trajectory_distill_cmd(
     except (DistillRejected, ValueError) as exc:
         typer.echo(json.dumps({"ok": False, "rejected": str(exc)}, indent=2), err=True)
         raise typer.Exit(code=1) from exc
-    status = store.get_status(version.skill_id, version.version)
     typer.echo(
-        json.dumps(
-            {
-                "ok": True,
-                "skill_id": version.skill_id,
-                "version": version.version,
-                "lifecycle": status.lifecycle if status is not None else None,
-                "active": status.active if status is not None else False,
-                "task_class": version.task_class,
-                "promoted": False,
-            },
-            indent=2,
-        )
+        json.dumps({"ok": True, **as_public_dict(version, store)}, indent=2)
     )

@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from contracts.criteria import SkillCertificationCriterion, mint_rejecting_proof
 from contracts.skill import Hygiene, Provenance, SkillVersion, Step
@@ -141,6 +142,20 @@ def distill_imported(
         hygiene=Hygiene(secret_scan="passed", scanned_at=_NOW),
     )
     return store.write_candidate(require_clean(version))
+
+
+def as_public_dict(version: SkillVersion, store: SkillStore) -> dict[str, Any]:
+    """CLI and HTTP distill payload. ``promoted`` is always false on this path."""
+
+    status = store.get_status(version.skill_id, version.version)
+    return {
+        "skill_id": version.skill_id,
+        "version": version.version,
+        "lifecycle": None if status is None else status.lifecycle,
+        "active": False if status is None else status.active,
+        "task_class": version.task_class,
+        "promoted": False,
+    }
 
 
 def distill_imported_file(

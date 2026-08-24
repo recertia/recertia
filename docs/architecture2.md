@@ -35,6 +35,7 @@ the chapter text itself is inlined here so this file is readable offline.
 - [Recertia Architecture: 7. Promotion, trust, and library capacity](#ch-architecture-library-lifecycle) — `architecture/library-lifecycle.md`
 - [Phase-2 portfolio measurement report](#ch-architecture-portfolio-measurement) — `architecture/portfolio-measurement.md`
 - [Recertia Architecture: 8. Improvement plane](#ch-architecture-improvement-plane) — `architecture/improvement-plane.md`
+- [arXiv paper ingestion (Miner)](#ch-architecture-arxiv-ingest) — `architecture/arxiv-ingest.md`
 - [Recertia Architecture: 9. Storage choices](#ch-architecture-operations) — `architecture/operations.md`
 - [Container sandbox setup](#ch-architecture-container-sandbox) — `architecture/container-sandbox.md`
 - [Single-user go-live](#ch-architecture-go-live) — `architecture/go-live.md`
@@ -878,6 +879,79 @@ resets spend. The policy file is never rewritten to record consumption.
 
 Admit order: recertifier → curator retire → fail-cluster author → practice band →
 practice HEX (≤25% leftover) → compress. HEX and compress remain default-off.
+
+<a id="ch-architecture-arxiv-ingest"></a>
+
+> Source: [`architecture/arxiv-ingest.md`](architecture/arxiv-ingest.md)
+
+# arXiv paper ingestion (Miner)
+
+**Status:** shipped on the improvement plane as an offline **mine** path.
+**Rule:** proposals only. No approved writes. No weight updates. No LLM extraction inside the job.
+
+## What it does
+
+1. Fetches Atom metadata from `export.arxiv.org` (ids or `search_query`).
+2. Emits `Proposal(kind="mine")` rows with `payload.curation = "mined_from_paper"`.
+3. Optionally downloads the PDF on the **host** (execution sandbox stays `network=none`).
+4. Optionally extracts text via `pypdf` (host, or sandboxed if the image has it).
+5. Optionally **distills** a pitfall-oriented candidate skill + semantic facts keyed by `arxiv_id`.
+6. `--submit` materialises **candidates** only; promotion stays behind the golden gate.
+
+## CLI
+
+```bash
+# dry-run proposals for specific papers
+recertia jobs run mine --arxiv-id 2605.22148 --arxiv-id 2607.01120 --dry-run
+
+# search (max 50)
+recertia jobs run mine --arxiv-query 'ti:"self-evolving" AND cat:cs.AI' --arxiv-max 5 --dry-run
+
+# PDF download + optional extract (requires pypdf for text)
+recertia jobs run mine --arxiv-id 2605.22148 --with-pdf --dry-run
+
+# distill pitfall skill + write candidates + facts
+recertia jobs run mine --arxiv-id 2605.22148 --distill-paper --submit \
+  --facts-root .recertia/facts
+```
+
+Human-artifact mining is unchanged:
+
+```bash
+recertia jobs run mine --hint "docs/ops/runbook.md" --submit
+```
+
+## Distill heuristics (deterministic)
+
+`recertia.distill.paper.distill_paper`:
+
+* splits the abstract into sentences
+* scores **pitfalls** on cues (`fail`, `without`, `bottleneck`, `bias`, `unbounded`, …)
+* scores **claims** on cues (`we show`, `propose`, `measure`, `lift`, …)
+* authors `failure_modes` + bounded shell steps under the authoring prior
+* writes `Fact` rows with slugs `arxiv-<id>-meta|claim-N|pitfall-N|pdf-…`
+
+No LLM. Golden promotion is still required before retrieval trust rises.
+
+## PDF extract
+
+| Path | Network | Text |
+| --- | --- | --- |
+| Host download + optional `pypdf` | improvement-plane host | yes if `pypdf` installed |
+| Sandbox extract (`--pdf-sandbox`) | still none inside OCI | needs `pypdf` in image |
+
+Disable extract: `RECERTIA_PDF_EXTRACT=0`.
+
+## Contracts
+
+`Curation` includes `mined_from_paper` (see `contracts/common.py`). Provenance on paper candidates uses that value and `derivation="mined_artifact"`.
+
+## Honesty constraints
+
+- Network for PDF is host-side only; execution containers stay offline.
+- Rate limit: ≥3s between arXiv Atom requests (client default).
+- Library growth remains capped by Curator retirement and the active-set floor.
+- Lift claims for paper-derived skills still require control-arm measurement (assumptions `a1` / weekly report).
 
 <a id="ch-architecture-operations"></a>
 
@@ -1777,8 +1851,8 @@ RW-M2  Probe cadence + MetricReport completeness                  Phase 2 remain
 RW-A   Assumption status changes from traffic                     research, never a merge gate
 RW-LY  library_yield + retrieval_decay                            Phase 3 remaining CI
 RW-PC  Portfolio controller is the only path                      shipped
-RW-OR  OR1 docs/cost gate, OR2 robustness, OR3 presets            parallel with RW-GA
-RW-SUR Error envelope + remaining HTTP/CLI                        parallel; not a GA gate
+RW-OR  OR0–OR3 shipped (docs/cost honesty, robustness, presets)   shipped; parallel with RW-GA
+RW-SUR Error envelope + remaining HTTP/CLI (+ distill HTTP twin)  shipped; not a GA gate
 RW-HEX HEX / compress enablement                                  after a1 interval exists
 RW-C5  Console C5 + tenant threat model                           Phase-4 gate only
 ```
@@ -1920,12 +1994,13 @@ in production without an eval-compare note in the ledger.
 
 ## 8. RW-OR — OpenRouter polish (OR1–OR3)
 
-OR0 is shipped. Remaining OpenRouter polish:
+**Shipped.** OR0–OR3 are on `main`. Inventory row RW-OR matches this section.
+Configuring a gateway is still not evidence for `a1`.
 
-| Milestone | Work | Done when |
+| Milestone | Work | Status |
 | --- | --- | --- |
-| **OR1** | Docs gate: configuring a gateway MUST NOT be cited as evidence for `a1`. Price-override env already in go-live — add a CI check or test that `estimate_cost_usd` for an unknown slug uses defaults and `unavailable`/notes do not say "vendor-exact". | OG-7 (see spec) |
-| **OR2** | Default `max_tokens` via `RECERTIA_OPENAI_MAX_TOKENS` or EXTRA_BODY; map OpenRouter error JSON to `ProviderError`; tolerate list-shaped `message.content` text parts | OG-8…OG-10 |
+| **OR1** | Docs gate: configuring a gateway MUST NOT be cited as evidence for `a1`. Unknown slugs use default rates; `cost_is_vendor_exact` is false; `unavailable`/notes must not say "vendor-exact". Locked by `test_og7_unknown_slug_is_not_vendor_exact`. | shipped; OG-7 |
+| **OR2** | Default `max_tokens` via `RECERTIA_OPENAI_MAX_TOKENS` or EXTRA_BODY; map OpenRouter error JSON to `ProviderError`; tolerate list-shaped `message.content` text parts. Locked by OG-8…OG-10 tests. | shipped |
 | **OR3** | Server-side allowlist of `provider:slug` for Pilot; unknown slug → 400; SPA never stores keys | shipped; PC-7 / OG-11 |
 
 OR3 is optional for single-operator GA (env-level model is enough) but is implemented.
@@ -1940,6 +2015,8 @@ jobs, metrics, ledger, programs. The promotion-api "aspirational" list is C5 onl
 | --- | --- | --- |
 | `GET/POST /v1/reviews` | shipped | Alias of proposals until distill-review volume justifies a split |
 | `POST /v1/evals/runs` | shipped | Golden set against a library snapshot |
+| `POST /v1/trajectories/import` | shipped | HTTP twin of `recertia trajectory import`; never promotes |
+| `POST /v1/trajectories/distill` | shipped | Candidate-only twin of `recertia trajectory distill`; never writes approved |
 | `GET /v1/facts` · `/v1/cases` · `/v1/affordances` | shipped | Read non-procedural planes |
 | `POST /v1/memory/query` | shipped | Federated retrieve debug |
 | `GET /v1/policy` · `POST /v1/policy/proposals` | shipped | T2 change proposals; human approval + ledger |
@@ -6104,7 +6181,7 @@ A draft on closed PR #33 duplicated `TrajectoryImport`, used kebab task-class na
 1. **TrajectoryImport** (`contracts/trajectory_import.py`, shipped) is the only ingest. `ProvenanceBundle` comes from `audited_task_state` (`source`, not `actor`). Incomplete provenance or an empty environment descriptor is rejected. Import is append-only and never mutates an existing Recertia run. There is **no** `Policy.external_trajectory_import` flag; the CLI/HTTP surface is the gate.
 2. **Golden task classes** are snake_case, matching `ComputerUseTaskClass` and `evals/golden/{bug_reproduction,playtest_operator,docs_auditor}/`. Skill documents still use kebab `SkillVersion.task_class` (`bug-reproduction`); distill maps snake → kebab. Goldens stay eval-firewalled (`is_eval_fixture=True`) and are **not** on the repo-chore promotion gate.
 3. **Promotion path** is the existing Improvement-plane flow: episodic case → distill (candidate only) → review → control-arm measurement → possible `promote_to_approved`. No bypass of retrieve-before-invent, criteria lock, Wilson lift, or the performance floor. `reexecutable=false` stays episodic. `import_may_promote` is informational; this path never writes `approved`.
-4. **Distill** (`recertia trajectory distill`) authors a **candidate** from a reexecutable import that has replayable shell steps and a non-`true` command criterion. It refuses no-op skills. Distill does not promote.
+4. **Distill** (`recertia trajectory distill` / `POST /v1/trajectories/distill`) authors a **candidate** from a reexecutable import that has replayable shell steps and a non-`true` command criterion. It refuses no-op skills. Distill does not promote.
 5. **Pending proposal** is queued on ingest only when `import_may_promote` is true (reexecutable + auditor re-verify + criteria snapshot). Status is `pending`. Not approved.
 6. **Optional `external_computer` tool** is registered (`side_effect=external`). Default execution remains `--rm`, network-none, per-attempt workdir. Long-lived sessions are opt-in via `isolation.allow_external_computer`, `isolation.long_lived_computer_backend`, non-empty `isolation.external_computer_allowlist`, hard TTL. The handler is a **gate**: it refuses unless those flags are on, and even then does not open a standing VM. Approved skill state is never written from this path.
 7. **Practice density** stays under `JobQuota.computer_use_practice_share` (snake task classes). Operator briefs (stuck jobs, lift-by-class, redundancy) are projections over Systems. Computer-use lift language is "not established" until `min_independent_runs`.

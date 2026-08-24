@@ -7,7 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from recertia.api.console_routes import ConsoleContext
 from recertia.api.errors import V1HTTPError
@@ -38,6 +38,11 @@ class PolicyProposalBody(BaseModel):
 class ReviewDecisionBody(BaseModel):
     decision: str
     note: str = ""
+
+
+class DistillTrajectoryBody(BaseModel):
+    task_class: str
+    trajectory: dict[str, Any]
 
 
 class MemoryQueryBody(BaseModel):
@@ -315,6 +320,32 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         except (ImportRejected, ValueError) as exc:
             raise V1HTTPError(400, code="import_rejected", message=str(exc)) from exc
         return result.as_public_dict()
+
+    @app.post("/v1/trajectories/distill")
+    def distill_trajectory(
+        body: DistillTrajectoryBody,
+        request: Request,
+        principal=Depends(require_runs),
+        x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
+    ) -> dict[str, Any]:
+        from contracts.trajectory_import import TrajectoryImport
+        from recertia.distill.imported import DistillRejected, as_public_dict, distill_imported
+        from recertia.memory.procedural.store import SkillStore
+
+        tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
+        store = SkillStore(ctx.tenant_skills_root(tenant_id))
+        try:
+            imported = TrajectoryImport.model_validate(body.trajectory)
+            version = distill_imported(
+                imported,
+                store,
+                actor=getattr(principal, "key_id", "api"),
+                task_class=body.task_class,
+            )
+        except (DistillRejected, ValidationError, ValueError) as exc:
+            raise V1HTTPError(400, code="distill_rejected", message=str(exc)) from exc
+        return as_public_dict(version, store)
+
 
     @app.get("/v1/affordances")
     def list_affordances(

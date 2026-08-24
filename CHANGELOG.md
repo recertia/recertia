@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **RW-OR honesty** — remaining-work §8 and the milestone map mark OR1–OR3 as shipped (OG-7…OG-11 tests already on main). Unknown-slug cost uses defaults and is not vendor-exact.
+
 - **2026-08-24 landing extract** — one owner per seam: `ingest_trajectory` /
   `ImportResult.as_public_dict` (CLI + `POST /v1/trajectories/import`),
   `skill_task_class` (snake Goal/golden → kebab `SkillVersion.task_class`),
@@ -20,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend remain open. Not a GA gate.
 
 ### Added
+
+- **Trajectory distill HTTP twin** — `POST /v1/trajectories/distill` shares
+  `distill_imported` / `as_public_dict` with `recertia trajectory distill`.
+  Candidate only; `promoted` is always false. Not a GA gate.
+
+- **arXiv ingest in architecture2** — `docs/architecture/arxiv-ingest.md` is
+  compiled into `docs/architecture2.md` (same order as `architecture.md`).
+
 
 - **2026-08-24 landing extract prompt** — executable Cloud Agent prompt + ADR-0014
   Goal pack for the dual-path extract after today's MEA / trajectory / systems stack.

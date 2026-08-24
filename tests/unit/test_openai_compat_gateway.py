@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from recertia.solver.pricing import cost_is_vendor_exact
+from recertia.solver.pricing import cost_is_vendor_exact, estimate_cost_usd
 from recertia.solver.providers import (
     OpenAIModelClient,
     ProviderError,
@@ -82,6 +82,15 @@ def test_openai_extra_headers_must_be_object(monkeypatch: pytest.MonkeyPatch) ->
 def test_og7_unknown_slug_is_not_vendor_exact() -> None:
     assert cost_is_vendor_exact(provider="openai", model_id="moonshotai/kimi-k2") is False
     assert cost_is_vendor_exact(provider="openai", model_id="gpt-4o") is True
+    cost = estimate_cost_usd(
+        provider="openai",
+        model_id="moonshotai/kimi-k2",
+        prompt_tokens=1_000_000,
+        completion_tokens=1_000_000,
+    )
+    # unknown slug uses default 1.0 + 3.0 USD / MTok, not a vendor table
+    assert cost == pytest.approx(4.0)
+    assert "vendor-exact" not in str(cost)
 
 
 def test_og8_max_tokens_env_fills_when_extra_body_omits(

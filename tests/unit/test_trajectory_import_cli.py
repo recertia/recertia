@@ -306,3 +306,54 @@ def test_external_computer_allowlisted_still_opens_no_standing_vm(
     combined = (result.stderr or "").lower()
     assert "standing vm" in combined
     assert "approved state" in combined
+
+
+
+def test_http_distill_authors_candidate_and_never_promotes(tmp_path: Path) -> None:
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from recertia.api import create_app
+    from recertia.memory.procedural.store import SkillStore
+
+    skills_root = tmp_path / "skills"
+    skills_root.mkdir()
+    app = create_app(root=tmp_path / "api-root", skills_root=skills_root)
+    issued = app.state.api_keys.issue(
+        tenant_id="t-distill", scopes={"runs"}, actor="test"
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/v1/trajectories/distill",
+        json={"task_class": "bug_reproduction", "trajectory": _distillable(import_id="imp-http-d")},
+        headers={"X-API-Key": issued.secret},
+    )
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert body["promoted"] is False
+    assert body["lifecycle"] == "candidate"
+    assert body["task_class"] == "bug-reproduction"
+    assert body["active"] is False
+    status = SkillStore(skills_root).get_status(body["skill_id"], body["version"])
+    assert status.lifecycle == "candidate"
+    assert status.active is False
+
+
+def test_http_distill_rejects_unknown_task_class(tmp_path: Path) -> None:
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from recertia.api import create_app
+
+    app = create_app(root=tmp_path / "api-root", skills_root=tmp_path / "skills")
+    issued = app.state.api_keys.issue(tenant_id="t-distill2", scopes={"runs"}, actor="test")
+    client = TestClient(app)
+    denied = client.post(
+        "/v1/trajectories/distill",
+        json={"task_class": "repo-chore", "trajectory": _distillable(import_id="imp-http-bad")},
+        headers={"X-API-Key": issued.secret},
+    )
+    assert denied.status_code == 400, denied.text
+    err = denied.json()["error"]
+    assert err["code"] == "distill_rejected"
+    assert "computer-use" in err["message"]

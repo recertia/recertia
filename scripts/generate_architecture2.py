@@ -37,6 +37,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "architecture/library-lifecycle.md",
             "architecture/portfolio-measurement.md",
             "architecture/improvement-plane.md",
+            "architecture/arxiv-ingest.md",
             "architecture/operations.md",
             "architecture/container-sandbox.md",
             "architecture/go-live.md",
