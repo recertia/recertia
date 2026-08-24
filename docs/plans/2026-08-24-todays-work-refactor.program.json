@@ -1,0 +1,328 @@
+{
+  "program_id": "gp-2026-08-24-todays-work-refactor",
+  "tenant_id": "recertia",
+  "title": "2026-08-24 landing extract",
+  "intent": "After MEA + trajectory Phase 0 + ADR-0018/0019 landed on main, extract dual systems/cache/distill/ingest paths, bind names to shipped contracts, and stop docs from advertising open work that already shipped. Not operator-GA. Not a graph change.",
+  "task_class": "repo-chore",
+  "decomposition": "by_seam",
+  "status": "draft",
+  "steps": [
+    {
+      "step_id": "characterize",
+      "ordinal": 0,
+      "title": "Lock today's behaviour before moving code",
+      "role": "characterization",
+      "goal": {
+        "desired": [
+          {
+            "id": "prompt-exists",
+            "kind": "file_exists",
+            "path": "docs/plans/2026-08-24-todays-work-refactor.md",
+            "expect_exit": 0,
+            "weight": 1.0,
+            "timeout_s": 300
+          },
+          {
+            "id": "systems-phase0-green",
+            "kind": "command",
+            "run": "python3 -m pytest -q tests/unit/test_systems_phase0.py tests/unit/test_trajectory_import_cli.py tests/unit/ops/test_mea_systems.py",
+            "expect_exit": 0,
+            "weight": 1.0,
+            "timeout_s": 300
+          }
+        ],
+        "constraints": [
+          {
+            "id": "no-src-during-characterize",
+            "kind": "must_not_modify",
+            "value": [
+              "src/recertia",
+              "contracts",
+              "policy/default.json"
+            ],
+            "weight": 1.0
+          }
+        ],
+        "context": "Characterization only. Extend existing tests so import never promotes, distill refuses true-noop, MEA stays default-off, offload stays default-off, caches skip writes, external_computer refuses without isolation flags, and systems/--brief cannot claim 4.6x or established lift from fixtures.",
+        "task_class": "repo-chore",
+        "preferences": {},
+        "strategy_hint": "abstain",
+        "mea_opt_in": false
+      },
+      "depends_on": [],
+      "freeze_paths": [
+        "src/recertia",
+        "contracts",
+        "evals/golden"
+      ],
+      "mutate_paths": [
+        "tests"
+      ],
+      "acceptance_gate": {
+        "terminal_in": [
+          "solved"
+        ],
+        "require_program_bar": true
+      },
+      "status": "planned",
+      "run_ids": [],
+      "goal_revision": 1
+    },
+    {
+      "step_id": "honesty",
+      "ordinal": 1,
+      "title": "Index and changelog match shipped main",
+      "role": "custom",
+      "goal": {
+        "desired": [
+          {
+            "id": "index-names-adr-0018",
+            "kind": "file_contains",
+            "path": "docs/architecture.md",
+            "pattern": "ADR-0018",
+            "expect_exit": 0,
+            "weight": 1.0,
+            "timeout_s": 300
+          },
+          {
+            "id": "index-names-adr-0019",
+            "kind": "file_contains",
+            "path": "docs/architecture.md",
+            "pattern": "ADR-0019",
+            "expect_exit": 0,
+            "weight": 1.0,
+            "timeout_s": 300
+          },
+          {
+            "id": "index-not-stale-phase1",
+            "kind": "command",
+            "run": "python3 -c \"from pathlib import Path; t=Path('docs/architecture.md').read_text(); assert 'ADR still open' not in t\"",
+            "expect_exit": 0,
+            "weight": 1.0,
+            "timeout_s": 300
+          }
+        ],
+        "constraints": [
+          {
+            "id": "no-engine-during-docs",
+            "kind": "must_not_modify",
+            "value": [
+              "src/recertia/graph",
+              "evals/golden"
+            ],
+            "weight": 1.0
+          }
+        ],
+        "context": "architecture.md must not say Phase 1 distill / ADR are still open. Candidate distill and ADR-0018/0019 shipped in #41. Promotion-with-lift and a live computer backend remain open. Names bind to COMPUTER_USE_TASK_CLASSES and the CLI.",
+        "task_class": "repo-chore",
+        "preferences": {},
+        "strategy_hint": "abstain",
+        "mea_opt_in": false
+      },
+      "depends_on": [],
+      "freeze_paths": [
+        "src/recertia",
+        "evals/golden"
+      ],
+      "mutate_paths": [
+        "docs/architecture.md",
+        "docs/architecture/remaining-work.md",
+        "CHANGELOG.md",
+        "docs/plans/2026-08-22-external-trajectories-and-computer-use-goldens.md"
+      ],
+      "acceptance_gate": {
+        "terminal_in": [
+          "solved"
+        ],
+        "require_program_bar": true
+      },
+      "status": "planned",
+      "run_ids": [],
+      "goal_revision": 1
+    },
+    {
+      "step_id": "extract",
+      "ordinal": 2,
+      "title": "Collapse dual systems, cache, distill, and ingest paths",
+      "role": "structural",
+      "goal": {
+        "desired": [
+          {
+            "id": "ingest-module",
+            "kind": "file_exists",
+            "path": "src/recertia/trajectory/import_store.py",
+            "expect_exit": 0,
+            "weight": 1.0,
+            "timeout_s": 300
+          },
+          {
+            "id": "single-task-class-map",
+            "kind": "file_contains",
+            "path": "src/recertia/distill/imported.py",
+            "pattern": "def skill_task_class",
+            "expect_exit": 0,
+            "weight": 1.0,
+            "timeout_s": 300
+          },
+          {
+            "id": "extract-tests-green",
+            "kind": "command",
+            "run": "python3 -m pytest -q tests/unit/test_systems_phase0.py tests/unit/test_trajectory_import_cli.py tests/e2e/test_computer_use_goldens.py tests/e2e/test_mea_graph_wiring.py",
+            "expect_exit": 0,
+            "weight": 1.0,
+            "timeout_s": 300
+          }
+        ],
+        "constraints": [
+          {
+            "id": "no-golden-mutation",
+            "kind": "must_not_modify",
+            "value": [
+              "evals/golden",
+              "skills",
+              "LICENSE"
+            ],
+            "weight": 1.0
+          }
+        ],
+        "context": "Extract Method / single owner per seam. ingest_trajectory is the only import writer. Distill imported reuses success-path hygiene and no-op refusal. One snake-to-kebab map. Read-only cache policy in one place. Hop gauges extracted from the engine. Prefix tree remains a view. No 16th node. MEA default-off. Offload default-off.",
+        "task_class": "repo-chore",
+        "preferences": {},
+        "strategy_hint": "abstain",
+        "mea_opt_in": false
+      },
+      "depends_on": [],
+      "freeze_paths": [
+        "evals/golden",
+        "skills",
+        "LICENSE"
+      ],
+      "mutate_paths": [
+        "src/recertia/ops",
+        "src/recertia/distill",
+        "src/recertia/trajectory",
+        "src/recertia/graph",
+        "src/recertia/solver",
+        "src/recertia/retrieval",
+        "src/recertia/workspace",
+        "src/recertia/cli",
+        "src/recertia/api",
+        "src/recertia/telemetry.py"
+      ],
+      "acceptance_gate": {
+        "terminal_in": [
+          "solved"
+        ],
+        "require_program_bar": true
+      },
+      "status": "planned",
+      "run_ids": [],
+      "goal_revision": 1
+    },
+    {
+      "step_id": "lock",
+      "ordinal": 3,
+      "title": "Behaviour lock and repo hygiene",
+      "role": "behaviour_lock",
+      "goal": {
+        "desired": [
+          {
+            "id": "lock-pytest",
+            "kind": "command",
+            "run": "python3 -m pytest -q tests/unit/test_systems_phase0.py tests/unit/test_trajectory_import_cli.py tests/unit/ops/test_mea_systems.py tests/e2e/test_mea_graph_wiring.py tests/e2e/test_computer_use_goldens.py tests/unit/test_todays_work_refactor_program.py",
+            "expect_exit": 0,
+            "weight": 1.0,
+            "timeout_s": 300
+          },
+          {
+            "id": "lock-cross-refs",
+            "kind": "command",
+            "run": "python3 scripts/check_cross_refs.py --check",
+            "expect_exit": 0,
+            "weight": 1.0,
+            "timeout_s": 300
+          }
+        ],
+        "constraints": [
+          {
+            "id": "no-license-touch",
+            "kind": "must_not_modify",
+            "value": [
+              "LICENSE",
+              "evals/golden"
+            ],
+            "weight": 1.0
+          }
+        ],
+        "context": "Full characterization plus ruff. Do not declare RW-GA. Do not enable HEX/compress. Computer-use goldens stay off the repo-chore promotion gate.",
+        "task_class": "repo-chore",
+        "preferences": {},
+        "strategy_hint": "abstain",
+        "mea_opt_in": false
+      },
+      "depends_on": [],
+      "freeze_paths": [
+        "evals/golden",
+        "skills"
+      ],
+      "mutate_paths": [
+        "tests",
+        "docs"
+      ],
+      "acceptance_gate": {
+        "terminal_in": [
+          "solved"
+        ],
+        "require_program_bar": true
+      },
+      "status": "planned",
+      "run_ids": [],
+      "goal_revision": 1
+    }
+  ],
+  "program_bar_desired": [
+    {
+      "id": "bar-characterization-systems",
+      "kind": "command",
+      "run": "python3 -m pytest -q tests/unit/test_systems_phase0.py tests/unit/ops/test_mea_systems.py",
+      "expect_exit": 0,
+      "weight": 1.0,
+      "timeout_s": 300
+    },
+    {
+      "id": "bar-characterization-import",
+      "kind": "command",
+      "run": "python3 -m pytest -q tests/unit/test_trajectory_import_cli.py tests/e2e/test_computer_use_goldens.py tests/e2e/test_mea_graph_wiring.py",
+      "expect_exit": 0,
+      "weight": 1.0,
+      "timeout_s": 300
+    },
+    {
+      "id": "bar-hygiene-ruff",
+      "kind": "command",
+      "run": "ruff check contracts/ src/ scripts/ tests/ conftest.py",
+      "expect_exit": 0,
+      "weight": 1.0,
+      "timeout_s": 300
+    }
+  ],
+  "program_bar_constraints": [
+    {
+      "id": "bar-no-golden-rewrite",
+      "kind": "must_not_modify",
+      "value": [
+        "evals/golden",
+        "skills",
+        "LICENSE",
+        "policy/default.json"
+      ],
+      "weight": 1.0
+    }
+  ],
+  "handoff": "none",
+  "freeze_enforcement": "advisory",
+  "created_by": "cloud-agent",
+  "created_at": "2026-08-24T00:00:00Z",
+  "updated_at": "2026-08-24T00:00:00Z",
+  "source": "human"
+}
