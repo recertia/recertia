@@ -20,6 +20,7 @@ from contracts.criteria import SkillCertificationCriterion
 from contracts.fact import Fact, FactProvenance
 from contracts.policy import AuthoringPrior
 from contracts.skill import FailureMode, Hygiene, Provenance, SkillVersion, Step
+from recertia.distill.candidate import assert_candidate_hygiene
 from recertia.distill.prior import load_authoring_prior
 from recertia.jobs.arxiv import ArxivPaper
 from recertia.validation.sensitivity import author_sensitivity_proof, empty_negative_fixture
@@ -174,7 +175,7 @@ def distill_paper(
     )
 
     facts = facts_from_paper(paper, claims=claims, pitfalls=pitfalls, pdf_text=pdf_text)
-    return version, facts
+    return assert_candidate_hygiene(version), facts
 
 
 def facts_from_paper(

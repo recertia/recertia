@@ -385,15 +385,19 @@ def scan_secrets(path: Path, root: Path, findings: list[Finding]) -> None:
                 )
 
 
-def _file_contains(root: Path, rel: str, needles: tuple[str, ...]) -> bool:
-    path = root / rel
-    if not path.is_file():
-        return False
-    text = path.read_text(encoding="utf-8", errors="replace")
+def _file_contains(root: Path, rel: str | tuple[str, ...], needles: tuple[str, ...]) -> bool:
+    paths = rel if isinstance(rel, tuple) else (rel,)
+    chunks: list[str] = []
+    for item in paths:
+        path = root / item
+        if not path.is_file():
+            return False
+        chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+    text = "\n".join(chunks)
     return all(needle in text for needle in needles)
 
 
-_RECERTIA_CONTROLS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
+_RECERTIA_CONTROLS: tuple[tuple[str, str | tuple[str, ...], tuple[str, ...], str], ...] = (
     (
         "container-no-new-privileges",
         "src/recertia/solver/container.py",
@@ -462,7 +466,7 @@ _RECERTIA_CONTROLS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
     ),
     (
         "fetch-https-no-redirect",
-        "src/recertia/solver/registry.py",
+        ("src/recertia/solver/registry.py", "src/recertia/solver/handlers.py"),
         ("_RefuseRedirect", 'parsed.scheme != "https"', "_https_get"),
         "fetch must be HTTPS-only and refuse redirects",
     ),
@@ -474,8 +478,8 @@ _RECERTIA_CONTROLS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
     ),
     (
         "promote-requires-scope",
-        "src/recertia/api/console_routes.py",
-        ('_require_library_write', 'scope="promote"', 'scope="jobs"'),
+        "src/recertia/api/console_library_routes.py",
+        ("_require_library_write", 'scope="promote"', 'scope="jobs"'),
         "promote and jobs must require a dedicated scope or admin, not runs alone",
     ),
 )
@@ -485,11 +489,12 @@ def check_recertia_controls(root: Path) -> list[ControlResult]:
     results: list[ControlResult] = []
     for control_id, rel, needles, message in _RECERTIA_CONTROLS:
         ok = _file_contains(root, rel, needles)
+        path = rel if isinstance(rel, str) else ", ".join(rel)
         results.append(
             ControlResult(
                 id=control_id,
                 ok=ok,
-                path=rel,
+                path=path,
                 message=message if ok else f"MISSING: {message}",
             )
         )
