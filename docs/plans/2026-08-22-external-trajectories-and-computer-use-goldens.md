@@ -1,7 +1,7 @@
 # External Trajectories & Computer-Use Goldens — Implementation Plan
 
 **Date:** 2026-08-22  
-**Status:** Phase 0 landed (contracts, `recertia trajectory import`, skill-free computer-use goldens). Phase 1 distill / Phase 2 optional computer backend / ADR still open.  
+**Status:** Phase 0 landed. ADR-0019 rewrite (2026-08-24) lands distill-candidate, HTTP import, pending proposal, gated `external_computer`, JobQuota share, operator brief. Promotion-with-lift and a live computer backend remain open.  
 **Sources:**  
 - Architect review of filtered Grok Bot use-case patterns (teach-once, bug-repro, playtest, docs-auditor, practice density, operator briefs)  
 - Technical implementation plan & contracts (this document)  
@@ -15,11 +15,11 @@
 
 | # | Item | Landing surface | Status |
 |---|------|-----------------|--------|
-| 1 | Teach-once trajectory → promotion-gated skill | Episodic → Distill → Review → Procedural | Phase 0: import CLI writes episodic; distill/promotion is Phase 1 |
-| 2 | Bug Reproduction / Playtest Operator / Docs Auditor goldens | Task-class registry + evals | Phase 0: descriptors + skill-free fixtures under `evals/golden/` |
+| 1 | Teach-once trajectory → promotion-gated skill | Episodic → Distill → Review → Procedural | Import + distill-candidate landed; promotion still requires review + control-arm lift |
+| 2 | Bug Reproduction / Playtest Operator / Docs Auditor goldens | Task-class registry + evals | Phase 0: skill-free fixtures under `evals/golden/` (snake_case). Not on the repo-chore gate |
 | 3 | Writes/spend behind approval | Already present (review node) | No change |
-| 4 | Practice density under JobQuota (no 16th node) | Improvement plane | Design |
-| 5 | Operator brief (stuck / lift / redundancy) | Systems / Tower projection | MEA Systems brief shipped; computer-use lift/redundancy still design |
+| 4 | Practice density under JobQuota (no 16th node) | Improvement plane | `computer_use_practice_share` (0.15) on JobQuota; snake task classes |
+| 5 | Operator brief (stuck / lift / redundancy) | Systems / Tower projection | `recertia systems --brief`; computer-use lift language is "not established" |
 
 Recertia stays the measuring orchestrator. External agents supply trajectories and specialized executors; only Recertia decides what enters durable memory and whether it still works.
 
@@ -107,16 +107,17 @@ Optional executor kind `external_computer` (backend, allowlist policy, session T
 - [x] CLI: `recertia trajectory import <path>` with strict validation.  
 **Exit:** Import rejects incomplete provenance; golden suite runs under existing lift harness (`recertia eval run --task-class {bug_reproduction,playtest_operator,docs_auditor}`); fixtures are eval-firewalled and not on the repo-chore promotion gate; no isolation regressions on default path. Distill and promotion remain Phase 1.
 
-### Phase 1 – Distill Path
-- End-to-end: TrajectoryImport → Episodic → Distill candidate → Review → control-arm → possible promotion.  
-- Promotion forces re-execution (or independent validation) under Recertia criteria when `reexecutable=True`.  
+### Phase 1 – Distill Path — **candidate path landed; promotion still open**
+- [x] TrajectoryImport → Episodic → Distill **candidate** (`recertia trajectory distill --task-class`). Never writes approved. Refuses `true`-noop steps/criteria.  
+- [x] Pending proposal when `import_may_promote` (reexecutable + auditor re-verify + criteria snapshot).  
+- [ ] Review → control-arm → `promote_to_approved` still uses the existing Improvement-plane flow. No bypass.  
 **Exit:** At least one skill promoted with positive measured lift (Wilson interval excludes zero); library bound and retirement still enforced; attribution/lineage intact.
 
-### Phase 2 – Operator Surface + Optional Backend
-- Systems/Tower projections: stuck jobs, lift deltas by task class, redundancy.  
-- Optional ExternalComputerExecutor behind policy flag + ADR.  
-- JobQuota class for computer-use practice.  
-**Exit:** Operator can act on new signals without a new agent persona; long-lived path opt-in only; default path unchanged.
+### Phase 2 – Operator Surface + Optional Backend — **gate landed; live backend not wired**
+- [x] Systems/Tower projections: stuck jobs, lift-by-class ("not established"), redundancy (`recertia systems --brief`).  
+- [x] Optional `external_computer` tool registered (`side_effect=external`). Handler refuses unless `isolation.allow_external_computer`, `isolation.long_lived_computer_backend`, and a non-empty allow-list; even then no standing VM.  
+- [x] JobQuota `computer_use_practice_share`.  
+**Exit remaining:** a live allow-listed computer is still not a Recertia security boundary and is not wired in this build.
 
 ### Phase 3 – Hardening & Cost Control
 - Aggressive retirement for computer-use skills.  
@@ -130,37 +131,31 @@ Optional executor kind `external_computer` (backend, allowlist policy, session T
 
 ## Configuration
 
-Phase 0 shipped **no** Policy fields for this plan. `recertia trajectory import` is
-the surface; `import_may_promote` is informational. Default isolation remains
-container (`--rm`, network-none). `ImprovementFlags.mea_enabled` stays false.
+There is **no** `improvement.external_trajectory_import` flag. Import is gated by
+the CLI / `POST /v1/trajectories/import` and the shipped `TrajectoryImport`
+contract. `ImprovementFlags.mea_enabled` stays false.
 
-These keys are **not** on `Policy` / `policy/default.json` today:
-
-- `improvement_flags.external_trajectory_import`
-- `improvement_flags.long_lived_computer_backend`
-- `job_quota.computer_use_practice_share`
-- `isolation.allow_external_computer`
-- `isolation.external_computer_ttl_seconds`
-
-The block below is the **proposed** Phase 1/2 surface (ADR still unwritten).
-Do not copy it into Policy until that ADR lands.
+Shipped on `Policy` / `policy/default.json` with ADR-0018/0019:
 
 ```json
 {
-  "improvement_flags": {
-    "external_trajectory_import": true,
-    "long_lived_computer_backend": false
-  },
   "job_quota": {
     "computer_use_practice_share": 0.15
+  },
+  "state_management": {
+    "idle_offload_enabled": false
   },
   "isolation": {
     "default_backend": "container",
     "allow_external_computer": false,
-    "external_computer_ttl_seconds": 3600
+    "long_lived_computer_backend": false,
+    "external_computer_ttl_seconds": 3600,
+    "external_computer_allowlist": []
   }
 }
 ```
+
+Not shipped, and not planned: `improvement.external_trajectory_import`.
 
 ---
 
@@ -173,7 +168,11 @@ Do not copy it into Policy until that ADR lands.
 
 ---
 
-## ADR Outline (to be written)
+## ADR
+
+[ADR-0019](../adr/0019-external-trajectories.md) (rewrite 2026-08-24 against the
+shipped import contract). Companion systems residency: [ADR-0018](../adr/0018-idle-state-offloading.md).
+
 
 **Title:** External Trajectories and Optional Computer-Use Backends  
 **Decision:** Trajectories enter only via `TrajectoryImport` with full provenance; promotion requires Recertia-side validation + control-arm lift; long-lived computer is optional Affordance only, never default security boundary.  

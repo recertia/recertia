@@ -16,6 +16,7 @@ from recertia.solver.sandbox import SandboxLimits
 
 if TYPE_CHECKING:
     from recertia.solver.model import ModelClient
+    from recertia.solver.result_cache import ToolResultCache
 
 _ACTIVE_SANDBOX_LIMITS: contextvars.ContextVar[SandboxLimits | None] = contextvars.ContextVar(
     "recertia_active_sandbox_limits", default=None
@@ -77,6 +78,7 @@ class ToolRuntime:
         sandbox_limits: SandboxLimits | None = None,
         sandbox_policy: object | None = None,
         model: "ModelClient | None" = None,
+        result_cache: "ToolResultCache | None" = None,
     ) -> None:
         self._registry = registry
         self.scheduler = scheduler or ClaimScheduler()
@@ -84,6 +86,7 @@ class ToolRuntime:
         self.require_approval_for_non_read = require_approval_for_non_read
         self.approval_gate = approval_gate
         self.model = model
+        self.result_cache = result_cache
         if sandbox_limits is not None:
             self.sandbox_limits = sandbox_limits
         else:
@@ -121,7 +124,29 @@ class ToolRuntime:
         limits_token = _ACTIVE_SANDBOX_LIMITS.set(self.sandbox_limits)
         model_token = _ACTIVE_MODEL.set(self.model)
         step_token = _ACTIVE_STEP_CONTEXT.set(step_context or StepInvokeContext())
+        snapshot_hash = ""
         try:
+            from recertia.ops.systems import canonical_tool_key, snapshot_stat_hash
+            from recertia.telemetry import emit_in_run
+
+            snapshot_hash = snapshot_stat_hash(workdir)
+            cached = None
+            if self.result_cache is not None:
+                cached = self.result_cache.lookup(tool, inputs, snapshot_hash=snapshot_hash)
+            if cached is not None:
+                cached.duration_s = time.monotonic() - started
+                cached.claimed = claims
+                self._invocations.append(cached)
+                emit_in_run(
+                    "tool.invoked",
+                    tool=tool_name,
+                    side_effect=tool.side_effect,
+                    cache="hit",
+                    canonical_key=canonical_tool_key(tool_name, inputs, snapshot_hash),
+                    ok=cached.ok,
+                )
+                emit_in_run("cache.hit", kind="tool", tool=tool_name)
+                return cached
             handler = self._registry.handler(tool_name)
             result = handler(inputs, workdir)
             result.duration_s = time.monotonic() - started
@@ -131,7 +156,20 @@ class ToolRuntime:
                     tool_name, result.stdout + result.stderr
                 )
                 result.error_signature = sig
+            if self.result_cache is not None:
+                self.result_cache.store(tool, inputs, result, snapshot_hash=snapshot_hash)
+                emit_in_run("cache.miss", kind="tool", tool=tool_name)
+                if tool.side_effect not in ("read", "pure"):
+                    self.result_cache.invalidate_all()
             self._invocations.append(result)
+            emit_in_run(
+                "tool.invoked",
+                tool=tool_name,
+                side_effect=tool.side_effect,
+                cache="miss" if self.result_cache is not None else "off",
+                canonical_key=canonical_tool_key(tool_name, inputs, snapshot_hash),
+                ok=result.ok,
+            )
             return result
         finally:
             _ACTIVE_STEP_CONTEXT.reset(step_token)

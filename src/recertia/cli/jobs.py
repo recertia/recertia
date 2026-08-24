@@ -66,6 +66,14 @@ def jobs_run(
     submit: bool = typer.Option(
         False, "--submit", help="Persist mined drafts as candidates (mine only)."
     ),
+    task_class: Optional[str] = typer.Option(
+        None,
+        "--task-class",
+        help="Quota class for computer-use practice share (ADR-0019, snake_case).",
+    ),
+    max_tokens: int = typer.Option(
+        0, "--max-tokens", help="JobQuota tokens to admit/charge (0 = no charge)."
+    ),
 ) -> None:
     """Run an offline improvement job under a proposal budget."""
 
@@ -108,9 +116,13 @@ def jobs_run(
         eval_db=runs_root / "evals.db",
         skills_root=skills_root,
     )
-    budget = JobBudget(max_proposals=max_proposals)
+    budget = JobBudget(max_proposals=max_proposals, max_tokens=max_tokens)
     name = job.strip().lower()
     traj_store = TrajectoryStore(runs_root / "trajectories")
+
+    def _run(job_name: str, fn, *, budget=budget):
+        return runner.run(job_name, fn, budget=budget, task_class=task_class)
+
 
     if name in {"mine", "miner"}:
         use_arxiv = bool(arxiv_id) or bool(arxiv_query and arxiv_query.strip())
@@ -124,10 +136,10 @@ def jobs_run(
                     max_results=arxiv_max,
                 )
 
-            result = runner.run("mine", _mine_arxiv, budget=budget)
+            result = _run("mine", _mine_arxiv, budget=budget)
         else:
             hints = list(hint or ["README.md chore hints"])
-            result = runner.run(
+            result = _run(
                 "mine", lambda: mine_from_repo_hints(store, hints=hints), budget=budget
             )
         if submit and not dry_run:
@@ -137,7 +149,7 @@ def jobs_run(
     elif name in {"curator", "curate"}:
         eval_store = EvalStore(runs_root / "evals.db")
         try:
-            result = runner.run(
+            result = _run(
                 "curator",
                 lambda: curator_active_set_and_dedup(
                     store,
@@ -159,7 +171,7 @@ def jobs_run(
         )
         if eligible:
             curriculum = None if dry_run else runs_root / "practice-curriculum"
-            result = runner.run(
+            result = _run(
                 "fail_cluster_author",
                 lambda: practice_from_fail_clusters(eligible, curriculum_dir=curriculum),
                 budget=budget,
@@ -169,7 +181,7 @@ def jobs_run(
             if not reasons:
                 reasons = ["unsolved one-off cluster"]
             curriculum = None if dry_run else runs_root / "practice-curriculum"
-            result = runner.run(
+            result = _run(
                 "practice",
                 lambda: practice_from_one_offs(reasons, curriculum_dir=curriculum),
                 budget=budget,
@@ -177,7 +189,7 @@ def jobs_run(
     elif name == "recertify":
         eval_store = EvalStore(runs_root / "evals.db")
         try:
-            result = runner.run(
+            result = _run(
                 "recertify",
                 lambda: recertify_with_revokes(
                     store,
@@ -192,7 +204,7 @@ def jobs_run(
         finally:
             eval_store.close()
     elif name == "shadow":
-        result = runner.run(
+        result = _run(
             "shadow",
             lambda: schedule_shadow_evaluations(store),
             budget=budget,
@@ -201,7 +213,7 @@ def jobs_run(
         if not skill_id:
             typer.echo("--skill-id is required for parallelise", err=True)
             raise typer.Exit(code=2)
-        result = runner.run(
+        result = _run(
             "parallelise",
             lambda: propose_parallelise(
                 skill_id, skill_version, fake_edge_failures=fake_edge_failures or None
@@ -212,7 +224,7 @@ def jobs_run(
         if not skill_id:
             typer.echo("--skill-id is required for serialise", err=True)
             raise typer.Exit(code=2)
-        result = runner.run(
+        result = _run(
             "serialise",
             lambda: propose_serialise(
                 skill_id, skill_version, merge_conflict_count=merge_conflicts or None
@@ -221,15 +233,15 @@ def jobs_run(
         )
     elif name in {"correction", "correction_miner"}:
         edits = load_reviewer_edits(edits_log or runs_root / "reviewer_edits.jsonl")
-        result = runner.run(
+        result = _run(
             "correction",
             lambda: correction_miner_from_reviewer_edits(edits),
             budget=budget,
         )
     elif name in {"hex", "practice_hex"}:
-        result = runner.run("practice_hex", propose_hex_search, budget=budget)
+        result = _run("practice_hex", propose_hex_search, budget=budget)
     elif name == "compress":
-        result = runner.run("compress", propose_compress, budget=budget)
+        result = _run("compress", propose_compress, budget=budget)
     else:
         typer.echo(
             "unknown job "

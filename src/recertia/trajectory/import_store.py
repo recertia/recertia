@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 from contracts.trajectory_import import TrajectoryImport, import_may_promote
 from recertia.memory.episodic import CaseRecord, EpisodicStore
@@ -34,6 +35,7 @@ class ImportResult:
     may_promote: bool
     promote_reason: str
     promoted: bool = False
+    proposal_id: str | None = None
 
 
 def _outcome(value: str) -> Literal["solved", "failed", "abandoned"]:
@@ -49,6 +51,7 @@ def ingest_trajectory(
     *,
     runs_root: Path | str,
     tenant_id: str = "default",
+    actor: str = "import",
 ) -> ImportResult:
     """Validate, persist append-only, write episodic. Never promotes."""
 
@@ -90,6 +93,39 @@ def ingest_trajectory(
     EpisodicStore(tenant_root / "episodic").write(case)
 
     may_promote, promote_reason = import_may_promote(imported)
+    proposal_id = None
+    if may_promote:
+        from recertia.proposals.store import ProposalRecord, ProposalStore
+
+        store = ProposalStore(tenant_root / "proposals.sqlite")
+        try:
+            rec = store.add(
+                ProposalRecord(
+                    proposal_id=uuid4().hex[:12],
+                    kind="external_trajectory",
+                    skill_id=f"import-{imported.import_id}",
+                    version=0,
+                    rationale=(
+                        "Imported trajectory queued for Recertia re-validation. "
+                        "Not approved. Control-arm lift still required."
+                    ),
+                    payload={
+                        "import_id": imported.import_id,
+                        "source": imported.source,
+                        "reexecutable": True,
+                        "promoted": False,
+                        "actor": actor,
+                        "promote_reason": promote_reason,
+                    },
+                    tenant_id=tenant_id,
+                    created_by_job="trajectory-import",
+                    created_by_run=f"import:{imported.import_id}",
+                )
+            )
+            proposal_id = rec.proposal_id
+        finally:
+            store.close()
+
     return ImportResult(
         import_id=imported.import_id,
         case_id=case_id,
@@ -98,4 +134,5 @@ def ingest_trajectory(
         may_promote=may_promote,
         promote_reason=promote_reason,
         promoted=False,
+        proposal_id=proposal_id,
     )

@@ -157,13 +157,28 @@ def build_default_orchestrator(
     if not index.is_fresh(fingerprint):
         index.rebuild(store.iter_loaded(), library_fingerprint=fingerprint)
     retriever = Retriever(index)
+    sm = policy.state_management
+    retriever.result_cache.enabled = sm.retrieval_cache_enabled
+    retriever.result_cache.ttl_s = sm.retrieval_cache_ttl_s
 
     registry = default_registry()
     gate = ApprovalGate()
     if approve_default_tools:
         for name in registry.names():
             gate.approve(name, actor="runtime-bootstrap", reason="default offline grant")
-    tools = ToolRuntime(registry, ClaimScheduler(), approval_gate=gate, model=model)
+    from recertia.solver.result_cache import ToolResultCache
+
+    tool_cache = ToolResultCache(
+        ttl_s=sm.tool_result_cache_ttl_s,
+        enabled=sm.tool_result_cache_enabled,
+    )
+    tools = ToolRuntime(
+        registry,
+        ClaimScheduler(),
+        approval_gate=gate,
+        model=model,
+        result_cache=tool_cache,
+    )
     workspaces = WorkspaceManager(runs_root / "snapshots")
     transcripts = TranscriptStore(runs_root / "transcripts")
     applicator = SkillApplicator(tools, workspaces)

@@ -20,6 +20,7 @@ from recertia.memory.query import federated_query
 from recertia.memory.semantic import FactStore
 from recertia.policy_load import load_policy
 from recertia.proposals.store import ProposalRecord
+from recertia.trajectory.import_store import ImportRejected, ingest_trajectory
 
 
 class EvalRunBody(BaseModel):
@@ -295,6 +296,33 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         if rec is None:
             raise V1HTTPError(404, code="not_found", message="case not found")
         return rec.model_dump(mode="json")
+
+    @app.post("/v1/trajectories/import")
+    def import_trajectory(
+        body: dict[str, Any],
+        request: Request,
+        principal=Depends(require_runs),
+        x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
+    ) -> dict[str, Any]:
+        tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
+        try:
+            result = ingest_trajectory(
+                body,
+                runs_root=ctx.root,
+                tenant_id=tenant_id,
+                actor=getattr(principal, "key_id", "api"),
+            )
+        except (ImportRejected, ValueError) as exc:
+            raise V1HTTPError(400, code="import_rejected", message=str(exc)) from exc
+        return {
+            "import_id": result.import_id,
+            "case_id": result.case_id,
+            "proposal_id": result.proposal_id,
+            "reexecutable": result.reexecutable,
+            "may_promote": result.may_promote,
+            "promote_reason": result.promote_reason,
+            "promoted": False,
+        }
 
     @app.get("/v1/affordances")
     def list_affordances(

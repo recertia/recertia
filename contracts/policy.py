@@ -24,6 +24,13 @@ JOB_PRIORITY_ORDER: tuple[JobPriority, ...] = (
     "compress",
 )
 
+# Snake-case golden dirs / Goal.task_class. SkillVersion.task_class stays kebab.
+COMPUTER_USE_TASK_CLASSES: tuple[str, ...] = (
+    "bug_reproduction",
+    "playtest_operator",
+    "docs_auditor",
+)
+
 
 class AuthoringPrior(BaseModel):
     """Rules the distiller must apply on every success or failure-cluster path."""
@@ -55,6 +62,10 @@ class ImprovementFlags(BaseModel):
     ``mea_enabled`` is the global policy layer of three-layer MEA activation
     (policy + Goal opt-in + runtime strategy). Default false keeps the
     single-request path as the zero-cost ordinary path.
+
+    External trajectory *import* is CLI/HTTP-gated on the shipped
+    ``TrajectoryImport`` contract — there is no ``external_trajectory_import``
+    flag (ADR-0019 rewrite).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -94,19 +105,39 @@ class JobQuota(BaseModel):
     max_hex_jobs_per_task_class: int = Field(default=1, ge=0)
     max_status_writes_per_tick: int = Field(default=50, ge=1)
     max_compress_candidates_per_tick: int = Field(default=1, ge=0)
+    computer_use_practice_share: float = Field(default=0.15, ge=0.0, le=1.0)
     tokens_spent: int = Field(default=0, ge=0)
     hex_tokens_spent: int = Field(default=0, ge=0)
+    computer_use_tokens_spent: int = Field(default=0, ge=0)
     hex_jobs_by_class: dict[str, int] = Field(default_factory=dict)
 
     def remaining(self) -> int:
         return max(0, self.weekly_token_cap - self.tokens_spent)
 
+    def _share_remaining(self, spent: int, share: float) -> int:
+        cap = int(self.weekly_token_cap * share)
+        return max(0, min(cap - spent, self.remaining()))
+
     def hex_remaining(self) -> int:
-        cap = int(self.weekly_token_cap * self.hex_share)
-        leftover = self.remaining()
-        return max(0, min(cap - self.hex_tokens_spent, leftover))
+        return self._share_remaining(self.hex_tokens_spent, self.hex_share)
+
+    def computer_use_remaining(self) -> int:
+        return self._share_remaining(
+            self.computer_use_tokens_spent, self.computer_use_practice_share
+        )
+
+    @staticmethod
+    def _computer_use_class(task_class: str | None) -> bool:
+        return task_class in COMPUTER_USE_TASK_CLASSES
 
     def can_admit(self, job: JobPriority, *, task_class: str | None = None, tokens: int = 0) -> bool:
+        if self._computer_use_class(task_class) and job in (
+            "practice_band",
+            "practice_hex",
+        ):
+            remaining = self.computer_use_remaining()
+            if remaining <= 0 or remaining < tokens:
+                return False
         if job in ("recertifier", "curator_retire", "fail_cluster_author", "practice_band"):
             return self.remaining() >= tokens
         if job == "practice_hex":
@@ -121,6 +152,9 @@ class JobQuota(BaseModel):
 
     def charge(self, job: JobPriority, tokens: int, *, task_class: str | None = None) -> "JobQuota":
         hex_spent = self.hex_tokens_spent + tokens if job == "practice_hex" else self.hex_tokens_spent
+        cu_spent = self.computer_use_tokens_spent
+        if self._computer_use_class(task_class) and job in ("practice_band", "practice_hex"):
+            cu_spent += tokens
         by_class = dict(self.hex_jobs_by_class)
         if job == "practice_hex" and task_class is not None:
             by_class[task_class] = by_class.get(task_class, 0) + 1
@@ -128,9 +162,39 @@ class JobQuota(BaseModel):
             update={
                 "tokens_spent": self.tokens_spent + tokens,
                 "hex_tokens_spent": hex_spent,
+                "computer_use_tokens_spent": cu_spent,
                 "hex_jobs_by_class": by_class,
             }
         )
+
+
+class StateManagement(BaseModel):
+    """Working-set residency and read-only caches (ADR-0018). T2; default offload is off."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    idle_offload_enabled: bool = False
+    quiet_threshold_s: float = Field(default=60.0, ge=0.0)
+    eligible_surfaces: list[str] = Field(
+        default_factory=lambda: ["workspace", "checkpoint", "retrieval_index"]
+    )
+    restore_latency_budget_frac: float = Field(default=0.05, ge=0.0, le=1.0)
+    tool_result_cache_enabled: bool = True
+    tool_result_cache_ttl_s: float = Field(default=120.0, ge=0.0)
+    retrieval_cache_enabled: bool = True
+    retrieval_cache_ttl_s: float = Field(default=30.0, ge=0.0)
+
+
+class IsolationSettings(BaseModel):
+    """Default execution isolation. External computer is opt-in only (ADR-0019)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    default_backend: Literal["container", "local"] = "container"
+    allow_external_computer: bool = False
+    long_lived_computer_backend: bool = False
+    external_computer_ttl_seconds: int = Field(default=3600, ge=1)
+    external_computer_allowlist: list[str] = Field(default_factory=list)
 
 
 class Policy(BaseModel):
@@ -157,4 +221,6 @@ class Policy(BaseModel):
     improvement: ImprovementFlags = Field(default_factory=ImprovementFlags)
     improvement_limits: ImprovementLimits = Field(default_factory=ImprovementLimits)
     job_quota: JobQuota = Field(default_factory=JobQuota)
+    state_management: StateManagement = Field(default_factory=StateManagement)
+    isolation: IsolationSettings = Field(default_factory=IsolationSettings)
     notes: list[str] = Field(default_factory=list)

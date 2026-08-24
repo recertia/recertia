@@ -84,6 +84,8 @@ the chapter text itself is inlined here so this file is readable offline.
 - [ADR-0015: Search and compression live on the improvement plane](#ch-adr-0015-improvement-plane-search) — `adr/0015-improvement-plane-search.md`
 - [ADR-0016: Interval-bounded retirement](#ch-adr-0016-interval-bounded-retirement) — `adr/0016-interval-bounded-retirement.md`
 - [ADR-0017: Version-write budget is a first-class dimension](#ch-adr-0017-version-write-budget) — `adr/0017-version-write-budget.md`
+- [ADR-0018: Idle-state offloading for working-set residency](#ch-adr-0018-idle-state-offloading) — `adr/0018-idle-state-offloading.md`
+- [ADR-0019: External trajectories and optional computer-use backends](#ch-adr-0019-external-trajectories) — `adr/0019-external-trajectories.md`
 
 ### Part IV — Assumptions and references
 
@@ -5969,6 +5971,157 @@ route or a sixteenth node ([ADR-0005](adr/0005-self-modification-boundary.md),
 - `max_versions_written = 0` is a finite cap that admits no writes.
 - Schema regeneration is required (`BudgetReservation.versions_written`).
 
+<a id="ch-adr-0018-idle-state-offloading"></a>
+
+> Source: [`adr/0018-idle-state-offloading.md`](adr/0018-idle-state-offloading.md)
+
+# ADR-0018: Idle-state offloading for working-set residency
+
+- **Status:** accepted
+- **Date:** 2026-08-22
+- **Related:** [ADR-0002](adr/0002-plural-memory.md) (plural memory), [ADR-0004](adr/0004-offline-improvement-plane.md) (offline improvement plane), [ADR-0005](adr/0005-self-modification-boundary.md) (tiers), [ADR-0011](adr/0011-trajectory-and-counterfactual-replay.md) (trajectory already on disk), [ADR-0015](adr/0015-improvement-plane-search.md) (fifteen-node topology is T3)
+- **Evidence:** Chang et al., "From LLM Inference to Agentic Workloads," [arXiv:2608.15127](https://arxiv.org/abs/2608.15127) (AgentSysBench)
+
+## Context
+
+AgentSysBench reports production-shaped agentic sessions that (1) peak at ~28 GB of *sandbox working-set*, (2) sit idle for minutes to hours between active steps, and (3) drop resident memory ~4.6× when that working-set is offloaded rather than held live. Tool-result caching on the same traces cut redundant search calls by 35.2%.
+
+Those numbers do not describe Recertia's current process:
+
+- Durable planes already live on SQLite / JSONL / blobs under `.recertia/` ([ADR-0002](adr/0002-plural-memory.md)). Serialising the episodic store "to the durable store" is a no-op.
+- The container backend is one-shot: `--rm`, `--memory 512m`, `--cpus 1`, bind-mounted host workdir (`src/recertia/solver/container.py`). Recertia does **not** hold a live 28 GB sandbox between hops.
+- Trajectories are already append-only JSONL on disk, read on demand (`src/recertia/trajectory/store.py`; [ADR-0011](adr/0011-trajectory-and-counterfactual-replay.md)).
+- Retention already GC's aged snapshots, transcripts, and workspaces (`src/recertia/retention.py`). That is deletion, not resumable offload.
+
+What *does* accumulate, and what this ADR is about:
+
+1. Host workdirs and `WorkspaceSnapshot` trees for paused / async / Practice runs that are still resumable.
+2. In-process retrieval index pages and large `RunState` fields (`route_log`, snapshot lists) kept resident between hops in the API worker.
+3. Concurrent Practice density: N workdirs × N checkpoint blobs, not N live containers.
+
+Without an explicit idle lifecycle, operators cannot tell productive RSS from idle holding cost, and Practice cannot scale session count without copying the AgentSysBench failure mode as soon as we keep sandboxes longer.
+
+## Decision
+
+Introduce **residency control** for already-persisted working-set, not a second copy of durable memory.
+
+1. Extend run / workspace status with an explicit `idle` lifecycle distinct from `finalize`. A run is idle when there is no in-flight graph hop and no pending tool subprocess beyond a configurable quiet threshold. `finalize` remains terminal ([ADR-0015](adr/0015-improvement-plane-search.md): this is not a sixteenth node).
+2. `offload()` / `restore()` on the **working-set surfaces** only:
+   - idle host workdirs and cold `WorkspaceSnapshot` trees,
+   - large checkpoint blobs not required for the next hop,
+   - cold retrieval postings / vector pages not in the active bundle.
+3. Evict the in-memory (or unpacked-on-disk) representation; keep a handle: path, content hash, byte size, offloaded_at.
+4. On next hop, `resume`, or retrieve, restore transparently **before** the hop proceeds. Restore is a named telemetry span (`idle.restore`); it MUST NOT be folded into task-class step latency or `cost_per_solved_task`.
+5. Always-hot: active skill set, current identity / policy, in-flight attempt, frozen criteria, short-term working context, eval harness. These are never eligible.
+
+v1 pack trigger is the orchestrator pause (`max_steps` slice in `GraphOrchestrator._execute`), not a between-hop timer. `quiet_threshold_s` is the telemetry floor for counting `idle_gap_ms`; it does not itself pack.
+
+Offloading is optional and policy-controlled (`state_management` in `policy/default.json`, T2). It never mutates approved skill content, policy, criteria, or the durable versioned record. It only changes residency of already-persisted bytes.
+
+Eligible planes are T0 derived/rebuildable surfaces (`recertia.workspace`, `recertia.retrieval`, `recertia.graph` checkpoints). Sandbox *policy* remains T3. If a future long-lived container is introduced, its pause/checkpoint path is an implementation of this ADR, not a new tier.
+
+Read-only tool-result and retrieval caches are the same decision: exact-match, snapshot-keyed, writes never stored. They are T0 and rebuildable.
+
+A prefix-tree view over existing trajectory JSONL is derived, not a second event stream ([ADR-0011](adr/0011-trajectory-and-counterfactual-replay.md)).
+
+## Rationale
+
+- Matches the AgentSysBench finding that matters (idle-but-live working-set), translated onto Recertia's actual execution model instead of cargo-culting their 28 GB sandbox.
+- Preserves exact resumability required by async API runs and Practice jobs.
+- Fits [ADR-0002](adr/0002-plural-memory.md) (planes already split) and [ADR-0004](adr/0004-offline-improvement-plane.md) (Practice density without touching Execution writes).
+- Does not grow the graph ([ADR-0015](adr/0015-improvement-plane-search.md)) and does not write approved state ([ADR-0005](adr/0005-self-modification-boundary.md)).
+
+## Consequences
+
+**Positive**
+
+- Lower peak RSS and higher concurrent Practice / async-run density once idle holding is the dominant term.
+- Cost attribution: productive compute vs idle holding (`idle_holding_bytes` vs `productive_bytes`).
+- A defined hook for a future long-lived sandbox, so later phases cannot quietly reintroduce 28 GB sessions.
+
+**Trade-offs / costs**
+
+- Restore latency on cold access. Budget: < 5 % of median hop time, measured as `idle.restore`, not as solve latency.
+- New policy keys. Untuned defaults must be safe: offload **off** until a golden-class RSS baseline exists.
+- Snapshot / workdir round-trips must be hash-checked. A restore that does not match the handle hash is a `RoutingError`, not a silent continue.
+
+**Non-goals**
+
+- Does not re-serialise SQLite / JSONL stores that are already durable.
+- Does not alter promotion, retirement, or "only keep what still works."
+- Does not move any write of approved state onto the Execution plane.
+- Does not replace Curator, Practice, Recertifier, or retention GC. Retention deletes; offload parks.
+- Does not add a graph node, a serving proxy, or weight updates.
+- Does not claim the AgentSysBench 4.6× until Recertia's own idle-heavy sessions are measured.
+
+## Implementation sketch
+
+- Checkpoint / run metadata: pack trigger is the orchestrator pause (`max_steps` slice). Watcher lives in the engine, not a new node.
+- Working-set packer: content-addressed tarball; handle records hash + bytes. Restore is unpack + hash verify.
+- Retrieval: page-level unload of embeddings (`SkillIndex.unload_embeddings`); `retriever.search` faults them back in. Invalidate on index rebuild / skill promotion (already T0).
+- Policy keys under `state_management` (T2): `idle_offload_enabled` (default false), `quiet_threshold_s`, `eligible_surfaces`, `restore_latency_budget_frac` (default 0.05), read-only cache flags (default on).
+- Metrics (telemetry spans/events, not a new subsystem): `component_class`, `rss_bytes`, `workdir_bytes`, `idle_gap_ms` on `node.finished`; canonical keys on `tool.invoked` / `retrieve.queried`; `model.completed` from `ModelClient.complete`.
+- Tests: round-trip snapshot fidelity (hash); resume after forced idle; fixture six-property snapshot. Golden-class RSS remains unmeasured.
+
+## References
+
+- Chang et al., "From LLM Inference to Agentic Workloads: Characterization and Implications for Serving Systems," arXiv:2608.15127.
+- Existing Recertia paths: `solver/container.py`, `workspace/snapshot.py`, `trajectory/store.py`, `retention.py`, `graph/engine.py`.
+
+<a id="ch-adr-0019-external-trajectories"></a>
+
+> Source: [`adr/0019-external-trajectories.md`](adr/0019-external-trajectories.md)
+
+# ADR-0019: External trajectories and optional computer-use backends
+
+- **Status:** accepted
+- **Date:** 2026-08-22 (rewrite 2026-08-24 against shipped main)
+- **Related:** [ADR-0002](adr/0002-plural-memory.md), [ADR-0003](adr/0003-criteria-preregistration.md), [ADR-0004](adr/0004-offline-improvement-plane.md), [ADR-0005](adr/0005-self-modification-boundary.md), [ADR-0011](adr/0011-trajectory-and-counterfactual-replay.md), [ADR-0012](adr/0012-product-console-surfaces.md), [ADR-0015](adr/0015-improvement-plane-search.md)
+- **Companion:** [plan](plans/2026-08-22-external-trajectories-and-computer-use-goldens.md)
+
+## Context
+
+Recertia writes durable memory only after automatic validation, human review, and measured lift against a memory-off control arm. It must degrade to a competent no-memory agent and must never treat an external agent's internal state as authoritative.
+
+Teach-once recordings, bug-reproduction evidence packs, playtest UI sequences, and docs-auditor diffs are high-value trajectories currently outside Recertia's native runs. Some of those traces want a longer-lived computer than the default `--rm` container. Recertia absorbs the traces as candidate material; it does not become a Bot fleet.
+
+A draft on closed PR #33 duplicated `TrajectoryImport`, used kebab task-class names, and added `Policy.improvement.external_trajectory_import`. Main already shipped a different contract (#35) and a Phase 0 CLI (#39). This ADR binds to **that** contract.
+
+## Decision
+
+1. **TrajectoryImport** (`contracts/trajectory_import.py`, shipped) is the only ingest. `ProvenanceBundle` comes from `audited_task_state` (`source`, not `actor`). Incomplete provenance or an empty environment descriptor is rejected. Import is append-only and never mutates an existing Recertia run. There is **no** `Policy.external_trajectory_import` flag; the CLI/HTTP surface is the gate.
+2. **Golden task classes** are snake_case, matching `ComputerUseTaskClass` and `evals/golden/{bug_reproduction,playtest_operator,docs_auditor}/`. Skill documents still use kebab `SkillVersion.task_class` (`bug-reproduction`); distill maps snake → kebab. Goldens stay eval-firewalled (`is_eval_fixture=True`) and are **not** on the repo-chore promotion gate.
+3. **Promotion path** is the existing Improvement-plane flow: episodic case → distill (candidate only) → review → control-arm measurement → possible `promote_to_approved`. No bypass of retrieve-before-invent, criteria lock, Wilson lift, or the performance floor. `reexecutable=false` stays episodic. `import_may_promote` is informational; this path never writes `approved`.
+4. **Distill** (`recertia trajectory distill`) authors a **candidate** from a reexecutable import that has replayable shell steps and a non-`true` command criterion. It refuses no-op skills. Distill does not promote.
+5. **Pending proposal** is queued on ingest only when `import_may_promote` is true (reexecutable + auditor re-verify + criteria snapshot). Status is `pending`. Not approved.
+6. **Optional `external_computer` tool** is registered (`side_effect=external`). Default execution remains `--rm`, network-none, per-attempt workdir. Long-lived sessions are opt-in via `isolation.allow_external_computer`, `isolation.long_lived_computer_backend`, non-empty `isolation.external_computer_allowlist`, hard TTL. The handler is a **gate**: it refuses unless those flags are on, and even then does not open a standing VM. Approved skill state is never written from this path.
+7. **Practice density** stays under `JobQuota.computer_use_practice_share` (snake task classes). Operator briefs (stuck jobs, lift-by-class, redundancy) are projections over Systems. Computer-use lift language is "not established" until `min_independent_runs`.
+8. **No topology or product-surface expansion.** No new graph nodes, no multi-Bot fleet, no always-on named teammate.
+
+## Consequences
+
+### Positive
+
+- Computer-use trajectories enter episodic → procedural under Recertia's honesty layer, on the contract that already shipped.
+- Isolation defaults and measurement integrity stay unchanged on the common path.
+
+### Negative / trade-offs
+
+- Control-arm trials on computer-use skills cost more; they start as shadow / JobQuota share.
+- Import validation is a new rejection surface.
+- Operators must treat any long-lived computer as an explicit exception.
+- Snake (goldens / Goal) vs kebab (SkillVersion) requires an explicit map at distill time.
+
+### Neutral / unchanged
+
+- Plane separation, review gate, versioned lineage, "only memory that still works gets kept."
+- Degrades cleanly to a no-memory competent agent.
+- MEA three-layer activation remains default-off.
+
+## Rollback
+
+Any promotion that cannot be reversed, any control-arm that cannot be executed, any relaxation of default isolation, or any surface that looks like a standing Bot.
+
 ---
 
 # Part IV — Assumptions and references
@@ -6481,6 +6634,8 @@ interval are numbers.
 | **Phantom Gains: Auditing Self-Improvement Against a Measured Null**, Xu, Yan, Chen, and Kechadi, arXiv:2608.20290, 2026 **[F]** | Item-level learned/corrupted ledgers invert findings without a measured null; greedy+batching manufactures transitions on a frozen model. Confirms Wilson / `not established` / ablation-arm honesty at transition grain. See [§1.11](#111-phantom-gains-every-transition-statistic-needs-a-measured-null-confirming-not-changing) |
 | **Large Language Model Agents Are Not Always Faithful Self-Evolvers**, Zhao et al., arXiv:2601.22436, 2026 **[F]** | Causal interventions show agents depend on raw experience but frequently ignore or misinterpret condensed experience. Supports faithfulness tests on retrieved skills via trajectory events, more specific/actionable skill content, and uncertainty-gated retrieval |
 | **Building Multi-Agent Systems: When and How to Use Them**, Morgan et al., ICIS 2025 **[F]** | Practical decision checklist (context overflow, specialization, parallelism, high risk, maintainability). Supports keeping single-agent default and using structured handoffs / local-context protection only if measurement shows a clear ceiling |
+| **From LLM Inference to Agentic Workloads: Characterization and Implications for Serving Systems**, Chang et al., arXiv:2608.15127, 2026 **[F]** | Six properties of agentic workloads; sandbox working-set peaks ~28 GB; idle intervals of minutes–hours; state offloading 4.6× on *held-live* sandboxes; tool-result caching cut redundant search 35.2%. Recertia containers are `--rm` / 512 MiB / one command, so the 4.6× does **not** import. Mapped as ADR-0018 working-set residency (workdirs, snapshots, cold index pages) plus a read-only tool/retrieve cache. Default offload remains off until Recertia RSS is baselined |
+| **ClawGym II: Exploring Black-Box RL on Agent Harness**, Song et al., arXiv:2608.16798, 2026 **[F]** | Sandbox concurrent rollouts, serving-proxy capture, prefix-tree reconstruction, PPO/GRPO over recovered trees. Recertia takes capture at `ModelClient.complete` (no new HTTP proxy; ADR-0011 out-of-scope) and a derived prefix-tree view over existing trajectory JSONL. Weight updates / mix-harness training rejected (ADR-0005); Improvement-plane output remains proposals gated by golden + control-arm lift |
 
 ### 5.1 Long-horizon audited state and control planes (2026 confirmatory)
 

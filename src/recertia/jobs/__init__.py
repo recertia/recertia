@@ -113,7 +113,14 @@ class JobRunner:
     def admit(self, job: JobPriority, *, task_class: str | None = None, tokens: int = 0) -> bool:
         return self.quota.can_admit(job, task_class=task_class, tokens=tokens)
 
-    def run(self, job_name: str, fn: Callable[[], list[Proposal]], *, budget: JobBudget) -> JobResult:
+    def run(
+        self,
+        job_name: str,
+        fn: Callable[[], list[Proposal]],
+        *,
+        budget: JobBudget,
+        task_class: str | None = None,
+    ) -> JobResult:
         priority = resolve_job_priority(job_name)
         tokens = budget.max_tokens
         if priority in {"practice_hex", "compress"}:
@@ -127,13 +134,15 @@ class JobRunner:
             )
             if skip:
                 return JobResult(job=job_name, proposals=[], skipped=skip)
-        if priority is not None and not self.admit(priority, tokens=tokens):
+        if priority is not None and not self.admit(
+            priority, tokens=tokens, task_class=task_class
+        ):
             return JobResult(job=job_name, proposals=[], skipped=f"quota refused {job_name}")
         proposals = fn()
         if len(proposals) > budget.max_proposals:
             raise JobError(f"job {job_name} exceeded max_proposals={budget.max_proposals}")
         if priority is not None and tokens:
-            self.quota = self.quota.charge(priority, tokens)
+            self.quota = self.quota.charge(priority, tokens, task_class=task_class)
             self._persist_quota()
         return JobResult(job=job_name, proposals=proposals[: budget.max_proposals])
 

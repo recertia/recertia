@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Systems residency (ADR-0018)** — hop telemetry emits `component_class`,
+  `rss_bytes`, `workdir_bytes`, `idle_gap_ms` on `node.finished`; canonical keys
+  on `tool.invoked` / `retrieve.queried`; `model.completed` from `ModelClient.complete`.
+  Read-only tool-result and retrieval caches (writes never cached; index rebuild
+  flushes). Idle workdir offload is hash-checked and **default off**
+  (`state_management.idle_offload_enabled`). Prefix-tree is a derived view over
+  existing trajectory JSONL. `recertia systems` prints the six-property snapshot.
+  Fixture baseline is not a 4.6× claim; golden-class RSS is still unmeasured.
+
+- **External trajectories (ADR-0019 rewrite)** — binds to the shipped
+  `TrajectoryImport` contract (ProvenanceBundle from `audited_task_state`, snake
+  `bug_reproduction` / `playtest_operator` / `docs_auditor`). No
+  `Policy.external_trajectory_import` flag. `recertia trajectory distill` authors
+  a **candidate** only (kebab `SkillVersion.task_class`). `POST /v1/trajectories/import`
+  is the HTTP twin of the CLI. Reexecutable imports with a criteria snapshot
+  queue a *pending* proposal, never approved. `external_computer` is registered
+  as an `external` tool and refuses unless isolation flags + allow-list are set;
+  even then this build does not open a standing VM. JobQuota
+  `computer_use_practice_share` (default 0.15). `recertia systems --brief` prints
+  stuck/lift/redundancy with honest "not established". Goldens stay eval-firewalled
+  and off the repo-chore promotion gate.
+
 - **MEA graph wiring** — intake binds an `AuditedTaskState` sidecar when three-layer
   activation is true (`policy.mea_enabled` + `Goal.mea_opt_in` +
   `Task.execution_strategy=="mea"`); validate is the fresh-context auditor (CAS);

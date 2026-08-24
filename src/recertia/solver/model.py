@@ -92,6 +92,16 @@ class ModelClient(ABC):
                 self.spend.cost_usd += response.cost_usd
                 if attempt > 0:
                     self.spend.retries += attempt
+                from recertia.telemetry import emit_in_run
+
+                emit_in_run(
+                    "model.completed",
+                    role=self.role,
+                    model=response.model,
+                    tokens=response.prompt_tokens + response.completion_tokens,
+                    latency_ms=round(response.latency_s * 1000.0, 3),
+                    retries=attempt,
+                )
                 return response
             except Exception as exc:  # noqa: BLE001 — retryable boundary
                 last_exc = exc

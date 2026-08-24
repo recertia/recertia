@@ -103,3 +103,148 @@ def test_cli_import_rejects_and_accepts(tmp_path: Path) -> None:
     assert body["ok"] is True
     assert body["promoted"] is False
     assert body["import_id"] == "imp-cli"
+
+
+def _distillable(**overrides: object) -> dict:
+    payload = _valid_payload(
+        import_id="imp-d",
+        reexecutable=True,
+        steps=[
+            {
+                "seq": 0,
+                "action": "python -c \"open('x','w').write('ok')\"",
+                "input": "python -c \"open('x','w').write('ok')\"",
+            }
+        ],
+        criteria_snapshot=[
+            {
+                "id": "x-exists",
+                "kind": "command",
+                "run": "test -f x",
+                "source": "caller",
+                "weight": 1.0,
+            }
+        ],
+    )
+    payload.update(overrides)
+    return payload
+
+
+def test_reexecutable_with_criteria_queues_pending_proposal(tmp_path: Path) -> None:
+    result = ingest_trajectory(_distillable(), runs_root=tmp_path)
+    assert result.promoted is False
+    assert result.may_promote is True
+    assert result.proposal_id is not None
+    from recertia.proposals.store import ProposalStore
+
+    store = ProposalStore(tmp_path / "runs" / "default" / "proposals.sqlite")
+    try:
+        rec = store.get(result.proposal_id, tenant_id="default")
+        assert rec is not None
+        assert rec.kind == "external_trajectory"
+        assert rec.status == "pending"
+        assert rec.payload.get("promoted") is False
+    finally:
+        store.close()
+
+
+def test_distill_imported_never_promotes(tmp_path: Path) -> None:
+    from contracts.trajectory_import import TrajectoryImport
+    from recertia.distill.imported import DistillRejected, distill_imported
+    from recertia.memory.procedural.store import SkillStore
+
+    store = SkillStore(tmp_path / "skills")
+    frozen = TrajectoryImport.model_validate(_valid_payload(reexecutable=False))
+    with pytest.raises(DistillRejected):
+        distill_imported(frozen, store, task_class="bug_reproduction")
+
+    browser_only = TrajectoryImport.model_validate(
+        _valid_payload(import_id="imp-browser", reexecutable=True)
+    )
+    with pytest.raises(DistillRejected, match="shell steps|command criterion"):
+        distill_imported(browser_only, store, task_class="bug_reproduction")
+
+    imported = TrajectoryImport.model_validate(_distillable())
+    version = distill_imported(imported, store, task_class="bug_reproduction")
+    status = store.get_status(version.skill_id, version.version)
+    assert version.skill_id == "import-imp-d"
+    assert version.task_class == "bug-reproduction"
+    assert status is not None
+    assert status.lifecycle == "candidate"
+    assert status.active is False
+    assert version.steps[0].inputs["command"] != "true"
+
+
+def test_distill_rejects_unknown_task_class(tmp_path: Path) -> None:
+    from contracts.trajectory_import import TrajectoryImport
+    from recertia.distill.imported import DistillRejected, distill_imported
+    from recertia.memory.procedural.store import SkillStore
+
+    with pytest.raises(DistillRejected, match="computer-use"):
+        distill_imported(
+            TrajectoryImport.model_validate(_distillable()),
+            SkillStore(tmp_path / "s"),
+            task_class="repo-chore",
+        )
+
+
+def test_cli_distill_authors_candidate(tmp_path: Path) -> None:
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps(_distillable(import_id="imp-cli-d")), encoding="utf-8")
+    skills = tmp_path / "skills"
+    ok = runner.invoke(
+        app,
+        [
+            "trajectory",
+            "distill",
+            str(good),
+            "--skills-root",
+            str(skills),
+            "--task-class",
+            "bug_reproduction",
+        ],
+    )
+    assert ok.exit_code == 0, ok.output
+    body = json.loads(ok.output)
+    assert body["ok"] is True
+    assert body["promoted"] is False
+    assert body["lifecycle"] == "candidate"
+    assert body["task_class"] == "bug-reproduction"
+
+
+def test_external_computer_tool_registered_and_refuses_by_default(tmp_path: Path) -> None:
+    from recertia.solver.registry import default_registry
+    from recertia.solver.result_cache import ToolResultCache
+
+    registry = default_registry()
+    assert "external_computer" in registry.names()
+    tool = registry.get("external_computer")
+    assert tool.side_effect == "external"
+    result = registry.handler("external_computer")({"backend": "grok_bot"}, tmp_path)
+    assert result.ok is False
+    assert "allow_external_computer is false" in result.stderr
+    cache = ToolResultCache()
+    cache.store(tool, {"backend": "grok_bot"}, result, snapshot_hash="x")
+    assert cache.lookup(tool, {"backend": "grok_bot"}, snapshot_hash="x") is None
+    assert cache.stats.skipped >= 1
+
+
+def test_operator_brief_honest_when_no_lift() -> None:
+    from recertia.ops.operator_brief import brief_from_events
+    from recertia.telemetry import SpanEvent
+
+    events = [
+        SpanEvent(name="tool.invoked", attributes={"canonical_key": "a"}),
+        SpanEvent(name="tool.invoked", attributes={"canonical_key": "a"}),
+    ]
+    brief = brief_from_events(events, task_classes=["bug_reproduction"])
+    assert brief.lift_by_task_class[0].established is False
+    assert "not established" in brief.lift_by_task_class[0].detail
+    assert brief.redundancy["tool_redundancy_rate"] == 0.5
+
+
+def test_no_external_trajectory_import_policy_flag() -> None:
+    from recertia.policy_load import load_policy
+
+    policy = load_policy()
+    assert not hasattr(policy.improvement, "external_trajectory_import")
