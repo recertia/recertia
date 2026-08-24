@@ -24,10 +24,14 @@
 - [Product console architecture](architecture/product-console.md)
 - [Goal packs (migration programs)](architecture/goal-packs.md)
 
-**Plans (design, not yet engineering):**
+**Shipped (engineering on `main`):**
 
 - [High-confidence measurement items (Ye/Zhao)](plans/2026-08-high-confidence-items-implementation.md)
-- [External trajectories & computer-use goldens (2026-08-22)](plans/2026-08-22-external-trajectories-and-computer-use-goldens.md)
+- MEA Audited Task-State (Phases 0–3 scaffolding + graph wiring + lift golden; default off)
+
+**Plans (partial engineering):**
+
+- [External trajectories & computer-use goldens (2026-08-22)](plans/2026-08-22-external-trajectories-and-computer-use-goldens.md) — Phase 0 (contract, `recertia trajectory import`, skill-free goldens) landed; Phase 1 distill / optional computer backend / ADR still open
 
 Normative requirements are in the [specifications index](specifications.md).
 Forward work is in the

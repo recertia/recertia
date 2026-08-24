@@ -17,6 +17,7 @@ on:
       - "scripts/**"
       - "tests/**"
       - "schema/**"
+      - "evals/**"
       - "skills/**"
       - "pyproject.toml"
       - "conftest.py"

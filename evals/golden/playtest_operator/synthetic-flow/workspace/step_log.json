@@ -1,0 +1,1 @@
+{"steps": [{"seq": 0, "action": "open", "target": "/login", "ok": true}, {"seq": 1, "action": "assert", "target": "#submit", "ok": true}]}

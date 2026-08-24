@@ -1,0 +1,5 @@
+{
+  "request": "Synthetic docs-auditor golden: product-vs-docs diff plus missing-page list",
+  "execution_strategy": "single",
+  "script": ["true"]
+}

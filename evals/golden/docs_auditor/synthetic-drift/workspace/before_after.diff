@@ -1,0 +1,5 @@
+--- docs/README.md
++++ src/cli.py
+@@ -1 +1 @@
+-# ships recertia docs
++# ships recertia cli

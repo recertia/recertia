@@ -1,5 +1,5 @@
 """``recertia`` CLI wiring: ``run``, ``runs``, ``ledger``, ``skills``, ``keys``,
-``lift``, ``jobs``, ``gc``, ``task-state``.
+``lift``, ``jobs``, ``gc``, ``task-state``, ``trajectory``.
 
 Command implementations live in sibling modules; this file builds the Typer app and
 re-exports the historical command callables for tests that import them from ``main``.
@@ -41,6 +41,7 @@ from recertia.cli.skills import (
 from recertia.cli.soak_cmd import register_soak_commands
 from recertia.cli.tabletop_cmd import register_tabletop_commands
 from recertia.cli.task_state_cmd import register_task_state_commands
+from recertia.cli.trajectory_cmd import register_trajectory_commands
 from recertia.cli.workspaces import register_workspaces_commands
 
 app = typer.Typer(help="Recertia: a self-improving agent system.")
@@ -66,6 +67,7 @@ register_tabletop_commands(app)
 register_canary_commands(app)
 register_soak_commands(app)
 register_task_state_commands(app)
+register_trajectory_commands(app)
 
 __all__ = [
     "app",

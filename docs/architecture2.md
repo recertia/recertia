@@ -6482,6 +6482,18 @@ interval are numbers.
 | **Large Language Model Agents Are Not Always Faithful Self-Evolvers**, Zhao et al., arXiv:2601.22436, 2026 **[F]** | Causal interventions show agents depend on raw experience but frequently ignore or misinterpret condensed experience. Supports faithfulness tests on retrieved skills via trajectory events, more specific/actionable skill content, and uncertainty-gated retrieval |
 | **Building Multi-Agent Systems: When and How to Use Them**, Morgan et al., ICIS 2025 **[F]** | Practical decision checklist (context overflow, specialization, parallelism, high risk, maintainability). Supports keeping single-agent default and using structured handoffs / local-context protection only if measurement shows a clear ceiling |
 
+### 5.1 Long-horizon audited state and control planes (2026 confirmatory)
+
+Independent 2026 work that converges on external verified state, independent audit before commit, and deterministic control-plane governance. These entries **confirm** rather than reshape the design; they strengthen grounding for optional MEA-style long-horizon execution and for the external-trajectories plan.
+
+| Work | Relevance |
+| --- | --- |
+| **LongHorizon-Harness: Advancing Long-Horizon Agents for Real-World Tasks**, Ma et al., arXiv:2608.01964, 2026 **[F]** | Manage-Execute-Audit (MEA) loop; task state held outside the executor and updated only with independently verified environment facts; large multi-model gains on WeaveBench, Terminal-Bench, and OSWorld. Strong confirmation of external verified state + independent auditor |
+| **StateM: Reaching 95.3% Raw Accuracy… via Harness Scaling**, Qin et al., arXiv:2608.15089, 2026 **[F]** | Durable states, phase-local context, checked transitions, recoverable runbooks; harness-level gains without weight changes (Terminal-Bench 2.1 up to 95.3%) |
+| **A Deterministic Control Plane for LLM Coding Agents**, Madatha, arXiv:2606.26924, 2026 **[F]** | Configuration, permissions, and state transitions should live in deterministic code, not further LLM orchestration |
+| **Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for Coding Agents?**, Gloaguen et al., arXiv:2602.11988, 2026 **[F]** | Repository-level context files frequently increase cost without improving resolution rates; supports precise machine-checkable criteria over broad narrative dumps |
+| **AgentPoison: Red-teaming LLM Agents via Poisoning Memory or Knowledge Bases**, Chen et al., arXiv:2407.12784, 2024 **[F]** | Memory / knowledge-base poisoning achieves high ASR at very low poison rates; later 2026 studies reconfirm why memory writes must remain gated and provenance-required |
+
 ## 6. Ideas used without a specific citation
 
 These are standard practice in other fields, adapted here rather than taken from agent
