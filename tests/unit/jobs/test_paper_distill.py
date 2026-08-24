@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from recertia.distill.paper import distill_paper, facts_from_paper
+from recertia.jobs import Proposal
 from recertia.jobs.arxiv import ArxivPaper
 from recertia.jobs.paper_pipeline import paper_from_payload, submit_paper_proposals
-from recertia.jobs import Proposal
 from recertia.memory.procedural.store import SkillStore
 from recertia.memory.semantic import FactStore
 
