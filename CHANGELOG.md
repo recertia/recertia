@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Console / registry / distill extract** — `register_console_routes` is a
+  dispatcher over session / library / program modules (`console_deps.RouteState`
+  owns tenant/auth helpers). First-domain tool handlers live in
+  `recertia.solver.handlers`; `default_registry` only registers. Success, import,
+  and paper distill share `assert_candidate_hygiene` / `assert_non_noop_skill`
+  (true-noop steps and `true`/judge-only criteria refused; import/paper still
+  `require_clean`). Not a GA gate; no 16th graph node; job CLI/HTTP dispatch is
+  unchanged.
+
 - **RW-OR honesty** — remaining-work §8 and the milestone map mark OR1–OR3 as shipped (OG-7…OG-11 tests already on main). Unknown-slug cost uses defaults and is not vendor-exact.
 
 - **2026-08-24 landing extract** — one owner per seam: `ingest_trajectory` /

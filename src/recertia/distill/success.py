@@ -21,6 +21,7 @@ from contracts.skill import (
     SkillVersion,
     Step,
 )
+from recertia.distill.candidate import DistillRejected, assert_non_noop_skill, is_noop_command
 from recertia.distill.prior import load_authoring_prior
 from recertia.distill.reusability import assess_reusability
 from recertia.validation.sensitivity import author_sensitivity_proof, empty_negative_fixture
@@ -52,8 +53,13 @@ def distill_success(
     task_class = state.task.task_class or "repo-chore"
     request = state.task.request or ""
     commands = [c for c in commands if c.strip() and not c.strip().startswith("true  #")]
+    commands = [c for c in commands if not is_noop_command(c)]
     if not commands:
-        commands = _infer_commands_from_workdir(workdir, request)
+        commands = [
+            c
+            for c in _infer_commands_from_workdir(workdir, request)
+            if c.strip() and not is_noop_command(c)
+        ]
 
     env_tools, env_backend = _environment_summary(environment)
     locked = locked_criteria if locked_criteria is not None else list(state.criteria)
@@ -70,16 +76,13 @@ def distill_success(
             resources=[],
         )
         for i, cmd in enumerate(parametrized, start=1)
+        if not is_noop_command(cmd)
     ][: prior.max_steps]
+    facts = _extract_facts(state, workdir, skill_id)
     if not steps:
-        steps = [
-            Step(
-                id="step_1",
-                tool="shell",
-                intent=f"No-op placeholder for {skill_id} pending richer transcript",
-                inputs={"command": "true"},
-            )
-        ]
+        return None, facts, _true_noop_verdict(
+            "no replayable shell steps; refuse to author a true-noop skill"
+        )
 
     check_cmd = _default_check_command(workdir, request)
     cert = _cert_from_locked(locked, check_cmd)
@@ -134,6 +137,11 @@ def distill_success(
         hygiene=Hygiene(secret_scan="skipped", scanned_at=None),
     )
 
+    try:
+        assert_non_noop_skill(version)
+    except DistillRejected as exc:
+        return None, facts, _true_noop_verdict(str(exc))
+
     verdict = assess_reusability(
         version,
         task_class_sightings=task_class_sightings,
@@ -152,10 +160,21 @@ def distill_success(
             }
         )
 
-    facts = _extract_facts(state, workdir, skill_id)
     if verdict.verdict != "reusable":
         return None, facts, verdict
     return version, facts, verdict
+
+
+def _true_noop_verdict(reason: str) -> ReusabilityVerdict:
+    return ReusabilityVerdict(
+        verdict="one_off",
+        parameterisable=False,
+        context_free=True,
+        checkable=False,
+        not_duplicate=True,
+        bounded=True,
+        reason=reason,
+    )
 
 def _extract_parameters(
     request: str, commands: list[str]

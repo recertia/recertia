@@ -15,17 +15,16 @@ from typing import Any
 from contracts.criteria import SkillCertificationCriterion, mint_rejecting_proof
 from contracts.skill import Hygiene, Provenance, SkillVersion, Step
 from contracts.trajectory_import import TrajectoryImport, import_may_promote
+from recertia.distill.candidate import (
+    DistillRejected,
+    assert_candidate_hygiene,
+    is_noop_command,
+)
 from recertia.distill.task_class import is_computer_use_class, skill_task_class
-from recertia.memory.procedural.hygiene import require_clean
 from recertia.memory.procedural.store import SkillStore
 
 _NOW = datetime(2026, 8, 24, tzinfo=timezone.utc)
 _SKILL_ID_SAFE = re.compile(r"[^a-z0-9-]+")
-_NOOP_ACTIONS = frozenset({"true", "open", "click", "type", "scroll", "wait", "navigate"})
-
-
-class DistillRejected(ValueError):
-    """Import cannot become a candidate (not reexecutable, or no replayable steps)."""
 
 
 def skill_id_for_import(import_id: str) -> str:
@@ -39,7 +38,7 @@ def command_criteria_from_import(imported: TrajectoryImport) -> list[SkillCertif
     criteria: list[SkillCertificationCriterion] = []
     for raw in imported.criteria_snapshot:
         run = (raw.run or "").strip()
-        if raw.kind != "command" or not run or run == "true":
+        if raw.kind != "command" or is_noop_command(run):
             continue
         base = SkillCertificationCriterion(
             id=raw.id,
@@ -68,7 +67,7 @@ def replayable_shell_steps(imported: TrajectoryImport, *, limit: int = 12) -> li
     steps: list[Step] = []
     for step in imported.steps[:limit]:
         cmd = (step.input or step.action or "").strip()
-        if not cmd or cmd == "true" or cmd.lower() in _NOOP_ACTIONS:
+        if is_noop_command(cmd):
             continue
         steps.append(
             Step(
@@ -108,16 +107,16 @@ def distill_imported(
     if secrets:
         raise DistillRejected(f"hygiene scan failed ({', '.join(secrets)})")
     criteria = command_criteria_from_import(imported)
+    steps = replayable_shell_steps(imported)
     if not criteria:
         raise DistillRejected(
-            "no command criterion on the import; refuse to author a true-noop skill"
+            "no command criterion; refuse to author a true-noop skill"
         )
-    steps = replayable_shell_steps(imported)
     if not steps:
         raise DistillRejected("no replayable shell steps; refuse to author a true-noop skill")
     if not may:
         # Still a candidate: import_may_promote is the promotion bar, not the draft bar.
-        # Missing criteria already refused above; remaining reasons stay informational.
+        # Missing criteria already refused below; remaining reasons stay informational.
         _ = reason
     version = SkillVersion(
         skill_id=skill_id_for_import(imported.import_id),
@@ -141,7 +140,7 @@ def distill_imported(
         ),
         hygiene=Hygiene(secret_scan="passed", scanned_at=_NOW),
     )
-    return store.write_candidate(require_clean(version))
+    return store.write_candidate(assert_candidate_hygiene(version))
 
 
 def as_public_dict(version: SkillVersion, store: SkillStore) -> dict[str, Any]:
