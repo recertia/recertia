@@ -130,6 +130,21 @@ Optional executor kind `external_computer` (backend, allowlist policy, session T
 
 ## Configuration
 
+Phase 0 shipped **no** Policy fields for this plan. `recertia trajectory import` is
+the surface; `import_may_promote` is informational. Default isolation remains
+container (`--rm`, network-none). `ImprovementFlags.mea_enabled` stays false.
+
+These keys are **not** on `Policy` / `policy/default.json` today:
+
+- `improvement_flags.external_trajectory_import`
+- `improvement_flags.long_lived_computer_backend`
+- `job_quota.computer_use_practice_share`
+- `isolation.allow_external_computer`
+- `isolation.external_computer_ttl_seconds`
+
+The block below is the **proposed** Phase 1/2 surface (ADR still unwritten).
+Do not copy it into Policy until that ADR lands.
+
 ```json
 {
   "improvement_flags": {
