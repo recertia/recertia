@@ -20,6 +20,7 @@ SPLIT_DOCS: dict[str, tuple[str, ...]] = {
         "architecture/skill-composition.md",
         "architecture/library-lifecycle.md",
         "architecture/improvement-plane.md",
+        "architecture/arxiv-ingest.md",
         "architecture/operations.md",
         "architecture/measurement-integrity.md",
         "architecture/risk-and-governance.md",

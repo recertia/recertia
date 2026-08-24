@@ -57,8 +57,8 @@ RW-M2  Probe cadence + MetricReport completeness                  Phase 2 remain
 RW-A   Assumption status changes from traffic                     research, never a merge gate
 RW-LY  library_yield + retrieval_decay                            Phase 3 remaining CI
 RW-PC  Portfolio controller is the only path                      shipped
-RW-OR  OR1 docs/cost gate, OR2 robustness, OR3 presets            parallel with RW-GA
-RW-SUR Error envelope + remaining HTTP/CLI                        parallel; not a GA gate
+RW-OR  OR0–OR3 shipped (docs/cost honesty, robustness, presets)   shipped; parallel with RW-GA
+RW-SUR Error envelope + remaining HTTP/CLI (+ distill HTTP twin)  shipped; not a GA gate
 RW-HEX HEX / compress enablement                                  after a1 interval exists
 RW-C5  Console C5 + tenant threat model                           Phase-4 gate only
 ```
@@ -200,12 +200,13 @@ in production without an eval-compare note in the ledger.
 
 ## 8. RW-OR — OpenRouter polish (OR1–OR3)
 
-OR0 is shipped. Remaining OpenRouter polish:
+**Shipped.** OR0–OR3 are on `main`. Inventory row RW-OR matches this section.
+Configuring a gateway is still not evidence for `a1`.
 
-| Milestone | Work | Done when |
+| Milestone | Work | Status |
 | --- | --- | --- |
-| **OR1** | Docs gate: configuring a gateway MUST NOT be cited as evidence for `a1`. Price-override env already in go-live — add a CI check or test that `estimate_cost_usd` for an unknown slug uses defaults and `unavailable`/notes do not say "vendor-exact". | OG-7 (see spec) |
-| **OR2** | Default `max_tokens` via `RECERTIA_OPENAI_MAX_TOKENS` or EXTRA_BODY; map OpenRouter error JSON to `ProviderError`; tolerate list-shaped `message.content` text parts | OG-8…OG-10 |
+| **OR1** | Docs gate: configuring a gateway MUST NOT be cited as evidence for `a1`. Unknown slugs use default rates; `cost_is_vendor_exact` is false; `unavailable`/notes must not say "vendor-exact". Locked by `test_og7_unknown_slug_is_not_vendor_exact`. | shipped; OG-7 |
+| **OR2** | Default `max_tokens` via `RECERTIA_OPENAI_MAX_TOKENS` or EXTRA_BODY; map OpenRouter error JSON to `ProviderError`; tolerate list-shaped `message.content` text parts. Locked by OG-8…OG-10 tests. | shipped |
 | **OR3** | Server-side allowlist of `provider:slug` for Pilot; unknown slug → 400; SPA never stores keys | shipped; PC-7 / OG-11 |
 
 OR3 is optional for single-operator GA (env-level model is enough) but is implemented.
@@ -220,6 +221,8 @@ jobs, metrics, ledger, programs. The promotion-api "aspirational" list is C5 onl
 | --- | --- | --- |
 | `GET/POST /v1/reviews` | shipped | Alias of proposals until distill-review volume justifies a split |
 | `POST /v1/evals/runs` | shipped | Golden set against a library snapshot |
+| `POST /v1/trajectories/import` | shipped | HTTP twin of `recertia trajectory import`; never promotes |
+| `POST /v1/trajectories/distill` | shipped | Candidate-only twin of `recertia trajectory distill`; never writes approved |
 | `GET /v1/facts` · `/v1/cases` · `/v1/affordances` | shipped | Read non-procedural planes |
 | `POST /v1/memory/query` | shipped | Federated retrieve debug |
 | `GET /v1/policy` · `POST /v1/policy/proposals` | shipped | T2 change proposals; human approval + ledger |

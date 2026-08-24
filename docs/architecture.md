@@ -29,7 +29,7 @@
 - [High-confidence measurement items (Ye/Zhao)](plans/2026-08-high-confidence-items-implementation.md)
 - MEA Audited Task-State (Phases 0–3 scaffolding + graph wiring + lift golden; default off)
 - ADR-0018 systems residency (hop gauges, read-only caches, idle offload default-off, prefix-tree view, `recertia systems`). Fixture RSS is not a 4.6× claim.
-- ADR-0019 rewrite: `recertia trajectory distill` (candidate only), `POST /v1/trajectories/import`, pending proposal, gated `external_computer`. Names bind to `contracts.policy.COMPUTER_USE_TASK_CLASSES` (`bug_reproduction`, `playtest_operator`, `docs_auditor`) and `TrajectoryImport`. Snake on Goals/goldens; kebab only on `SkillVersion.task_class` via `skill_task_class`. Promotion-with-lift and a live computer backend remain open.
+- ADR-0019 rewrite: `recertia trajectory distill` / `POST /v1/trajectories/distill` (candidate only), `POST /v1/trajectories/import`, pending proposal, gated `external_computer`. Names bind to `contracts.policy.COMPUTER_USE_TASK_CLASSES` (`bug_reproduction`, `playtest_operator`, `docs_auditor`) and `TrajectoryImport`. Snake on Goals/goldens; kebab only on `SkillVersion.task_class` via `skill_task_class`. Promotion-with-lift and a live computer backend remain open.
 - 2026-08-24 landing extract — single owner per ingest/distill/cache/systems/hop-gauge seam; prefix tree stays a view; no 16th node.
 
 **Plans (partial engineering):**
