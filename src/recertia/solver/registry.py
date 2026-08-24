@@ -131,7 +131,7 @@ def _https_get(url: str, *, timeout_s: float, max_bytes: int) -> bytes:
 
 
 def default_registry() -> ToolRegistry:
-    """First-domain tools for repo-chore (shell, edit_file, read_file, grep, fetch, agent_subtask)."""
+    """First-domain tools plus the gated external_computer affordance (ADR-0019)."""
 
     registry = ToolRegistry()
 
@@ -422,5 +422,20 @@ def default_registry() -> ToolRegistry:
             description="Model-backed repair subtask (one command per iteration)",
         ),
         agent_subtask_handler,
+    )
+    from recertia.solver.external_computer import external_computer_handler
+
+    registry.register(
+        Tool(
+            name="external_computer",
+            side_effect="external",
+            description=(
+                "Optional allow-listed computer-use backend (ADR-0019). "
+                "Default remains --rm; never a security boundary."
+            ),
+            flaky=True,
+            error_signatures=("allow_external_computer is false", "no live backend"),
+        ),
+        external_computer_handler,
     )
     return registry

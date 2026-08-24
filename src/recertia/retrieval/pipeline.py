@@ -79,6 +79,9 @@ class Retriever:
         # Eval-only. Production callers (bootstrap, retrieve node, CLI search) omit this.
         # Constructor-only; not on RetrievalConfig so a policy flag cannot turn it on.
         self._bundle_hook = bundle_hook
+        from recertia.retrieval.cache import RetrievalCache
+
+        self.result_cache = RetrievalCache()
 
     @property
     def bundle_hook(self) -> BundleHook | None:
@@ -93,14 +96,20 @@ class Retriever:
     def rebuild(self, entries: list[tuple], *, library_fingerprint: str | None = None) -> str:
         """Rebuild the retrieval index from loaded skill rows (store-node hook)."""
 
-        return self._index.rebuild(entries, library_fingerprint=library_fingerprint)  # type: ignore[arg-type]
+        snapshot_id = self._index.rebuild(entries, library_fingerprint=library_fingerprint)  # type: ignore[arg-type]
+        self.result_cache.invalidate_all()
+        return snapshot_id
 
     def upsert(self, version, status, stats, *, library_fingerprint: str | None = None) -> str:
         """Incrementally index one skill version (store-node hook)."""
 
-        return self._index.upsert(
+        prior = self._index.snapshot_id()
+        snapshot_id = self._index.upsert(
             version, status, stats, library_fingerprint=library_fingerprint
         )
+        if prior:
+            self.result_cache.invalidate_snapshot(prior)
+        return snapshot_id
 
     def is_fresh(self, library_fingerprint: str) -> bool:
         """Whether the index matches a library with exactly this fingerprint."""
@@ -129,6 +138,21 @@ class Retriever:
         if suppress:
             return MemoryBundle(suppressed=True), explanation
 
+        from recertia.ops.systems import canonical_args_hash
+        from recertia.telemetry import emit_in_run
+
+        cached = self.result_cache.lookup(
+            query, snapshot_id=explanation.snapshot_id, env_fingerprint=env_fingerprint
+        )
+        if cached is not None:
+            emit_in_run(
+                "retrieve.queried",
+                cache="hit",
+                canonical_key=f"{explanation.snapshot_id}:{canonical_args_hash({'q': query})}",
+            )
+            emit_in_run("cache.hit", kind="retrieve")
+            return cached
+
         q_emb, lexical, vector = self._generate_candidates(query)
         explanation.lexical_hits = lexical
         explanation.vector_hits = vector
@@ -148,6 +172,19 @@ class Retriever:
         bundle = MemoryBundle(skills=candidates)
         if self._bundle_hook is not None:
             bundle = self._bundle_hook(bundle)
+        self.result_cache.store(
+            query,
+            bundle,
+            explanation,
+            snapshot_id=explanation.snapshot_id,
+            env_fingerprint=env_fingerprint,
+        )
+        emit_in_run(
+            "retrieve.queried",
+            cache="miss",
+            canonical_key=f"{explanation.snapshot_id}:{canonical_args_hash({'q': query})}",
+        )
+        emit_in_run("cache.miss", kind="retrieve")
         return bundle, explanation
 
 

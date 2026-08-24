@@ -4,7 +4,7 @@
   "$defs": {
     "ImprovementFlags": {
       "additionalProperties": false,
-      "description": "T2 algorithm flags. These MUST NOT gate graph topology (ADR-0015).\n\n``mea_enabled`` is the global policy layer of three-layer MEA activation\n(policy + Goal opt-in + runtime strategy). Default false keeps the\nsingle-request path as the zero-cost ordinary path.",
+      "description": "T2 algorithm flags. These MUST NOT gate graph topology (ADR-0015).\n\n``mea_enabled`` is the global policy layer of three-layer MEA activation\n(policy + Goal opt-in + runtime strategy). Default false keeps the\nsingle-request path as the zero-cost ordinary path.\n\nExternal trajectory *import* is CLI/HTTP-gated on the shipped\n``TrajectoryImport`` contract \u2014 there is no ``external_trajectory_import``\nflag (ADR-0019 rewrite).",
       "properties": {
         "miner_lint": {
           "default": true,
@@ -119,6 +119,46 @@
       "title": "ImprovementLimits",
       "type": "object"
     },
+    "IsolationSettings": {
+      "additionalProperties": false,
+      "description": "Default execution isolation. External computer is opt-in only (ADR-0019).",
+      "properties": {
+        "default_backend": {
+          "default": "container",
+          "enum": [
+            "container",
+            "local"
+          ],
+          "title": "Default Backend",
+          "type": "string"
+        },
+        "allow_external_computer": {
+          "default": false,
+          "title": "Allow External Computer",
+          "type": "boolean"
+        },
+        "long_lived_computer_backend": {
+          "default": false,
+          "title": "Long Lived Computer Backend",
+          "type": "boolean"
+        },
+        "external_computer_ttl_seconds": {
+          "default": 3600,
+          "minimum": 1,
+          "title": "External Computer Ttl Seconds",
+          "type": "integer"
+        },
+        "external_computer_allowlist": {
+          "items": {
+            "type": "string"
+          },
+          "title": "External Computer Allowlist",
+          "type": "array"
+        }
+      },
+      "title": "IsolationSettings",
+      "type": "object"
+    },
     "JobQuota": {
       "additionalProperties": false,
       "description": "Weekly improvement-plane token QoS (ADR-0015). HEX/compress are leftover-only.",
@@ -154,6 +194,13 @@
           "title": "Max Compress Candidates Per Tick",
           "type": "integer"
         },
+        "computer_use_practice_share": {
+          "default": 0.15,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Computer Use Practice Share",
+          "type": "number"
+        },
         "tokens_spent": {
           "default": 0,
           "minimum": 0,
@@ -164,6 +211,12 @@
           "default": 0,
           "minimum": 0,
           "title": "Hex Tokens Spent",
+          "type": "integer"
+        },
+        "computer_use_tokens_spent": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Computer Use Tokens Spent",
           "type": "integer"
         },
         "hex_jobs_by_class": {
@@ -201,6 +254,61 @@
         }
       },
       "title": "PolicyBudgets",
+      "type": "object"
+    },
+    "StateManagement": {
+      "additionalProperties": false,
+      "description": "Working-set residency and read-only caches (ADR-0018). T2; default offload is off.",
+      "properties": {
+        "idle_offload_enabled": {
+          "default": false,
+          "title": "Idle Offload Enabled",
+          "type": "boolean"
+        },
+        "quiet_threshold_s": {
+          "default": 60.0,
+          "minimum": 0.0,
+          "title": "Quiet Threshold S",
+          "type": "number"
+        },
+        "eligible_surfaces": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Eligible Surfaces",
+          "type": "array"
+        },
+        "restore_latency_budget_frac": {
+          "default": 0.05,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Restore Latency Budget Frac",
+          "type": "number"
+        },
+        "tool_result_cache_enabled": {
+          "default": true,
+          "title": "Tool Result Cache Enabled",
+          "type": "boolean"
+        },
+        "tool_result_cache_ttl_s": {
+          "default": 120.0,
+          "minimum": 0.0,
+          "title": "Tool Result Cache Ttl S",
+          "type": "number"
+        },
+        "retrieval_cache_enabled": {
+          "default": true,
+          "title": "Retrieval Cache Enabled",
+          "type": "boolean"
+        },
+        "retrieval_cache_ttl_s": {
+          "default": 30.0,
+          "minimum": 0.0,
+          "title": "Retrieval Cache Ttl S",
+          "type": "number"
+        }
+      },
+      "title": "StateManagement",
       "type": "object"
     }
   },
@@ -276,6 +384,12 @@
     },
     "job_quota": {
       "$ref": "#/$defs/JobQuota"
+    },
+    "state_management": {
+      "$ref": "#/$defs/StateManagement"
+    },
+    "isolation": {
+      "$ref": "#/$defs/IsolationSettings"
     },
     "notes": {
       "items": {

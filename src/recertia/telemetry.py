@@ -6,6 +6,7 @@ runs stay dependency-light while still asserting the required event surface.
 
 from __future__ import annotations
 
+import contextvars
 import json
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -195,10 +196,38 @@ def write_dashboard(tel: Telemetry, path: Path | str, *, tenant_id: str) -> Path
 
 
 _GLOBAL = Telemetry()
+_ACTIVE_TENANT: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "recertia_telemetry_tenant", default=None
+)
+_ACTIVE_RUN: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "recertia_telemetry_run", default=None
+)
 
 
 def get_telemetry() -> Telemetry:
     return _GLOBAL
+
+
+@contextmanager
+def telemetry_run(*, tenant_id: str, run_id: str) -> Iterator[None]:
+    """Bind tenant/run for nested tool and model emits."""
+
+    tenant_tok = _ACTIVE_TENANT.set(tenant_id)
+    run_tok = _ACTIVE_RUN.set(run_id)
+    try:
+        yield
+    finally:
+        _ACTIVE_RUN.reset(run_tok)
+        _ACTIVE_TENANT.reset(tenant_tok)
+
+
+def emit_in_run(name: str, **attributes: Any) -> SpanEvent | None:
+    """Emit if a run context is bound; otherwise no-op (unit tests, offline tools)."""
+
+    tenant_id = _ACTIVE_TENANT.get()
+    if not tenant_id:
+        return None
+    return get_telemetry().emit(name, tenant_id=tenant_id, run_id=_ACTIVE_RUN.get(), **attributes)
 
 
 def reset_telemetry(*, admin_actor: str, tenant_id: str) -> Telemetry:

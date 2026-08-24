@@ -39,12 +39,37 @@
     "hex_share": 0.25,
     "max_hex_jobs_per_task_class": 1,
     "max_status_writes_per_tick": 50,
-    "max_compress_candidates_per_tick": 1
+    "max_compress_candidates_per_tick": 1,
+    "computer_use_practice_share": 0.15
   },
   "notes": [
-    "P0″ default policy. HEX and compress remain off until a lift interval exists.",
+    "P0\u2033 default policy. HEX and compress remain off until a lift interval exists.",
     "JobQuota spend lives in .recertia/job_quota.json (T0 sidecar), not this document.",
     "min_independent_runs is the observation/trial floor before established lift language is allowed.",
-    "faithfulness_interventions_enabled stays false on the production path; the eval CLI may still run tagged trials."
-  ]
+    "faithfulness_interventions_enabled stays false on the production path; the eval CLI may still run tagged trials.",
+    "state_management.idle_offload_enabled stays false until a golden-class RSS baseline exists (ADR-0018).",
+    "isolation.allow_external_computer stays false; long-lived computers are never the security boundary (ADR-0019).",
+    "There is no improvement.external_trajectory_import flag; recertia trajectory import / POST /v1/trajectories/import is the gate."
+  ],
+  "state_management": {
+    "idle_offload_enabled": false,
+    "quiet_threshold_s": 60.0,
+    "eligible_surfaces": [
+      "workspace",
+      "checkpoint",
+      "retrieval_index"
+    ],
+    "restore_latency_budget_frac": 0.05,
+    "tool_result_cache_enabled": true,
+    "tool_result_cache_ttl_s": 120.0,
+    "retrieval_cache_enabled": true,
+    "retrieval_cache_ttl_s": 30.0
+  },
+  "isolation": {
+    "default_backend": "container",
+    "allow_external_computer": false,
+    "long_lived_computer_backend": false,
+    "external_computer_ttl_seconds": 3600,
+    "external_computer_allowlist": []
+  }
 }

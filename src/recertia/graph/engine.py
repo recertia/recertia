@@ -9,6 +9,7 @@ class only validates that a node's chosen route is legal and walks the resulting
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +30,7 @@ from recertia.memory.procedural.capability import CandidateSkillStoreAdapter
 from recertia.nodes import NODE_FUNCS, NodeContext, NodeOutcome
 from recertia.trajectory.emitter import TrajectoryEmitter
 from recertia.trajectory.store import TrajectoryStore
-from recertia.workspace import WorkspaceManager
+from recertia.workspace import OffloadHandle, WorkspaceManager
 
 if TYPE_CHECKING:
     from contracts.policy import Policy
@@ -98,6 +99,9 @@ class GraphOrchestrator:
         self.trajectories = TrajectoryStore(self.runs_root / "trajectories")
         self._trajectory_emitter = TrajectoryEmitter()
         self.audited_states = AuditedStateStore(self.runs_root / "audited_states")
+        self.tenant_id = "local"
+        self._last_hop_ended: float | None = None
+        self._offload_handles: dict[str, OffloadHandle] = {}
 
     def close(self) -> None:
         self.checkpoints.close()
@@ -249,7 +253,13 @@ class GraphOrchestrator:
             arm=arm,
             manifest=manifest or RunManifest(),
         )
-        return self._execute(state, "intake", workdir=Path(workdir), script=script, max_steps=max_steps)
+        from recertia.telemetry import emit_in_run, telemetry_run
+
+        with telemetry_run(tenant_id=self.tenant_id, run_id=run_id):
+            emit_in_run("run.started", task_class=task.task_class, arm=arm)
+            return self._execute(
+                state, "intake", workdir=Path(workdir), script=script, max_steps=max_steps
+            )
 
     def resume(
         self,
@@ -267,6 +277,7 @@ class GraphOrchestrator:
         seq, _, next_node, state = latest
         if next_node is None:
             return state
+        self._maybe_restore_idle(run_id, Path(workdir))
         return self._execute(
             state,
             next_node,
@@ -298,18 +309,45 @@ class GraphOrchestrator:
                     f"run {state.run_id!r} exceeded {MAX_GRAPH_STEPS} graph steps; likely a routing defect"
                 )
             if max_steps is not None and steps_taken > max_steps:
+                # Pause = Recertia idle. quiet_threshold_s is telemetry, not this trigger.
+                self._maybe_offload_idle(state, workdir)
                 return state
 
             attempt_no_for_ctx = state.attempt_no + 1 if node_name == "solve" else state.attempt_no
-            ctx = self._build_node_context(
-                state=state,
-                node_name=node_name,
-                workdir=workdir,
-                script=script,
-                attempt_no=attempt_no_for_ctx,
-            )
-            outcome = NODE_FUNCS[node_name](state, ctx)
-            new_state = outcome.state
+            hop_started = time.monotonic()
+            idle_gap_ms = 0.0
+            if self._last_hop_ended is not None:
+                idle_gap_ms = (hop_started - self._last_hop_ended) * 1000.0
+            from recertia.ops.systems import component_class, rss_bytes, workdir_bytes
+            from recertia.telemetry import emit_in_run, telemetry_run
+
+            with telemetry_run(tenant_id=self.tenant_id, run_id=state.run_id):
+                emit_in_run(
+                    "node.started",
+                    node=node_name,
+                    component_class=component_class(node_name),
+                )
+                ctx = self._build_node_context(
+                    state=state,
+                    node_name=node_name,
+                    workdir=workdir,
+                    script=script,
+                    attempt_no=attempt_no_for_ctx,
+                )
+                outcome = NODE_FUNCS[node_name](state, ctx)
+                new_state = outcome.state
+                hop_ms = (time.monotonic() - hop_started) * 1000.0
+                emit_in_run(
+                    "node.finished",
+                    node=node_name,
+                    component_class=component_class(node_name),
+                    latency_ms=round(hop_ms, 3),
+                    rss_bytes=rss_bytes(),
+                    workdir_bytes=workdir_bytes(workdir),
+                    idle_gap_ms=round(idle_gap_ms, 3),
+                    tokens=int(getattr(new_state.spent, "tokens", 0) or 0),
+                )
+            self._last_hop_ended = time.monotonic()
             if new_state.spent.versions_written > new_state.budget.max_versions_written:
                 raise RoutingError(
                     f"run {state.run_id!r} wrote {new_state.spent.versions_written} "
@@ -328,6 +366,10 @@ class GraphOrchestrator:
                 )
                 self.checkpoints.save(state.run_id, next_seq, node_name, None, new_state)
                 self._record_eval_observation(new_state)
+                from recertia.telemetry import emit_in_run, telemetry_run
+
+                with telemetry_run(tenant_id=self.tenant_id, run_id=state.run_id):
+                    emit_in_run("run.finished", terminal=new_state.terminal)
                 return new_state
 
             chosen = self._choose_route(node_name, outcome)
@@ -379,3 +421,54 @@ class GraphOrchestrator:
             next_seq += 1
             state = new_state
             node_name = chosen.target
+
+    def _offload_enabled(self) -> bool:
+        policy = self.policy
+        if policy is None:
+            return False
+        sm = getattr(policy, "state_management", None)
+        return bool(sm is not None and sm.idle_offload_enabled)
+
+    def _maybe_offload_idle(self, state: RunState, workdir: Path) -> None:
+        if not self._offload_enabled():
+            return
+        if not workdir.exists():
+            return
+        from recertia.telemetry import emit_in_run, telemetry_run
+        from recertia.workspace.offload import WorkingSetOffload
+
+        packs = WorkingSetOffload(self.runs_root / "offload")
+        hop_started = time.monotonic()
+        handle = packs.pack(workdir, ref=f"{state.run_id}-workdir")
+        self._offload_handles[state.run_id] = handle
+        packs.write_sidecar(state.run_id, handle)
+        with telemetry_run(tenant_id=self.tenant_id, run_id=state.run_id):
+            emit_in_run(
+                "idle.offload",
+                bytes_offloaded=handle.bytes_offloaded,
+                original_bytes=handle.original_bytes,
+                latency_ms=round((time.monotonic() - hop_started) * 1000.0, 3),
+            )
+
+    def _maybe_restore_idle(self, run_id: str, workdir: Path) -> None:
+        from recertia.telemetry import emit_in_run, telemetry_run
+        from recertia.workspace.offload import OffloadError, WorkingSetOffload
+
+        packs = WorkingSetOffload(self.runs_root / "offload")
+        handle = self._offload_handles.get(run_id) or packs.read_sidecar(run_id)
+        if handle is None:
+            return
+
+        hop_started = time.monotonic()
+        with telemetry_run(tenant_id=self.tenant_id, run_id=run_id):
+            try:
+                packs.restore(handle, workdir)
+            except OffloadError as exc:
+                raise RoutingError(str(exc)) from exc
+            emit_in_run(
+                "idle.restore",
+                bytes_offloaded=handle.bytes_offloaded,
+                latency_ms=round((time.monotonic() - hop_started) * 1000.0, 3),
+            )
+        self._offload_handles.pop(run_id, None)
+        packs.drop_sidecar(run_id)

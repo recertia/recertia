@@ -291,6 +291,14 @@ class SkillIndex:
             }
         return self._emb_cache
 
+    def unload_embeddings(self) -> int:
+        """Drop the in-memory embedding matrix (ADR-0018 cold retrieval pages)."""
+
+        with self._lock:
+            n = 0 if self._emb_cache is None else len(self._emb_cache)
+            self._emb_cache = None
+        return n
+
     def vector_top_k(
         self, query: str, k: int, *, q_emb: Sequence[float] | None = None
     ) -> list[tuple[str, int, float]]:

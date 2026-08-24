@@ -35,6 +35,13 @@
       "title": "Max Compress Candidates Per Tick",
       "type": "integer"
     },
+    "computer_use_practice_share": {
+      "default": 0.15,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Computer Use Practice Share",
+      "type": "number"
+    },
     "tokens_spent": {
       "default": 0,
       "minimum": 0,
@@ -45,6 +52,12 @@
       "default": 0,
       "minimum": 0,
       "title": "Hex Tokens Spent",
+      "type": "integer"
+    },
+    "computer_use_tokens_spent": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Computer Use Tokens Spent",
       "type": "integer"
     },
     "hex_jobs_by_class": {
