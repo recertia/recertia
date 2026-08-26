@@ -36,7 +36,9 @@
 
 - [External trajectories & computer-use goldens (2026-08-22)](plans/2026-08-22-external-trajectories-and-computer-use-goldens.md) — Phase 0 import + skill-free goldens and Phase 1 candidate distill landed; promotion-with-lift and a live computer backend remain open
 - [2026-08-24 landing extract](plans/2026-08-24-todays-work-refactor.md) — dual-path extract after today's stack; landed, not a GA gate
+- [Recuris record (2026-08-26)](plans/2026-08-26-recuris.md) — Yu et al. arXiv:2608.24876; closest published sibling; cite, do not reshape T3
 
 Normative requirements are in the [specifications index](specifications.md).
 Forward work is in the
 [remaining-work implementation plan](architecture/remaining-work.md).
+Literature grounding is in [references.md](references.md).
