@@ -137,6 +137,28 @@ the same intervention on a skill that is never applied produces near-zero diverg
 
 ---
 
+## a10. Checked working memory plus component-localized patches lift versus $M_0$ on repo-chore
+
+**Claim:** on Recertia `repo-chore` tasks with locked machine-checkable criteria, a library
+that (i) commits working-memory / episodic state only when validators plus environment
+agree and (ii) attributes evolve patches to one of {skill, WM spec, invocation, checkers}
+will show a `causal_lift` interval excluding zero against a neutral starter memory $M_0$
+(no learned skills), and $M_0$ will not beat the bare / retrieval-suppressed arm
+(Yu et al. 2026 Recuris; [`docs/plans/2026-08-26-recuris.md`](plans/2026-08-26-recuris.md)).
+
+- **Depends on:** existing lift harness (bare vs treatment) plus a defined $M_0$ library
+  snapshot; RW-RC1–RC3 if those ever ship.
+- **Engineering gate (not this claim):** lift reports three arms and refuses
+  `"established"` when any interval spans zero; $M_0$ is a real empty-or-seed snapshot,
+  not a renamed treatment.
+- **Research outcome (this claim):** whether Recertia traffic reproduces Recuris's
+  "$M_0$ does nothing, evolved memory does" split on `repo-chore`.
+- **Status:** `untested` — no Recertia three-arm run exists.
+- **Why it might be false anyway:** Recuris gains are on $\tau^2$ / SkillFlow / Terminal-Bench,
+  not `repo-chore`. SkillsBench self-authored skills were +0.0pp. Recuris does not recertify
+  or cap the library; Recertia might spend the gain on hygiene instead of first-attempt
+  success.
+
 ## Adding a new assumption
 
 1. Assign the next `aN` id; state the claim as a specific, falsifiable sentence.
