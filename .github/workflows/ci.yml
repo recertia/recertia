@@ -60,13 +60,10 @@ jobs:
       - name: Seed skill lint (hash-bound sensitivity proofs)
         run: recertia skills lint --skills-root skills
 
-      # Topic files (including assumptions a10 from #47/#48) are source of truth.
-      # Compile first so a stale committed architecture2.md cannot fail the job
-      # when the generator itself is green. Developers still commit the regen.
+      # Committed architecture2.md must match topic files. Do not regenerate in CI
+      # before --check: that hides drift and leaves main with a stale compilation.
       - name: architecture2 compilation drift
-        run: |
-          python3 scripts/generate_architecture2.py
-          python3 scripts/generate_architecture2.py --check
+        run: python3 scripts/generate_architecture2.py --check
 
       - name: Docs cross-refs (R3)
         run: python3 scripts/check_cross_refs.py --check
