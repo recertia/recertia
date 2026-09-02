@@ -2,7 +2,9 @@
 """Postgres soak helper: apply migrations against DATABASE_URL (roadmap P0-5 / P2-1).
 
 Requires ``DATABASE_URL=postgres://...`` (or ``postgresql://...``). The compose file
-``docker-compose.soak.yml`` provisions a local Postgres 16 for this script.
+``docker-compose.soak.yml`` provisions Postgres 16 with pgvector
+(``pgvector/pgvector:pg16``) for this script. Plain ``postgres:16`` cannot
+``CREATE EXTENSION vector``.
 
 Golden suite remains a separate CI/ops step; this script focuses on durable store soak.
 """

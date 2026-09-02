@@ -76,7 +76,9 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        # Migrations require CREATE EXTENSION vector (pgvector).
+        # Stock postgres:16-alpine does not ship it; soak then fails the job.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: recertia
           POSTGRES_PASSWORD: recertia
