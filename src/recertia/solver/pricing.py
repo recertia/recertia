@@ -11,7 +11,13 @@ import os
 import re
 
 # Approximate USD per 1M tokens: (input, output). Keys are lowercase model-id prefixes.
+# Lookup is longest-prefix startswith — keep Flash slugs longer than ``glm-5.3``.
+# Z.ai list prices 2026-09-09: https://docs.z.ai/guides/overview/pricing
 _DEFAULT_RATES: dict[str, tuple[float, float]] = {
+    "glm-5.3-flash": (0.15, 0.50),
+    "z-ai/glm-5.3-flash": (0.15, 0.50),
+    "zai-org/glm-5.3-flash": (0.15, 0.50),
+    "glm-5.3": (1.4, 4.4),
     "claude-opus": (15.0, 75.0),
     "claude-sonnet": (3.0, 15.0),
     "claude-haiku": (0.80, 4.0),
