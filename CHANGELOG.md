@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Windows `rss_bytes`** — `import resource` is POSIX-only. Catch `ImportError`
+  so hop telemetry on native Windows returns `0` instead of aborting the graph
+  (`ModuleNotFoundError: No module named 'resource'`).
 - **CI architecture2 drift** — regenerate `docs/architecture2.md` so the Recuris
   `a10` assumption from #47/#48 is compiled. `generate_architecture2.py --check`
   is green again.
