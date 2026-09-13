@@ -38,7 +38,32 @@ def test_rss_and_workdir_bytes(tmp_path: Path) -> None:
     work.mkdir()
     (work / "blob.bin").write_bytes(b"x" * 2048)
     assert workdir_bytes(work) >= 2048
-    assert rss_bytes() > 0
+    assert rss_bytes() >= 0
+
+
+def test_rss_bytes_returns_zero_when_resource_missing(monkeypatch) -> None:
+    """Windows has no `resource` module; hop telemetry must not abort the run."""
+
+    import builtins
+
+    from recertia.ops import systems
+
+    real_open = builtins.open
+    real_import = builtins.__import__
+
+    def fake_open(path, *args, **kwargs):
+        if str(path) == "/proc/self/statm":
+            raise FileNotFoundError("no /proc")
+        return real_open(path, *args, **kwargs)
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "resource":
+            raise ModuleNotFoundError("No module named 'resource'")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert systems.rss_bytes() == 0
 
 
 def test_six_properties_from_events() -> None:

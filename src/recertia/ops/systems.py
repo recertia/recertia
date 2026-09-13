@@ -68,7 +68,7 @@ def rss_bytes() -> int:
         usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         # Linux reports KiB; macOS reports bytes.
         return int(usage * 1024) if usage < 10**9 else int(usage)
-    except (OSError, ValueError):
+    except (OSError, ValueError, ImportError):
         return 0
 
 
