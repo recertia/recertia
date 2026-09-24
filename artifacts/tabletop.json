@@ -1,0 +1,32 @@
+{
+  "date": "2026-09-13T19:47:40.102090+00:00",
+  "run_id": "5abf62baf13d",
+  "ttr_s": 0.077,
+  "follow_up": "Home2 soak 2026-W38",
+  "ga_claimed": false,
+  "ledger_ok": true,
+  "ledger_hits": 0,
+  "ledger_path": null,
+  "transcript_found": true,
+  "transcript_ref": "801d4ca3d3e9bd58bf74dd3dc193f12739748d56d900712321aeabf37e84977c",
+  "failure_class": "budget",
+  "terminal": "unsolved",
+  "manifest": {
+    "model": "openai",
+    "model_version": "z-ai/glm-5.3-flash",
+    "tool_versions": {},
+    "index_snapshot_id": "d48ef821ad81f26d",
+    "library_commit": "57e69290374b2f2aa8ac231fdca5139e39558eef",
+    "policy_version": null,
+    "criteria_hash": "88f8e1af16180d0fd94102099b80ac83abdc39fb4612caee21532400eea7650b",
+    "seed": null
+  },
+  "navigable": true,
+  "checkpoint_root": "/home/robs/recertia-runs",
+  "attempt_no": 4,
+  "restore_source": "/home/robs/recertia-backups/recertia-latest.tar.gz",
+  "restore_ok": true,
+  "restore_dest": "/home/robs/recertia-restore",
+  "usable_tree": true,
+  "pass": true
+}

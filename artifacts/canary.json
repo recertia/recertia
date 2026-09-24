@@ -1,0 +1,11 @@
+{
+  "mode": "synthetic",
+  "trials": 1,
+  "false_passes": 0,
+  "false_pass_rate": 0.0,
+  "model_version": "z-ai/glm-5.3-flash",
+  "attribution": "z-ai/glm-5.3-flash",
+  "unavailable": null,
+  "solver_verifier_same_model": false,
+  "a4_updated": false
+}

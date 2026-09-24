@@ -1,0 +1,111 @@
+{
+  "task_class": "repo-chore",
+  "snapshot_id": "d48ef821ad81f26d",
+  "precision_at_3": 1.0,
+  "skill_count": 11,
+  "recorded_at": "2026-09-13T19:47:23.792751+00:00",
+  "probes": [
+    {
+      "probe_id": "p1",
+      "precision": 1.0,
+      "top3": [
+        "add-gitignore-entry",
+        "add-makefile-target",
+        "add-license-mit"
+      ],
+      "relevant": [
+        "add-gitignore-entry"
+      ]
+    },
+    {
+      "probe_id": "p2",
+      "precision": 1.0,
+      "top3": [
+        "add-pytest-config"
+      ],
+      "relevant": [
+        "add-pytest-config"
+      ]
+    },
+    {
+      "probe_id": "p3",
+      "precision": 1.0,
+      "top3": [
+        "pin-python-version"
+      ],
+      "relevant": [
+        "pin-python-version"
+      ]
+    },
+    {
+      "probe_id": "p4",
+      "precision": 1.0,
+      "top3": [
+        "add-editorconfig"
+      ],
+      "relevant": [
+        "add-editorconfig"
+      ]
+    },
+    {
+      "probe_id": "p5",
+      "precision": 1.0,
+      "top3": [
+        "add-license-mit"
+      ],
+      "relevant": [
+        "add-license-mit"
+      ]
+    },
+    {
+      "probe_id": "p6",
+      "precision": 1.0,
+      "top3": [
+        "bump-action-checkout"
+      ],
+      "relevant": [
+        "bump-action-checkout"
+      ]
+    },
+    {
+      "probe_id": "p7",
+      "precision": 1.0,
+      "top3": [
+        "add-readme-section"
+      ],
+      "relevant": [
+        "add-readme-section"
+      ]
+    },
+    {
+      "probe_id": "p8",
+      "precision": 1.0,
+      "top3": [
+        "ensure-src-layout"
+      ],
+      "relevant": [
+        "ensure-src-layout"
+      ]
+    },
+    {
+      "probe_id": "p9",
+      "precision": 1.0,
+      "top3": [
+        "add-makefile-target"
+      ],
+      "relevant": [
+        "add-makefile-target"
+      ]
+    },
+    {
+      "probe_id": "p10",
+      "precision": 1.0,
+      "top3": [
+        "strip-trailing-whitespace"
+      ],
+      "relevant": [
+        "strip-trailing-whitespace"
+      ]
+    }
+  ]
+}

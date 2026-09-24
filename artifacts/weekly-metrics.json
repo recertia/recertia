@@ -1,0 +1,85 @@
+{
+  "report": {
+    "snapshot_id": "d48ef821ad81f26d",
+    "model_version": null,
+    "task_class": "repo-chore",
+    "reuse_rate": 1.0,
+    "first_attempt_success": 0.0,
+    "attempts_to_success": null,
+    "cost_per_solved_task": null,
+    "regression_rate": null,
+    "causal_lift": {
+      "task_class": "repo-chore",
+      "treatment": {
+        "successes": 0,
+        "trials": 2
+      },
+      "control": {
+        "successes": 0,
+        "trials": 0
+      },
+      "estimate": null,
+      "interval": null,
+      "status": "insufficient_data",
+      "snapshot_id": "d48ef821ad81f26d",
+      "model_version": null,
+      "window": null,
+      "treatment_variance": {
+        "n_runs": 2,
+        "std_dev": 0.0,
+        "best_rate": 0.0,
+        "worst_rate": 0.0,
+        "best_worst_gap": 0.0
+      },
+      "control_variance": null,
+      "lift_variance": null,
+      "min_independent_runs": 5,
+      "independent_runs": 0
+    },
+    "calibration_error": 0.41340787999999995,
+    "abstention_precision": null,
+    "merge_gap_rate": null,
+    "parallel_speedup": null,
+    "fake_edge_rate": null,
+    "judge_isolation_violations": 0,
+    "curation_gap": null,
+    "practice_conversion": null,
+    "retirement_reversal_rate": null,
+    "active_cap_pressure": 0.0,
+    "judge_false_pass_rate": 0.0,
+    "mean_composition_depth": 0.0,
+    "lint_block_rate": null,
+    "distill_fail_path_share": null,
+    "practice_hex_accept_rate": null,
+    "promotion_source_diversity": null,
+    "lineage_revoke_count": null,
+    "compress_token_ratio": null,
+    "compress_perf_delta": null,
+    "guide_used_rate": null,
+    "compose_block_rate": null,
+    "off_intent_activation": null,
+    "library_yield": 0.18181818181818182,
+    "retrieval_precision_at_3": 1.0,
+    "retrieval_decay": null,
+    "unavailable": {
+      "abstention_precision": "no abstentions in window",
+      "merge_gap_rate": "no merge audits supplied",
+      "parallel_speedup": "no step_waves supplied",
+      "fake_edge_rate": "no fake edge observations supplied",
+      "curation_gap": "no curation provenance on observations",
+      "practice_conversion": "no practice-arm observations",
+      "retirement_reversal_rate": "no retirement bench/restore counts supplied",
+      "regression_rate": "no golden regression window supplied",
+      "retrieval_decay": "fewer than two probe snapshots"
+    },
+    "at": "2026-09-13T19:47:31.996147Z"
+  },
+  "canary": {
+    "trials": 1,
+    "false_passes": 0,
+    "false_pass_rate": 0.0,
+    "model_version": null
+  },
+  "causal_lift_status": "insufficient_data",
+  "claim": "insufficient_data"
+}

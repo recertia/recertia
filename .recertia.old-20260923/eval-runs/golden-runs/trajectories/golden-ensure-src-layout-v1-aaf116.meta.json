@@ -1,0 +1,8 @@
+{
+  "run_id": "golden-ensure-src-layout-v1-aaf116",
+  "task_id": "golden-ensure-src-layout-v1-aaf116",
+  "task_class": "repo-chore",
+  "arm": "treatment",
+  "is_eval_fixture": true,
+  "written_at": "2026-09-12T21:20:30.509712+00:00"
+}

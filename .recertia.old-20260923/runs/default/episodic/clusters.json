@@ -1,0 +1,122 @@
+{
+  "repo-chore::budget::step 4 exited 1: mkdir -p /mnt/d/recertia/aaa": {
+    "task_class": "repo-chore",
+    "signature": "budget::step 4 exited 1: mkdir -p /mnt/d/recertia/aaa",
+    "n_runs": 3,
+    "n_sessions": 1,
+    "run_ids_sample": [
+      "run-3bd6bbf9e73f",
+      "run-d21d0612757b",
+      "run-7bd023b548fe"
+    ],
+    "session_ids_sample": [
+      "key_3c93a8d0e63d29be"
+    ],
+    "last_case_hash": "beda3435e45ceb3a257444d23560dadbfefcf358fa88dc61d5fc3c3ab07ad443",
+    "eligible": false,
+    "updated_at": "2026-08-14T23:54:17.513355Z",
+    "sample_cap": 32,
+    "min_runs": 3,
+    "min_sessions": 2
+  },
+  "repo-chore::budget::python -c is not allowlisted for model-proposed commands": {
+    "task_class": "repo-chore",
+    "signature": "budget::python -c is not allowlisted for model-proposed commands",
+    "n_runs": 1,
+    "n_sessions": 1,
+    "run_ids_sample": [
+      "run-f137ec07561b"
+    ],
+    "session_ids_sample": [
+      "key_3c93a8d0e63d29be"
+    ],
+    "last_case_hash": "521a4a6612cabd571065c50eb33348c29a23c4585ab60ade9ac0209fb227f6a7",
+    "eligible": false,
+    "updated_at": "2026-08-14T23:37:45.054079Z",
+    "sample_cap": 32,
+    "min_runs": 3,
+    "min_sessions": 2
+  },
+  "repo-chore::budget::step 4 exited 1: rm -rf /mnt/d/recertia/aaa": {
+    "task_class": "repo-chore",
+    "signature": "budget::step 4 exited 1: rm -rf /mnt/d/recertia/aaa",
+    "n_runs": 1,
+    "n_sessions": 1,
+    "run_ids_sample": [
+      "run-120d86824741"
+    ],
+    "session_ids_sample": [
+      "key_3c93a8d0e63d29be"
+    ],
+    "last_case_hash": "db42d605b1fa2b39ddf4eeb0cb500c387ec15d8904813f963b66390f71c9093a",
+    "eligible": false,
+    "updated_at": "2026-08-14T23:43:50.002717Z",
+    "sample_cap": 32,
+    "min_runs": 3,
+    "min_sessions": 2
+  },
+  "repo-chore::budget::step 4 exited 1: true": {
+    "task_class": "repo-chore",
+    "signature": "budget::step 4 exited 1: true",
+    "n_runs": 1,
+    "n_sessions": 1,
+    "run_ids_sample": [
+      "run-740b6c8eabb3"
+    ],
+    "session_ids_sample": [
+      "key_3c93a8d0e63d29be"
+    ],
+    "last_case_hash": "bbc2e342a1ab8af2970bd54f60559dd7264432f99474a487a2dedd92535f8061",
+    "eligible": false,
+    "updated_at": "2026-08-14T23:48:24.566429Z",
+    "sample_cap": 32,
+    "min_runs": 3,
+    "min_sessions": 2
+  },
+  "repo-chore::budget::budget exhausted before tool dispatch: wall_clock_s": {
+    "task_class": "repo-chore",
+    "signature": "budget::budget exhausted before tool dispatch: wall_clock_s",
+    "n_runs": 3,
+    "n_sessions": 1,
+    "run_ids_sample": [
+      "run-928ad2503376",
+      "run-9e216fbe8d18",
+      "run-5234ab72b0ea"
+    ],
+    "session_ids_sample": [
+      "key_3c93a8d0e63d29be"
+    ],
+    "last_case_hash": "f26a5dcecf0dc3d1fbbd4cecdf0bc85727b499e4fa415d33164acbd067eaaec5",
+    "eligible": false,
+    "updated_at": "2026-08-15T00:05:38.023841Z",
+    "sample_cap": 32,
+    "min_runs": 3,
+    "min_sessions": 2
+  },
+  "repo-chore::budget::environment: scratch solving requires a model client; set recertia_model_provider and credentials (or --model provider:id), or pass an explicit script / recertia_allow_stub_model=1 for offline demos": {
+    "task_class": "repo-chore",
+    "signature": "budget::environment: scratch solving requires a model client; set recertia_model_provider and credentials (or --model provider:id), or pass an explicit script / recertia_allow_stub_model=1 for offline demos",
+    "n_runs": 9,
+    "n_sessions": 1,
+    "run_ids_sample": [
+      "run-2d8bfc61f8ee",
+      "run-01b42649566f",
+      "run-27feb81392e8",
+      "run-c188523d7371",
+      "run-1a717359768d",
+      "run-1347483a36b3",
+      "run-be3ef35d4145",
+      "run-9bf587b48758",
+      "run-8795e9631df8"
+    ],
+    "session_ids_sample": [
+      "key_f8347e4fc0cca04b"
+    ],
+    "last_case_hash": "46c82f970ab9f3f884d443873282c6945d8c5d27c7c9d42afef60b4b664ffa11",
+    "eligible": false,
+    "updated_at": "2026-08-15T00:31:05.637376Z",
+    "sample_cap": 32,
+    "min_runs": 3,
+    "min_sessions": 2
+  }
+}

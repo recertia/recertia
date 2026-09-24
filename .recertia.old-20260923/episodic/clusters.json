@@ -1,0 +1,38 @@
+{
+  "repo-chore::budget::command contains forbidden token '<'": {
+    "task_class": "repo-chore",
+    "signature": "budget::command contains forbidden token '<'",
+    "n_runs": 1,
+    "n_sessions": 1,
+    "run_ids_sample": [
+      "748eecec98e4"
+    ],
+    "session_ids_sample": [
+      "748eecec98e4"
+    ],
+    "last_case_hash": "e5fd9124f55c45043437f21d47331f7fb8e61de2e1cf585f3bff31f0372f2270",
+    "eligible": false,
+    "updated_at": "2026-09-12T21:36:41.677687Z",
+    "sample_cap": 32,
+    "min_runs": 3,
+    "min_sessions": 2
+  },
+  "repo-chore::budget::a required, proven criterion failed": {
+    "task_class": "repo-chore",
+    "signature": "budget::a required, proven criterion failed",
+    "n_runs": 1,
+    "n_sessions": 1,
+    "run_ids_sample": [
+      "a8c859c46fe7"
+    ],
+    "session_ids_sample": [
+      "a8c859c46fe7"
+    ],
+    "last_case_hash": "93e8b964c10c385865a77895fbc30811bde428159f61c7767d4cc22a3f2ad8b4",
+    "eligible": false,
+    "updated_at": "2026-09-12T21:45:21.425424Z",
+    "sample_cap": 32,
+    "min_runs": 3,
+    "min_sessions": 2
+  }
+}

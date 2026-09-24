@@ -1,0 +1,33 @@
+{
+  "weeks": [
+    {
+      "week": "2026-W38",
+      "counted": true,
+      "reason": null,
+      "observation_count": 2,
+      "claim": "insufficient_data",
+      "baselines": {
+        "reuse_rate": {
+          "value": 1.0,
+          "unavailable": null
+        },
+        "first_attempt_success": {
+          "value": 0.0,
+          "unavailable": null
+        },
+        "attempts_to_success": {
+          "value": null,
+          "unavailable": null
+        },
+        "cost_per_solved_task": {
+          "value": null,
+          "unavailable": null
+        }
+      },
+      "retrieval_precision_at_3": 1.0,
+      "canary_attribution": "z-ai/glm-5.3-flash",
+      "ga_claimed": false
+    }
+  ],
+  "ga_claimed": false
+}
