@@ -36,6 +36,7 @@ from contracts.node import CheckpointRecord, NodeOutput  # noqa: E402
 from contracts.patch import PatchTemplate  # noqa: E402
 from contracts.policy import AuthoringPrior, JobQuota, Policy  # noqa: E402
 from contracts.program import MigrationProgram  # noqa: E402
+from contracts.receipt import StoreReceipt  # noqa: E402
 from contracts.review import ReviewDecision  # noqa: E402
 from contracts.run import RunState  # noqa: E402
 from contracts.scope import ScopePromotion  # noqa: E402
@@ -83,6 +84,7 @@ MODELS: dict[str, type] = {
     "registered_workspace.schema.json": RegisteredWorkspace,
     "audited_task_state.schema.json": AuditedTaskState,
     "trajectory_import.schema.json": TrajectoryImport,
+    "store_receipt.schema.json": StoreReceipt,
 }
 
 

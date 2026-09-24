@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ADR-0020 Store Receipts (Proposed)** — `StoreReceipt` contract, `close_receipt`
+  ledger action, `schema/store_receipt.schema.json`. Does not flip `recertia backup`
+  or tabletop defaults. P4 may switch `backup --receipts` only after one counted
+  soak week compares tar vs receipt restore. Plan:
+  [`docs/plans/2026-09-23-store-receipts.md`](docs/plans/2026-09-23-store-receipts.md).
+
 ### Fixed
 
 - **Windows `rss_bytes`** — `import resource` is POSIX-only. Catch `ImportError`

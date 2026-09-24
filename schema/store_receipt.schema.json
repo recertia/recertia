@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/recertia/recertia/schema/StoreReceipt",
+  "$defs": {
+    "CompressionMove": {
+      "additionalProperties": false,
+      "description": "One L0\u2013L3 promotion or demotion recorded on a receipt.",
+      "properties": {
+        "object_id": {
+          "title": "Object Id",
+          "type": "string"
+        },
+        "from_level": {
+          "enum": [
+            "L0",
+            "L1",
+            "L2",
+            "L3"
+          ],
+          "title": "From Level",
+          "type": "string"
+        },
+        "to_level": {
+          "enum": [
+            "L0",
+            "L1",
+            "L2",
+            "L3"
+          ],
+          "title": "To Level",
+          "type": "string"
+        },
+        "delta": {
+          "enum": [
+            -1,
+            0,
+            1
+          ],
+          "title": "Delta",
+          "type": "integer"
+        },
+        "evidence_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence Ref"
+        }
+      },
+      "required": [
+        "object_id",
+        "from_level",
+        "to_level",
+        "delta"
+      ],
+      "title": "CompressionMove",
+      "type": "object"
+    },
+    "ResidueManifestEntry": {
+      "additionalProperties": false,
+      "description": "One cited working-set object. P1 uses path+hash; P3 may pack these.",
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "content_hash": {
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "bytes": {
+          "minimum": 0,
+          "title": "Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "content_hash",
+        "bytes"
+      ],
+      "title": "ResidueManifestEntry",
+      "type": "object"
+    },
+    "ValidityFrontier": {
+      "additionalProperties": false,
+      "description": "Counts of current vs superseded fold rows. Schema columns land in P5.",
+      "properties": {
+        "current_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Current Count",
+          "type": "integer"
+        },
+        "superseded_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Superseded Count",
+          "type": "integer"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "title": "ValidityFrontier",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Published durability atom (ADR-0020). Empty compression_moves is valid.",
+  "properties": {
+    "receipt_id": {
+      "title": "Receipt Id",
+      "type": "string"
+    },
+    "seq": {
+      "minimum": 0,
+      "title": "Seq",
+      "type": "integer"
+    },
+    "prev_receipt_hash": {
+      "title": "Prev Receipt Hash",
+      "type": "string"
+    },
+    "receipt_hash": {
+      "title": "Receipt Hash",
+      "type": "string"
+    },
+    "closed_by": {
+      "enum": [
+        "curator",
+        "sleep",
+        "operator",
+        "upgrade_genesis"
+      ],
+      "title": "Closed By",
+      "type": "string"
+    },
+    "reviewed_git": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reviewed Git"
+    },
+    "fold_digest": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Fold Digest"
+    },
+    "residue_cid": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Residue Cid"
+    },
+    "residue_manifest": {
+      "items": {
+        "$ref": "#/$defs/ResidueManifestEntry"
+      },
+      "title": "Residue Manifest",
+      "type": "array"
+    },
+    "compression_moves": {
+      "items": {
+        "$ref": "#/$defs/CompressionMove"
+      },
+      "title": "Compression Moves",
+      "type": "array"
+    },
+    "validity_frontier": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ValidityFrontier"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "ledger_seq": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ledger Seq"
+    },
+    "at": {
+      "format": "date-time",
+      "title": "At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "receipt_id",
+    "seq",
+    "prev_receipt_hash",
+    "receipt_hash",
+    "closed_by",
+    "at"
+  ],
+  "title": "StoreReceipt",
+  "type": "object"
+}
