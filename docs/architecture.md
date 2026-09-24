@@ -19,6 +19,7 @@
 - [Risk and governance](architecture/risk-and-governance.md)
 - [Measurement and domain scope](architecture/measurement-and-scope.md)
 - [Remaining work: implementation plan](architecture/remaining-work.md)
+- [Store receipts remaining work (RW-SR / ADR-0020)](architecture/remaining-work-sr.md)
 - [Incident tabletop (operator GA)](architecture/incident-tabletop.md)
 - [Threat-model deltas (principal review §5, single-operator)](architecture/threat-model-deltas.md)
 - [Product console architecture](architecture/product-console.md)
@@ -37,6 +38,7 @@
 - [External trajectories & computer-use goldens (2026-08-22)](plans/2026-08-22-external-trajectories-and-computer-use-goldens.md) — Phase 0 import + skill-free goldens and Phase 1 candidate distill landed; promotion-with-lift and a live computer backend remain open
 - [2026-08-24 landing extract](plans/2026-08-24-todays-work-refactor.md) — dual-path extract after today's stack; landed, not a GA gate
 - [Recuris record (2026-08-26)](plans/2026-08-26-recuris.md) — Yu et al. arXiv:2608.24876; closest published sibling; cite, do not reshape T3
+- [Store receipts (2026-09-23)](plans/2026-09-23-store-receipts.md) — ADR-0020 Proposed; P0 contract only; `backup --receipts` stays off until P4 after one counted soak week compares tar vs receipt restore
 
 Normative requirements are in the [specifications index](specifications.md).
 Forward work is in the
