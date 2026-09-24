@@ -4,6 +4,7 @@
   "$defs": {
     "CompressionMove": {
       "additionalProperties": false,
+      "description": "One L0\u2013L3 promotion or demotion recorded on a receipt.",
       "properties": {
         "object_id": {
           "title": "Object Id",
@@ -62,6 +63,7 @@
     },
     "ResidueManifestEntry": {
       "additionalProperties": false,
+      "description": "One cited working-set object. P1 uses path+hash; P3 may pack these.",
       "properties": {
         "path": {
           "title": "Path",
@@ -87,6 +89,7 @@
     },
     "ValidityFrontier": {
       "additionalProperties": false,
+      "description": "Counts of current vs superseded fold rows. Schema columns land in P5.",
       "properties": {
         "current_count": {
           "default": 0,
@@ -118,6 +121,7 @@
     }
   },
   "additionalProperties": false,
+  "description": "Published durability atom (ADR-0020). Empty compression_moves is valid.",
   "properties": {
     "receipt_id": {
       "title": "Receipt Id",
