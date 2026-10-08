@@ -40,8 +40,24 @@ def test_secondary_cell_is_not_auto_banned() -> None:
         estimand="itt",
         multiplicity="secondary",
     )
-    assert cell.refuses_established() is True  # secondary does not authorize the class sentence
+    assert cell.refuses_established() is False
     assert cell.multiplicity == "secondary"
+
+
+def test_exploratory_cell_still_refuses() -> None:
+    cell = ContributionCell(
+        skill_id="unregistered",
+        stratum="repo-chore",
+        order_arm="fixed",
+        n_paired=8,
+        n_discordant_help=6,
+        n_discordant_hurt=0,
+        status="established_positive",
+        pathway="applied",
+        estimand="itt",
+        multiplicity="exploratory",
+    )
+    assert cell.refuses_established() is True
 
 
 def test_equal_discordance_includes_zero() -> None:
