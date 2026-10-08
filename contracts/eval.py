@@ -1,4 +1,8 @@
-"""Eval / measurement contracts (specs §11, §19, §23)."""
+"""Eval / measurement contracts (specs §11, §19, §23).
+
+ContributionCell is the paired report shape from ADR-0021 (Proposed).
+It does not establish causal_lift and it does not retire a skill.
+"""
 
 from __future__ import annotations
 
@@ -52,6 +56,53 @@ LiftStatus = Literal[
     "low_run_count",
 ]
 
+Pathway = Literal["applied", "retrieved_unused", "never_retrieved"]
+Estimand = Literal["itt", "per_protocol"]
+Multiplicity = Literal["primary", "secondary", "exploratory"]
+OrderArm = Literal["fixed", "shuffle"]
+
+
+class ContributionCell(BaseModel):
+    """One paired skill-by-stratum contrast. ADR-0021, Proposed.
+
+    Concordant pairs do not contribute. A cell with only judge criteria
+    stays null. This model does not write T3 and does not retire a skill.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str | None = None
+    stratum: str
+    order_arm: OrderArm
+    shuffle_index: int | None = Field(default=None, ge=0)
+    n_paired: int = Field(ge=0)
+    n_discordant_help: int = Field(ge=0)
+    n_discordant_hurt: int = Field(ge=0)
+    estimate: float | None = None
+    interval: ConfidenceInterval | None = None
+    status: LiftStatus
+    pathway: Pathway = "never_retrieved"
+    estimand: Estimand = "itt"
+    multiplicity: Multiplicity = "exploratory"
+    holdout: bool = False
+    protocol_hash: str | None = None
+    attempts_delta: float | None = None
+    cost_delta_usd: float | None = None
+    null_judge: bool = False
+
+    def refuses_established(self) -> bool:
+        if self.holdout or self.null_judge:
+            return True
+        if self.multiplicity != "primary":
+            return True
+        if self.estimand != "itt":
+            return True
+        if self.pathway != "applied":
+            return True
+        if self.status in {"not_established", "insufficient_data", "low_run_count"}:
+            return True
+        return False
+
 
 class CausalLiftResult(BaseModel):
     """Treatment − control first-attempt success with a difference CI (specs §19)."""
@@ -72,6 +123,8 @@ class CausalLiftResult(BaseModel):
     lift_variance: RunVariance | None = None
     min_independent_runs: int = Field(default=5, ge=1)
     independent_runs: int = Field(default=0, ge=0)
+    protocol_hash: str | None = None
+    contribution_cells: list[ContributionCell] = Field(default_factory=list)
 
     def render_status(self) -> str:
         if self.status == "not_established":
@@ -83,6 +136,30 @@ class CausalLiftResult(BaseModel):
         if self.status == "established_positive":
             return "established positive"
         return "established negative"
+
+    def library_claim_allowed(self) -> bool:
+        """A class interval is not a skill result. ADR-0021.
+
+        Secondary cells never authorize the sentence. A fixed-order-only
+        gain does not either: a shuffle row must be present and not refuse.
+        """
+
+        if self.status != "established_positive":
+            return False
+        if self.independent_runs < self.min_independent_runs:
+            return False
+        primary = [
+            cell
+            for cell in self.contribution_cells
+            if cell.multiplicity == "primary" and not cell.holdout
+        ]
+        if not primary:
+            return False
+        if any(cell.refuses_established() for cell in primary):
+            return False
+        if not any(cell.order_arm == "shuffle" for cell in primary):
+            return False
+        return all(cell.status == "established_positive" for cell in primary)
 
 
 class ControlBaseline(BaseModel):
