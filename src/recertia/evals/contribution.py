@@ -1,17 +1,17 @@
-"""Paired contribution ledger helpers. ADR-0021, Proposed.
+"""Paired contribution ledger (ADR-0021, Proposed).
 
-These functions do not read the run store and do not write T3.
-A class interval is not a skill effect. a4 untested keeps the
-retirement emitter off.
+Does not establish a1. Does not write T3. A retirement row is a proposal.
 """
 
 from __future__ import annotations
 
-hashlib
+import hashlib
 import json
 import math
-from dataclasses import dataclass
-from typing import Iterable, Sequence
+from pathlib import Path
+from typing import Iterable
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from contracts.eval import (
     ConfidenceInterval,
@@ -19,31 +19,88 @@ from contracts.eval import (
     LiftStatus,
 )
 
-_Z_95 = 1.959963984540054
+
+class ContributionProtocol(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_class: str
+    chore_ids: list[str]
+    holdout_ids: list[str] = Field(default_factory=list)
+    skill_ids: list[str]
+    shuffle_seeds: list[int]
+    model_pin: str
+    criteria_hash: str
+    tau: float = 0.0
+    k: int = Field(ge=1)
+
+    def canonical(self) -> str:
+        payload = self.model_dump(mode="json")
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    def protocol_hash(self) -> str:
+        return hashlib.sha256(self.canonical().encode()).hexdigest()
+
+
+class PairRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    arm: str
+    success: bool
+    skill_id: str | None = None
+    pathway: str = "never_retrieved"
+    order_arm: str = "fixed"
+    shuffle_index: int | None = None
+    attempts: int | None = None
+    cost_usd: float | None = None
+    valid_non_judge: bool = True
+    stratum: str = "repo-chore"
+
+
+class RetirementProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str
+    stratum: str
+    emitted: bool
+    writes_t3: bool = False
+    reason: str
+
+
+def load_protocol(path: Path) -> ContributionProtocol:
+    return ContributionProtocol.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def reject_holdout(protocol: ContributionProtocol, fixture_id: str | None) -> str | None:
+    """Return a refusal if distill must not write this fixture. None means allowed."""
+
+    if fixture_id and fixture_id in set(protocol.holdout_ids):
+        return f"holdout {fixture_id} is blocked at distill"
+    return None
+
+
+def mask_bundle(bundle: list[str], skill_id: str) -> list[str]:
+    """Copy the frozen bundle and drop one member. Do not substitute."""
+
+    return [item for item in bundle if item != skill_id]
 
 
 def paired_discordant_interval(
-    n_discordant_help: int,
-    n_discordant_hurt: int,
     n_paired: int,
+    n_help: int,
+    n_hurt: int,
     *,
     level: float = 0.95,
 ) -> ConfidenceInterval | None:
-    """Discordant-pair transform of a Wilson score interval.
-
-    Point estimate is (b - c) / N. The Wilson interval on b / (b + c)
-    is transformed by (2L - 1)(b + c) / N. Concordant pairs do not
-    enter the interval. No discordant pairs returns None, which the
-    caller marks insufficient_data rather than a zero effect.
-    """
-
-    if n_paired <= 0:
+    if n_paired <= 0 or n_help < 0 or n_hurt < 0 or n_help + n_hurt > n_paired:
         return None
-    discordant = n_discordant_help + n_discordant_hurt
-    if discordant <= 0:
+    discordant = n_help + n_hurt
+    if discordant == 0:
         return None
-    z = _Z_95 if abs(level - 0.95) < 1e-9 else _z_for(level)
-    p = n_discordant_help / discordant
+    if level != 0.95:
+        raise ValueError("unsupported confidence level; use 0.95")
+    z = 1.959963984540054
+    p = n_help / discordant
     z2 = z * z
     denom = 1.0 + z2 / discordant
     centre = (p + z2 / (2 * discordant)) / denom
@@ -54,151 +111,214 @@ def paired_discordant_interval(
     high_p = min(1.0, centre + half)
     scale = discordant / n_paired
     return ConfidenceInterval(
-        low=(2.0 * low_p - 1.0) * scale,
-        high=(2.0 * high_p - 1.0) * scale,
+        low=(2 * low_p - 1) * scale,
+        high=(2 * high_p - 1) * scale,
         level=level,
         method="newcombe_paired_discordant",
     )
 
 
-def cell_status(
-    interval: ConfidenceInterval | None,
-    *,
+def classify_paired(
     n_paired: int,
-    n_discordant: int,
-    independent_runs: int,
-    min_independent_runs: int = 5,
-) -> LiftStatus:
-    if n_paired == 0 or n_discordant == 0 or interval is None:
-        return "insufficient_data"
-    if independent_runs < min_independent_runs:
-        return "low_run_count"
-    if interval.low > 0:
-        return "established_positive"
-    if interval.high < 0:
-        return "established_negative"
-    return "not_established"
-
-
-def protocol_hash(document: dict) -> str:
-    """Canonical hash of a protocol registered before the first counted run."""
-
-    payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def hash_matches(expected: str | None, actual: str | None) -> bool:
-    return bool(expected) and expected == actual
-
-
-def holdout_blocks_distill(
-    fixture_id: str | None,
+    n_help: int,
+    n_hurt: int,
     *,
-    holdout_ids: Iterable[str],
-    is_eval_fixture: bool = False,
+    min_independent_runs: int = 5,
+    pathway: str = "applied",
+) -> tuple[float | None, ConfidenceInterval | None, LiftStatus]:
+    if pathway == "never_retrieved" or n_paired == 0:
+        return None, None, "insufficient_data"
+    interval = paired_discordant_interval(n_paired, n_help, n_hurt)
+    if interval is None:
+        return None, None, "insufficient_data"
+    estimate = (n_help - n_hurt) / n_paired
+    if n_paired < min_independent_runs and (interval.low > 0 or interval.high < 0):
+        return estimate, interval, "low_run_count"
+    if interval.low > 0:
+        return estimate, interval, "established_positive"
+    if interval.high < 0:
+        return estimate, interval, "established_negative"
+    return estimate, interval, "not_established"
+
+
+def holm_keeps(p_values: list[tuple[str, float]], alpha: float = 0.05) -> set[str]:
+    """Return skill ids that survive Holm. Exploratory ids must not be passed in."""
+
+    ordered = sorted(p_values, key=lambda item: item[1])
+    m = len(ordered)
+    kept: set[str] = set()
+    for i, (skill_id, p_value) in enumerate(ordered, start=1):
+        if p_value <= alpha / (m - i + 1):
+            kept.add(skill_id)
+        else:
+            break
+    return kept
+
+
+def mcnemar_p(n_help: int, n_hurt: int) -> float | None:
+    discordant = n_help + n_hurt
+    if discordant == 0:
+        return None
+    # Two-sided exact test on the discordant split, p=0.5.
+    k = min(n_help, n_hurt)
+    tail = sum(math.comb(discordant, i) for i in range(k + 1)) / (2**discordant)
+    return min(1.0, 2 * tail)
+
+
+def pair_rows(rows: Iterable[PairRow], *, protocol: ContributionProtocol) -> list[ContributionCell]:
+    """Pair on task_id. Concordant pairs do not move the estimate."""
+
+    grouped: dict[tuple[str, str, str, str], list[PairRow]] = {}
+    for row in rows:
+        key = (row.stratum, row.order_arm, row.skill_id or "", row.task_id)
+        grouped.setdefault(key, []).append(row)
+    cells: list[ContributionCell] = []
+    buckets: dict[tuple[str, str, str], list[tuple[bool, bool, int, float]]] = {}
+    for (stratum, order_arm, skill_id, _task_id), group in grouped.items():
+        on = next((r for r in group if r.arm == "on"), None)
+        masked = next((r for r in group if r.arm == "masked"), None)
+        if on is None or masked is None:
+            continue
+        if not on.valid_non_judge or not masked.valid_non_judge:
+            continue
+        attempts = 0
+        cost = 0.0
+        if on.attempts is not None and masked.attempts is not None:
+            attempts = on.attempts - masked.attempts
+        if on.cost_usd is not None and masked.cost_usd is not None:
+            cost = on.cost_usd - masked.cost_usd
+        buckets.setdefault((stratum, order_arm, skill_id), []).append(
+            (on.success, masked.success, attempts, cost)
+        )
+    registered = set(protocol.skill_ids)
+    for (stratum, order_arm, skill_id), pairs in buckets.items():
+        help_n = sum(1 for on, masked, _, _ in pairs if on and not masked)
+        hurt_n = sum(1 for on, masked, _, _ in pairs if masked and not on)
+        pathway = "applied" if skill_id in registered else "never_retrieved"
+        estimate, interval, status = classify_paired(
+            len(pairs), help_n, hurt_n, pathway=pathway if skill_id else "applied"
+        )
+        multiplicity = "secondary" if skill_id else "primary"
+        if skill_id and skill_id not in registered:
+            multiplicity = "exploratory"
+        cells.append(
+            ContributionCell(
+                skill_id=skill_id or None,
+                stratum=stratum,
+                order_arm=order_arm,  # type: ignore[arg-type]
+                n_paired=len(pairs),
+                n_discordant_help=help_n,
+                n_discordant_hurt=hurt_n,
+                estimate=estimate,
+                interval=interval,
+                status=status,
+                pathway=pathway if skill_id else "applied",  # type: ignore[arg-type]
+                estimand="itt",
+                multiplicity=multiplicity,  # type: ignore[arg-type]
+                holdout=False,
+                protocol_hash=protocol.protocol_hash(),
+                attempts_delta=sum(item[2] for item in pairs) / len(pairs),
+                cost_delta_usd=sum(item[3] for item in pairs) / len(pairs),
+            )
+        )
+    return cells
+
+
+def skill_claim_allowed(
+    cell: ContributionCell,
+    *,
+    other_order: ContributionCell | None,
+    protocol_hash: str | None,
+    holm_kept: set[str],
 ) -> bool:
-    """Same block as an eval fixture. Holdout chores never enter distill."""
-
-    if is_eval_fixture:
-        return True
-    return fixture_id is not None and fixture_id in set(holdout_ids)
-
-
-def mask_frozen_bundle(bundle: Sequence[str], skill_id: str) -> list[str]:
-    """Copy the frozen bundle and drop one member. Does not refill."""
-
-    return [item for item in bundle if item != skill_id]
-
-
-def pair_on_task_id(
-    on_rows: Sequence[dict],
-    suppressed_rows: Sequence[dict],
-) -> list[tuple[dict, dict]]:
-    """Pair retrieval-on and retrieval-suppressed rows on task_id.
-
-    Unmatched rows are dropped. This is not a class baseline subtraction.
-    """
-
-    suppressed = {row["task_id"]: row for row in suppressed_rows}
-    pairs: list[tuple[dict, dict]] = []
-    for row in on_rows:
-        other = suppressed.get(row.get("task_id"))
-        if other is not None:
-            pairs.append((row, other))
-    return pairs
+    if cell.multiplicity != "secondary" or cell.skill_id is None:
+        return False
+    if cell.holdout or cell.null_judge or cell.estimand != "itt":
+        return False
+    if cell.pathway != "applied":
+        return False
+    if protocol_hash is None or cell.protocol_hash != protocol_hash:
+        return False
+    if cell.status != "established_positive":
+        return False
+    if other_order is None or other_order.order_arm == cell.order_arm:
+        return False
+    if other_order.status != "established_positive":
+        return False
+    return cell.skill_id in holm_kept
 
 
-def discordant_counts(pairs: Sequence[tuple[dict, dict]], key: str = "success") -> tuple[int, int, int]:
-    help_n = 0
-    hurt_n = 0
-    for on_row, off_row in pairs:
-        on_ok = bool(on_row.get(key))
-        off_ok = bool(off_row.get(key))
-        if on_ok and not off_ok:
-            help_n += 1
-        elif off_ok and not on_ok:
-            hurt_n += 1
-    return help_n, hurt_n, len(pairs)
-
-
-@dataclass(frozen=True)
-class RetirementProposal:
-    skill_id: str
-    reason: str
-    writes_t3: bool = False
-    emitted: bool = False
+def refused_sentences(
+    cell: ContributionCell,
+    *,
+    other_order: ContributionCell | None,
+    a4_measured: bool,
+    protocol_ok: bool,
+) -> list[str]:
+    refused: list[str] = []
+    if not protocol_ok:
+        refused.append("Protocol hash mismatch. Established language refused.")
+    if cell.pathway != "applied":
+        refused.append("Skill was not applied. A retrieved-unused or never-retrieved row is not a skill effect.")
+    if cell.estimand != "itt":
+        refused.append("Per-protocol row alone does not establish a skill effect.")
+    if cell.multiplicity == "exploratory":
+        refused.append("Exploratory cell. Not a pre-registered skill contrast.")
+    if cell.holdout:
+        refused.append("Holdout row. Not a promotion row.")
+    if cell.null_judge:
+        refused.append("Judge-only cell is null.")
+    if other_order is None or other_order.order_arm == cell.order_arm:
+        refused.append("Fixed-order-only gain. The shuffle row is missing or is the same arm.")
+    elif other_order.status != cell.status:
+        refused.append("Order strata disagree. A curriculum is not a skill effect.")
+    if cell.status == "established_negative" and not a4_measured:
+        refused.append("Retirement proposal refused while a4 is untested.")
+    return refused
 
 
 def retirement_proposal(
     cell: ContributionCell,
     *,
-    shuffle_agrees: bool,
-    threshold: float,
-    judge_false_pass_rate: float | None,
-    disabling_threshold: float,
+    other_order: ContributionCell | None,
+    a4_measured: bool,
+    false_pass_rate: float | None,
+    tau: float,
 ) -> RetirementProposal | None:
-    """Proposal row only. Emitter stays off while a4 is untested.
+    """Emit a proposal only. writes_t3 stays false. Emitter stays off while a4 is untested."""
 
-    writes_t3 is always false. Missing or over-threshold false-pass
-    returns None rather than a retirement.
-    """
-
-    if judge_false_pass_rate is None:
+    if cell.skill_id is None:
         return None
-    if judge_false_pass_rate > disabling_threshold:
+    if not a4_measured or false_pass_rate is None:
+        return RetirementProposal(
+            skill_id=cell.skill_id,
+            stratum=cell.stratum,
+            emitted=False,
+            writes_t3=False,
+            reason="emitter off: a4 is untested",
+        )
+    if false_pass_rate > tau:
+        return RetirementProposal(
+            skill_id=cell.skill_id,
+            stratum=cell.stratum,
+            emitted=False,
+            writes_t3=False,
+            reason="emitter off: false-pass rate is above the disabling threshold",
+        )
+    if cell.status != "established_negative" or cell.interval is None or cell.interval.high >= -tau:
         return None
-    if cell.skill_id is None or cell.multiplicity != "secondary":
-        return None
-    if cell.estimand != "itt" or cell.pathway != "applied" or cell.holdout or cell.null_judge:
-        return None
-    if not shuffle_agrees:
-        return None
-    if cell.interval is None or cell.interval.high >= threshold:
-        return None
-    if cell.status != "established_negative":
-        return None
+    if other_order is None or other_order.status != "established_negative":
+        return RetirementProposal(
+            skill_id=cell.skill_id,
+            stratum=cell.stratum,
+            emitted=False,
+            writes_t3=False,
+            reason="shuffle row does not agree",
+        )
     return RetirementProposal(
         skill_id=cell.skill_id,
-        reason="secondary itt cell below threshold; shuffle agrees; a4 under threshold",
-        writes_t3=False,
+        stratum=cell.stratum,
         emitted=True,
+        writes_t3=False,
+        reason="proposal only; jobs do not write T3",
     )
-
-
-def refused_sentences(result_library_allowed: bool, skill_allowed: bool) -> list[str]:
-    lines = [
-        "refused: the library helped, so this skill helped",
-    ]
-    if not result_library_allowed:
-        lines.append("refused: class sentence (fixed-order-only, hash mismatch, or interval includes zero)")
-    if not skill_allowed:
-        lines.append(
-            "refused: skill sentence (not secondary itt applied, holdout, judge-only, or a4 untested for retirement)"
-        )
-    return lines
-
-
-def _z_for(level: float) -> float:
-    if abs(level - 0.95) < 1e-9:
-        return _Z_95
-    raise ValueError("paired_discordant_interval currently supports level=0.95")
