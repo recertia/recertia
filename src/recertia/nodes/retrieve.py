@@ -10,6 +10,7 @@ from contracts.run import MemoryBundle, RunState, Task
 from recertia.nodes.context import NodeContext, NodeOutcome
 from recertia.retrieval.bundle import assemble_bundle
 from recertia.retrieval.config import RetrievalConfig
+from recertia.retrieval.mask import drop_registered_member
 
 
 def retrieval_query(*, request: str | None, goal_context: str | None, goal_terms: str = "") -> str:
@@ -81,6 +82,12 @@ def retrieve(state: RunState, ctx: NodeContext) -> NodeOutcome:
         snapshot_id = explanation.snapshot_id
         dropped = len(explanation.dropped)
         config = getattr(ctx.retriever, "config", config)
+
+    suppress_id = getattr(state, "suppressed_skill_id", None)
+    if suppress_id:
+        before = len(skills)
+        skills = drop_registered_member(skills, str(suppress_id))
+        dropped += before - len(skills)
 
     bundle = assemble_bundle(
         skills=skills,

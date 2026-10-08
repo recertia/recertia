@@ -23,6 +23,7 @@ def lift_cmd(
     from datetime import datetime, timezone
 
     from contracts.eval import BinomialSample
+    from recertia.cli.lift_report import render_lift
     from recertia.evals.statistics import causal_lift
     from recertia.evals.store import EvalStore
     from recertia.policy_load import load_policy
@@ -65,17 +66,21 @@ def lift_cmd(
                 f"interval=[{result.interval.low:.4f}, {result.interval.high:.4f}] "
                 f"level={result.interval.level} method={result.interval.method}"
             )
-        typer.echo(f"status={result.render_status()}")
+        displayed = result.render_status()
+        if result.status in {"established_positive", "established_negative"} and not result.library_claim_allowed():
+            displayed = "not established"
+        typer.echo(f"status={displayed}")
     _echo_variance("treatment", result.treatment_variance, series_kind)
     _echo_variance("control", result.control_variance, series_kind)
     _echo_variance("lift", result.lift_variance, series_kind)
-    if result.status == "not_established":
+    if result.status == "not_established" or not result.library_claim_allowed():
         typer.echo("claim=not established (interval includes zero)")
     elif result.status == "low_run_count":
         typer.echo(
             "claim=not established (independent run count below floor; "
             "never claims established lift)"
         )
+    typer.echo(render_lift(result), nl=False)
 
     if ledger_path is not None:
         from recertia.ledger import HashChainLedger

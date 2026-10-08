@@ -1,0 +1,11 @@
+{
+  "task_class": "repo-chore",
+  "chore_ids": ["c1", "c2", "c3", "c4", "c5"],
+  "holdout_ids": ["h1"],
+  "skill_ids": ["lint-fix"],
+  "shuffle_seeds": [7],
+  "model_pin": "unpinned",
+  "criteria_hash": "unregistered",
+  "tau": 0.0,
+  "k": 1
+}
