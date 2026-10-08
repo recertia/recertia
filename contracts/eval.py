@@ -37,7 +37,7 @@ class BinomialSample(BaseModel):
 
 
 class RunVariance(BaseModel):
-    """Best–worst gap and sample std-dev over independent run (or snapshot) rates."""
+    """Best-worst gap and sample std-dev over independent run (or snapshot) rates."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -91,9 +91,16 @@ class ContributionCell(BaseModel):
     null_judge: bool = False
 
     def refuses_established(self) -> bool:
+        """True when this cell cannot carry an established sentence.
+
+        Secondary is not an automatic refusal. The class sentence is
+        library_claim_allowed, which ignores secondary cells. Exploratory
+        cells still refuse.
+        """
+
         if self.holdout or self.null_judge:
             return True
-        if self.multiplicity != "primary":
+        if self.multiplicity == "exploratory":
             return True
         if self.estimand != "itt":
             return True
@@ -105,7 +112,7 @@ class ContributionCell(BaseModel):
 
 
 class CausalLiftResult(BaseModel):
-    """Treatment − control first-attempt success with a difference CI (specs §19)."""
+    """Treatment minus control first-attempt success with a difference CI (specs §19)."""
 
     model_config = ConfigDict(extra="forbid")
 
