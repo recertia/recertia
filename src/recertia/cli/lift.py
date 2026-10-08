@@ -67,19 +67,24 @@ def lift_cmd(
                 f"level={result.interval.level} method={result.interval.method}"
             )
         displayed = result.render_status()
-        if result.status in {"established_positive", "established_negative"} and not result.library_claim_allowed():
+        if (
+            result.status in {"established_positive", "established_negative"}
+            and not result.library_claim_allowed()
+        ):
             displayed = "not established"
         typer.echo(f"status={displayed}")
     _echo_variance("treatment", result.treatment_variance, series_kind)
     _echo_variance("control", result.control_variance, series_kind)
     _echo_variance("lift", result.lift_variance, series_kind)
-    if result.status == "not_established" or not result.library_claim_allowed():
-        typer.echo("claim=not established (interval includes zero)")
-    elif result.status == "low_run_count":
+    if result.status == "low_run_count":
         typer.echo(
             "claim=not established (independent run count below floor; "
             "never claims established lift)"
         )
+    elif result.status == "not_established":
+        typer.echo("claim=not established (interval includes zero)")
+    elif not result.library_claim_allowed():
+        typer.echo("claim=not established")
     typer.echo(render_lift(result), nl=False)
 
     if ledger_path is not None:
