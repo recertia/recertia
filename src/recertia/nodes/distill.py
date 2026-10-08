@@ -12,6 +12,7 @@ from pathlib import Path
 from contracts.budget import BudgetReservation, budget_excess
 from contracts.run import ReusabilityVerdict, RunState
 from contracts.skill import SkillVersion
+from recertia.distill.holdout import distill_holdout_block
 from recertia.distill.prior import load_authoring_prior
 from recertia.distill.success import distill_success
 from recertia.memory.episodic import CaseRecord
@@ -19,7 +20,7 @@ from recertia.nodes.context import NodeContext, NodeOutcome
 
 
 def distill(state: RunState, ctx: NodeContext) -> NodeOutcome:
-    blocked = _eval_firewall(state) or _arm_must_not_learn(state)
+    blocked = _eval_firewall(state) or _arm_must_not_learn(state) or _holdout_block(state)
     if blocked is not None:
         return blocked
     _record_solved_case(state, ctx)
@@ -30,6 +31,29 @@ def distill(state: RunState, ctx: NodeContext) -> NodeOutcome:
     if blocked_write is not None:
         return blocked_write
     return _author_or_reject(state, ctx)
+
+
+def _holdout_block(state: RunState) -> NodeOutcome | None:
+    """Holdout chores use the same block as an eval fixture. No protocol file means no extra block."""
+
+    fixture_id = getattr(state.task, "fixture_id", None)
+    reason = distill_holdout_block(fixture_id, Path(".recertia/contribution-protocol.json"))
+    if reason is None:
+        return None
+    verdict = ReusabilityVerdict(
+        verdict="one_off",
+        parameterisable=False,
+        context_free=True,
+        checkable=True,
+        not_duplicate=True,
+        bounded=True,
+        reason=reason,
+    )
+    return NodeOutcome(
+        state=state.model_copy(update={"reusability": verdict, "draft": None, "facts_extracted": []}),
+        route="one_off",
+        note=verdict.reason,
+    )
 
 
 def _eval_firewall(state: RunState) -> NodeOutcome | None:
@@ -75,8 +99,6 @@ def _arm_must_not_learn(state: RunState) -> NodeOutcome | None:
 
 
 def _record_solved_case(state: RunState, ctx: NodeContext) -> None:
-    """Always record the solved attempt episodically (M2 behaviour retained) for non-fixture runs."""
-
     if ctx.episodic is None:
         return
     approach = (
@@ -101,8 +123,6 @@ def _record_solved_case(state: RunState, ctx: NodeContext) -> None:
 
 
 def _existing_skill_is_evidence(state: RunState, ctx: NodeContext) -> NodeOutcome | None:
-    """Applying an existing skill is evidence, not a new library entry (unless scratch)."""
-
     if not (state.strategy in ("apply", "adapt") and state.chosen is not None):
         return None
     _note_apply_session(ctx, state)
@@ -124,8 +144,6 @@ def _existing_skill_is_evidence(state: RunState, ctx: NodeContext) -> NodeOutcom
 
 
 def _version_write_budget(state: RunState) -> NodeOutcome | None:
-    """Refuse to author when another version write would exceed the run cap (ADR-0017)."""
-
     if (
         budget_excess(
             state.budget,
@@ -196,7 +214,6 @@ def _author_or_reject(state: RunState, ctx: NodeContext) -> NodeOutcome:
             )
             draft = None
 
-
     if draft is not None and state.execution_guide is not None:
         from recertia.nodes.guide_stitch import reject_guide_leak
 
@@ -213,9 +230,6 @@ def _author_or_reject(state: RunState, ctx: NodeContext) -> NodeOutcome:
             )
             draft = None
 
-    # Without a skill store the graph cannot persist memory — keep M0/M1 one_off behaviour.
-    # Without a reviewer, do not enter review (which would mark a *solved* task as
-    # terminal=rejected); retain the draft on state for later promotion.
     if verdict.verdict == "reusable" and (ctx.store is None or ctx.reviewer is None):
         if ctx.store is None:
             reason = "skill store not configured; recording as one_off evidence"
@@ -245,7 +259,6 @@ def _author_or_reject(state: RunState, ctx: NodeContext) -> NodeOutcome:
     )
     route = "reusable" if verdict.verdict == "reusable" and draft_payload else "one_off"
     if route == "one_off" and verdict.verdict == "reusable":
-        # Draft missing despite reusable claim — degrade safely.
         verdict = verdict.model_copy(update={"verdict": "one_off", "reason": "draft missing"})
         new_state = new_state.model_copy(update={"reusability": verdict})
     note = verdict.reason
@@ -290,7 +303,6 @@ def _commands_from_context(state: RunState, ctx: NodeContext) -> list[str]:
                 inputs = (event.get("payload") or {}).get("inputs") or {}
                 if tool == "shell" and inputs.get("command"):
                     cmds.append(str(inputs["command"]))
-            # Applicator may record shell under step_end payloads.
             if event.get("kind") == "step_end":
                 cmd = (event.get("payload") or {}).get("command")
                 if cmd:
@@ -309,7 +321,6 @@ def _task_class_sightings(ctx: NodeContext, task_class: str | None) -> int:
 def _nearest_duplicate(ctx: NodeContext, request: str) -> tuple[str, int] | None:
     if ctx.store is None:
         return None
-    # Simple lexical near-duplicate: identical skill_id slug prefix.
     from recertia.distill.success import _skill_id_from_request
 
     want = _skill_id_from_request(request)
