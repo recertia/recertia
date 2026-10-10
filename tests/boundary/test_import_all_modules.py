@@ -1,21 +1,24 @@
 """Import every recertia and contracts module in-process (nightly / bug 12+13).
 
 One subprocess per module is too slow for required ci. This test batches the
-walk in the current interpreter, fails on ImportError, and asserts that
-importing ``recertia.api.app`` does not write ``.recertia/`` into cwd.
+walk in the current interpreter, fails on ImportError, and uses a short
+subprocess only for the two bugs that need a cold interpreter (circular import
+and import-time cwd write).
 """
 
 from __future__ import annotations
 
 import importlib
+import os
 import pkgutil
+import subprocess
 import sys
 import warnings
 from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _walk(package_name: str) -> list[str]:
@@ -28,25 +31,32 @@ def _walk(package_name: str) -> list[str]:
     return names
 
 
-def test_import_workers_on_a_cold_interpreter() -> None:
+def _cold(code: str, *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO_ROOT / "src"), str(REPO_ROOT), env.get("PYTHONPATH", "")]
+    )
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+
+def test_import_workers_on_a_cold_interpreter(tmp_path: Path) -> None:
     """Bug 12: ``import recertia.workers`` used to raise a circular ImportError."""
 
-    # Force a fresh load if a previous test already imported the package.
-    for name in list(sys.modules):
-        if name == "recertia.workers" or name.startswith("recertia.workers."):
-            sys.modules.pop(name)
-        if name == "recertia.api" or name.startswith("recertia.api."):
-            sys.modules.pop(name)
-    imported = importlib.import_module("recertia.workers")
-    assert imported.AsyncRunWorker is not None
+    proc = _cold("import recertia.workers; print(recertia.workers.AsyncRunWorker)", cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "AsyncRunWorker" in proc.stdout
 
 
-def test_import_api_app_does_not_write_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    for name in list(sys.modules):
-        if name == "recertia.api.app":
-            sys.modules.pop(name)
-    importlib.import_module("recertia.api.app")
+def test_import_api_app_does_not_write_cwd(tmp_path: Path) -> None:
+    proc = _cold("import recertia.api.app", cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
     assert not (tmp_path / ".recertia").exists()
 
 
