@@ -1,7 +1,7 @@
 # ADR-0011: Trajectory events and counterfactual replay for measurement integrity
 
 - **Status:** accepted
-- **Evidence base:** plan derived from [Yan et al., arXiv:2607.01120](https://arxiv.org/abs/2607.01120) systems substrate (ATDP / replay); see [references §1.9](../references.md#19-trajectory-events-are-the-missing-measurement-substrate-without-weight-updates). Adapted to Recertia scaffolding-only non-negotiables
+- **Evidence base:** plan derived from [Yan et al., arXiv:2607.01120](https://arxiv.org/abs/2607.01120) systems substrate (ATDP / replay); see [references §1.9](../references.md#19-trajectory-events-are-the-missing-measurement-substrate--without-weight-updates). Adapted to Recertia scaffolding-only non-negotiables
 
 ## Context
 

@@ -49,15 +49,28 @@ SPLIT_DOCS: dict[str, tuple[str, ...]] = {
 
 
 def _slugify(heading: str) -> str:
+    """GitHub heading id: drop punctuation (em dash included), keep underscores,
+    and turn each whitespace character into a hyphen (spaces around a dropped em
+    dash become ``--``).
+    """
+
     text = heading.strip().lower()
     text = re.sub(r"[^\w\s-]", "", text)
-    text = re.sub(r"[\s_]+", "-", text)
+    text = re.sub(r"\s", "-", text)
     return text.strip("-")
 
 
 def _anchors_in(path: Path) -> set[str]:
     text = path.read_text(encoding="utf-8")
-    anchors = {_slugify(m.group(2)) for m in HEADING_RE.finditer(text)}
+    anchors: set[str] = set()
+    seen: dict[str, int] = {}
+    for match in HEADING_RE.finditer(text):
+        slug = _slugify(match.group(2))
+        count = seen.get(slug, 0)
+        seen[slug] = count + 1
+        if count:
+            slug = f"{slug}-{count}"
+        anchors.add(slug)
     anchors.update(re.findall(r'id="([^"]+)"', text))
     return anchors
 
@@ -105,9 +118,7 @@ def check(docs_root: Path = DOCS) -> list[str]:
                     errors.append(
                         f"{_rel(path, base)}: dangling fragment #{frag} in {target}"
                     )
-                elif frag not in anchors and not any(
-                    a.startswith(frag) or frag.startswith(a) for a in anchors
-                ):
+                elif frag not in anchors:
                     errors.append(
                         f"{_rel(path, base)}: dangling fragment #{frag} in {target} "
                         f"(dest={_rel(dest, base)})"
