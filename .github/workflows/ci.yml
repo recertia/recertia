@@ -65,6 +65,75 @@ jobs:
       - name: Test suite (contracts, M0–M9, hardening, API, import boundary)
         run: pytest -v
 
+  package-smoke:
+    name: wheel / sdist smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel and sdist
+        run: |
+          pip install build
+          python -m build
+
+      - name: Assert migrations and policy ship in the artifacts
+        run: |
+          python3 - <<'PY'
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          dist = Path("dist")
+          wheels = list(dist.glob("*.whl"))
+          sdists = list(dist.glob("*.tar.gz"))
+          assert len(wheels) == 1, wheels
+          assert len(sdists) == 1, sdists
+
+          with zipfile.ZipFile(wheels[0]) as zf:
+              names = zf.namelist()
+          sql = [n for n in names if n.endswith(".sql")]
+          assert any(n.endswith(".sqlite.sql") for n in sql), names
+          assert any(n.endswith(".postgres.sql") for n in sql), names
+          assert any(n.endswith("policy_default.json") for n in names), names
+
+          with tarfile.open(sdists[0], "r:gz") as tf:
+              sdist_names = tf.getnames()
+          assert any(n.endswith(".sqlite.sql") for n in sdist_names), sdist_names
+          assert any(n.endswith(".postgres.sql") for n in sdist_names), sdist_names
+          assert any(n.endswith("policy_default.json") for n in sdist_names), sdist_names
+          print("wheel sql:", sql)
+          PY
+
+      - name: Install wheel in a clean venv and smoke
+        run: |
+          python3 -m venv /tmp/rec-smoke
+          /tmp/rec-smoke/bin/pip install dist/*.whl
+          /tmp/rec-smoke/bin/python - <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          from recertia.policy_load import load_policy
+          from recertia.store import apply_sqlite_migrations, list_migrations
+
+          sqlite = list_migrations(dialect="sqlite")
+          postgres = list_migrations(dialect="postgres")
+          assert sqlite, "installed package applied 0 sqlite migrations"
+          assert postgres, "installed package shipped 0 postgres migrations"
+          with TemporaryDirectory() as tmp:
+              applied = apply_sqlite_migrations(Path(tmp) / "store.sqlite")
+          assert applied, applied
+          policy = load_policy()
+          assert policy.version
+          print("migrations", [p.name for p in sqlite], "policy", policy.version)
+          PY
+          /tmp/rec-smoke/bin/recertia --help
+
   container-smoke:
     name: container sandbox smoke
     runs-on: ubuntu-latest
