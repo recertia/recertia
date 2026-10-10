@@ -17,7 +17,7 @@ from contracts.audited_task_state import (
     VerifiedDecision,
     apply_auditor_delta,
 )
-from contracts.budget import Budget, ResidualBudget
+from contracts.budget import Budget, BudgetExhaustedError, ResidualBudget
 from contracts.criteria import TaskCriterion
 
 
@@ -179,8 +179,12 @@ class TestResidualBudgetIsolation:
             Budget(max_attempts=0)
 
     def test_as_admission_budget_clamps_zeros(self):
-        r = ResidualBudget(max_attempts=0, max_tool_calls=0, max_wall_clock_s=0)
+        r = ResidualBudget(max_attempts=1, max_tool_calls=0, max_wall_clock_s=0)
         b = r.as_admission_budget()
-        assert b.max_attempts >= 1
+        assert b.max_attempts == 1
         assert b.max_tool_calls >= 1
         assert b.max_wall_clock_s >= 1
+
+    def test_as_admission_budget_refuses_exhausted_attempts(self):
+        with pytest.raises(BudgetExhaustedError):
+            ResidualBudget(max_attempts=0).as_admission_budget()

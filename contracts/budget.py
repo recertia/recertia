@@ -24,6 +24,10 @@ class Budget(BaseModel):
     max_versions_written: int = Field(default=2, ge=0)
 
 
+class BudgetExhaustedError(ValueError):
+    """Residual capacity cannot be turned into an admission budget (nothing left)."""
+
+
 class ResidualBudget(BaseModel):
     """Remaining capacity. Exhaustion is representable (zeros allowed).
 
@@ -44,13 +48,20 @@ class ResidualBudget(BaseModel):
     max_versions_written: int = Field(default=2, ge=0)
 
     def as_admission_budget(self) -> Budget:
-        """Clamp remaining capacity into a Goal ``Budget`` (admission floors ge=1)."""
+        """Clamp remaining capacity into a Goal ``Budget`` (admission floors ge=1).
 
+        Budget caps are safety caps: exhausted attempts must not be clamped up to 1,
+        which would re-admit one more attempt. Raise instead; callers must stop first
+        (see ``recertia.mea.controller.enforce_round_budget``).
+        """
+
+        if self.max_attempts < 1:
+            raise BudgetExhaustedError("residual max_attempts exhausted; nothing to admit")
         tokens = self.max_tokens
         if tokens is not None and tokens < 1:
             tokens = 1
         return Budget(
-            max_attempts=max(1, self.max_attempts),
+            max_attempts=self.max_attempts,
             max_tool_calls=max(1, self.max_tool_calls),
             max_tokens=tokens,
             max_wall_clock_s=max(1, self.max_wall_clock_s),

@@ -131,6 +131,9 @@ class JobQuota(BaseModel):
         return task_class in COMPUTER_USE_TASK_CLASSES
 
     def can_admit(self, job: JobPriority, *, task_class: str | None = None, tokens: int = 0) -> bool:
+        # A fully spent weekly cap admits nothing, including zero-token requests.
+        if self.remaining() <= 0:
+            return False
         if self._computer_use_class(task_class) and job in (
             "practice_band",
             "practice_hex",
@@ -145,7 +148,8 @@ class JobQuota(BaseModel):
                 used = self.hex_jobs_by_class.get(task_class, 0)
                 if used >= self.max_hex_jobs_per_task_class:
                     return False
-            return self.hex_remaining() >= tokens
+            hex_left = self.hex_remaining()
+            return hex_left > 0 and hex_left >= tokens
         if job == "compress":
             return self.remaining() >= tokens
         return False
