@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -49,7 +49,7 @@ class FailureVerdict(BaseModel):
 
     failure_class: FailureClass
     evidence: list[str] = []
-    implicated_skill: dict | None = None
+    implicated_skill: dict[str, Any] | None = None
     counts_against_trust: bool
     escalate_to_human: bool = False
 

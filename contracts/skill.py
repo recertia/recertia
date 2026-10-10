@@ -9,7 +9,7 @@ does not give you a mutable field to (mis)use.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -94,7 +94,7 @@ class Step(BaseModel):
     id: str = Field(pattern=_STEP_ID_PATTERN)
     tool: str | None = None
     intent: str = Field(min_length=5)
-    inputs: dict = Field(default_factory=dict)
+    inputs: dict[str, Any] = Field(default_factory=dict)
     outputs: list[StepOutput] = Field(default_factory=list)
     input_bindings: list[InputBinding] = Field(default_factory=list)
     optional: bool = False

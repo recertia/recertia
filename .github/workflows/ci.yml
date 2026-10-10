@@ -22,6 +22,8 @@ jobs:
       RECERTIA_NO_NETWORK: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks needs the PR commit range
 
       - uses: actions/setup-python@v5
         with:
@@ -35,6 +37,9 @@ jobs:
 
       - name: Type-check (mypy)
         run: mypy contracts/ src/recertia/
+
+      - name: Type-check strict (contracts/, ADR-0009)
+        run: mypy --strict contracts/
 
       - name: Schema drift (schema/ must equal what contracts/ generates)
         run: python3 scripts/generate_schemas.py --check
@@ -61,6 +66,21 @@ jobs:
 
       - name: Security review (static)
         run: python3 scripts/security_review.py --check
+
+      # Risk lane: PR-range secret scan; full history runs weekly in weekly-ops.yml.
+      - name: Secret scan (gitleaks v8.21.2, PR range)
+        env:
+          GL_SHA256: 5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          curl -sSfLo gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
+          echo "$GL_SHA256  gl.tgz" | sha256sum -c - && tar -xzf gl.tgz gitleaks
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            RANGE="${{ github.sha }}~1..${{ github.sha }}"
+          else
+            RANGE="$BASE..${{ github.sha }}"
+          fi
+          ./gitleaks git --redact --exit-code 1 --log-opts="$RANGE" .
 
       - name: Test suite (contracts, M0–M9, hardening, API, import boundary)
         run: pytest -v

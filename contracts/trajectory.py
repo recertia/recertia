@@ -11,7 +11,7 @@ the trajectory store (same separation as the memory ledger).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -55,7 +55,7 @@ class TrajectoryEvent(BaseModel):
 
     summary: str | None = None
     payload_ref: str | None = None
-    payload_inline: dict | None = None
+    payload_inline: dict[str, Any] | None = None
 
     skill_id: str | None = None
     skill_version: int | None = Field(default=None, ge=1)

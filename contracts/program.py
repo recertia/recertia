@@ -6,7 +6,7 @@ Distinct from Tower ``ReplayPack`` evidence objects.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -143,7 +143,7 @@ class DecompositionCandidate(BaseModel):
 
     decomposition: DecompositionKind
     rationale: str = ""
-    steps: list[dict] = Field(default_factory=list)
+    steps: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def budget_from_goal_constraints(goal: Goal, base: Budget | None = None) -> Budget:

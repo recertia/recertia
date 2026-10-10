@@ -8,7 +8,7 @@ input to something concrete.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -31,7 +31,7 @@ class BranchState(BaseModel):
     subtask: str | None = Field(
         default=None, description="decomposition only: the part of the work this branch owns."
     )
-    candidate: dict | None = None
+    candidate: dict[str, Any] | None = None
     workspace_ref: str
     snapshot_ref: str | None = None
     transcript_ref: str | None = None

@@ -65,6 +65,10 @@ python_version = "3.11"
 files = ["contracts", "src/recertia"]
 ignore_missing_imports = true
 
+# contracts/ is type-checked with `mypy --strict contracts/` in ci.yml.
+# A [[tool.mypy.overrides]] strict=true block is not used: mypy 2 treats
+# several "strict" knobs as global and they leak into src/recertia.
+
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"

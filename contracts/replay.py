@@ -7,7 +7,7 @@ Solver nodes must never import this module (boundary test).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -58,10 +58,10 @@ class ReplayObservation(BaseModel):
     counterfactual_first_attempt_success: bool | None = None
     original_skill_id: str | None = None
     counterfactual_skill_id: str | None = None
-    original_bundle_summary: dict | None = None
-    counterfactual_bundle_summary: dict | None = None
+    original_bundle_summary: dict[str, Any] | None = None
+    counterfactual_bundle_summary: dict[str, Any] | None = None
     plan_would_change: bool | None = None
-    criterion_deltas: list[dict] = Field(default_factory=list)
+    criterion_deltas: list[dict[str, Any]] = Field(default_factory=list)
     status: ReplayObsStatus = "completed"
     reason: str | None = None
     child_run_id: str | None = None
