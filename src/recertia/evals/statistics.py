@@ -217,3 +217,47 @@ def mean(values: Iterable[float]) -> float | None:
     if not vals:
         return None
     return sum(vals) / len(vals)
+
+
+def _normal_mixture_radius(n: int, alpha: float, *, sigma: float = 0.5, rho: float | None = None) -> float:
+    """Time-uniform radius for the running mean of ``n`` sigma-sub-Gaussian draws.
+
+    Two-sided normal-mixture (Robbins) boundary as presented in Howard et al.,
+    "Time-uniform, nonparametric, nonasymptotic confidence sequences" (Ann. Stat. 2021,
+    arXiv:1810.08240). Bernoulli outcomes are 1/2-sub-Gaussian. ``rho`` tunes the sample
+    size at which the boundary is tightest; default targets roughly 500 episodes per arm.
+    """
+
+    if rho is None:
+        rho = 1.0 / (sigma * sigma * 500.0)
+    v = n * sigma * sigma
+    return math.sqrt(2.0 * (v * rho + 1.0) / rho * math.log(math.sqrt(v * rho + 1.0) / (alpha / 2.0))) / n
+
+
+def anytime_valid_lift_interval(
+    treatment: BinomialSample,
+    control: BinomialSample,
+    *,
+    level: float = 0.95,
+) -> ConfidenceInterval | None:
+    """Confidence *sequence* for treatment-minus-control success rate.
+
+    Unlike :func:`newcombe_wilson_difference`, coverage holds simultaneously over every
+    sample size, so the standing control arm can be inspected continuously (and the claim
+    declared "established" the first time the interval excludes zero) without inflating
+    the false-positive rate. Miscoverage is split evenly across arms (union bound).
+    """
+
+    if treatment.trials <= 0 or control.trials <= 0:
+        return None
+    assert treatment.rate is not None and control.rate is not None
+    alpha_arm = (1.0 - level) / 2.0
+    rt = _normal_mixture_radius(treatment.trials, alpha_arm)
+    rc = _normal_mixture_radius(control.trials, alpha_arm)
+    diff = treatment.rate - control.rate
+    return ConfidenceInterval(
+        low=max(-1.0, diff - rt - rc),
+        high=min(1.0, diff + rt + rc),
+        level=level,
+        method="anytime_normal_mixture",
+    )
