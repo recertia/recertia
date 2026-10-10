@@ -5,25 +5,53 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
+from importlib.resources import files
 from pathlib import Path
 
 from contracts.policy import JobQuota, Policy
 
-_REPO_DEFAULT = Path(__file__).resolve().parents[2] / "policy" / "default.json"
+_PACKAGED_POLICY = "policy_default.json"
+
+
+def _packaged_policy_text() -> str:
+    resource = files("recertia").joinpath(_PACKAGED_POLICY)
+    if not resource.is_file():
+        raise FileNotFoundError(
+            "packaged default policy is missing from the install; "
+            "set RECERTIA_POLICY_PATH or reinstall recertia with package data"
+        )
+    return resource.read_text(encoding="utf-8")
 
 
 def default_policy_path() -> Path:
+    """Return the override path, or the packaged default when it is on disk."""
+
     override = os.environ.get("RECERTIA_POLICY_PATH", "").strip()
     if override:
         return Path(override)
-    return _REPO_DEFAULT
+    resource = files("recertia").joinpath(_PACKAGED_POLICY)
+    if not resource.is_file():
+        raise FileNotFoundError(
+            "packaged default policy is missing from the install; "
+            "set RECERTIA_POLICY_PATH or reinstall recertia with package data"
+        )
+    return Path(str(resource))
 
 
 def load_policy(path: Path | str | None = None) -> Policy:
-    """Read the versioned Policy document. Missing path raises; do not invent flags."""
+    """Read the versioned Policy document. Missing path raises; do not invent flags.
 
-    target = Path(path) if path is not None else default_policy_path()
-    return Policy.model_validate_json(target.read_text(encoding="utf-8"))
+    Default policy is the copy shipped in the wheel (``importlib.resources``), not a
+    repo-relative ``parents[2]`` path. ``RECERTIA_POLICY_PATH`` still overrides.
+    """
+
+    if path is not None:
+        target = Path(path)
+        return Policy.model_validate_json(target.read_text(encoding="utf-8"))
+    override = os.environ.get("RECERTIA_POLICY_PATH", "").strip()
+    if override:
+        return Policy.model_validate_json(Path(override).read_text(encoding="utf-8"))
+    return Policy.model_validate_json(_packaged_policy_text())
 
 
 def iso_week_id(at: datetime | None = None) -> str:

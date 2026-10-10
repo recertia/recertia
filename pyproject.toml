@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.9,<3",
     "typer>=0.12",
+    "jsonschema>=4",
 ]
 
 [project.urls]
@@ -28,9 +29,14 @@ api = [
 postgres = [
     "psycopg[binary]>=3.2",
 ]
+pdf = [
+    "pypdf>=4",
+]
+otel = [
+    "opentelemetry-api>=1.20",
+]
 dev = [
     "pytest>=8",
-    "jsonschema>=4",
     "ruff>=0.6",
     "mypy>=1.11",
     "fastapi>=0.115",
@@ -66,3 +72,7 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src", "."]
 include = ["contracts", "contracts.*", "recertia", "recertia.*"]
+
+[tool.setuptools.package-data]
+"recertia" = ["policy_default.json"]
+"recertia.store" = ["migrations/*.sql"]

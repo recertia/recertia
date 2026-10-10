@@ -259,7 +259,7 @@ def _run_schema(criterion: CriterionLike, ctx: NodeContext) -> CriterionResult:
     assert criterion.target is not None and criterion.schema_ref is not None
     try:
         import jsonschema
-    except ImportError as exc:  # pragma: no cover - optional in non-dev installs
+    except ImportError as exc:  # pragma: no cover - core dependency missing from the install
         return CriterionResult(
             criterion_id=criterion.id,
             kind="schema",
