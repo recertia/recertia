@@ -292,7 +292,7 @@ live traffic without the ablation firewall.
 | **Break It Down, Pass It On: Cross-Task Skill Transfer in LLM Agents**, Feng, Bijoy, Balasubramanian, and Zhou, arXiv:2608.20274, 2026 **[F]** | Task-level induced skills often fall *below* the no-memory baseline; subtask-level skills raise it. Text transfers better than code. Skill utility (specificity × abstractness) predicts transfer before a new run. Confirms pitfall/subtask-shaped `failure_modes` and a possible advisory retrieve pre-filter — not a new node. See [§13](#13-five-day-arxiv-scan-2026-08-18-to-2026-08-23) |
 | **SkillForge: Self-Distilling Agents for Project-Specific Issue Resolution**, Chen, Li, Gu, Shi, and Guan, arXiv:2608.18933, 2026 **[F]** | Synthesizes project issues from test-covered core functions, then distills entity-grounded skills. SWE-bench Verified +5.6–5.8pp over Mini-SWE-Agent. Repo-chore cousin of Miner + Practice; do not add a synthetic-issue generator until Practice conversion is a measured number |
 | **Optimal Skill Selection for LLM Agents with Provable Bicriteria Guarantees**, Chen, Chen, Wang, Li, and Huang, arXiv:2608.19993, 2026 **[F]** | Set-level packing under a token budget with a bicriteria guarantee; bad extras can beat the empty-bundle control the wrong way. Retrieve-time packer candidate; not implemented. See [§1.12](#112-skill-set-packing-under-a-token-budget-is-retrieve-time-not-a-new-node-not-implemented) |
-| **Recursive Experiential–Working Memory Evolution for Long-Horizon Agent Harnesses** (Recuris), Yu, Wu, Yin, Chen, Zhao, Wang, Yan, and Yang, arXiv:2608.24876, 25 August 2026 **[F]** | Closest published sibling: frozen model, fixed Meta-Agent, gated patches to experiential skills, working-memory spec, invocation policy, and checkers. Cite; do not reshape T3. See [§14](#14-recuris-2026-08-26--cite-do-not-reshape-t3) |
+| **Recursive Experiential–Working Memory Evolution for Long-Horizon Agent Harnesses** (Recuris), Yu, Wu, Yin, Chen, Zhao, Wang, Yan, and Yang, arXiv:2608.24876, 25 August 2026 **[F]** | Closest published sibling: frozen model, fixed Meta-Agent, gated patches to experiential skills, working-memory spec, invocation policy, and checkers. Cite; do not reshape T3. See [§14](#14-recuris-2026-08-26-cite-do-not-reshape-t3) |
 
 ### 2.1 Improvement-plane search and packaging (ADR-0015)
 
@@ -362,7 +362,7 @@ Independent 2026 work that converges on external verified state, independent aud
 | **A Deterministic Control Plane for LLM Coding Agents**, Madatha, arXiv:2606.26924, 2026 **[F]** | Configuration, permissions, and state transitions should live in deterministic code, not further LLM orchestration |
 | **Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for Coding Agents?**, Gloaguen et al., arXiv:2602.11988, 2026 **[F]** | Repository-level context files frequently increase cost without improving resolution rates; supports precise machine-checkable criteria over broad narrative dumps |
 | **AgentPoison: Red-teaming LLM Agents via Poisoning Memory or Knowledge Bases**, Chen et al., arXiv:2407.12784, 2024 **[F]** | Memory / knowledge-base poisoning achieves high ASR at very low poison rates; later 2026 studies reconfirm why memory writes must remain gated and provenance-required |
-| **Recuris**, Yu et al., arXiv:2608.24876, 25 August 2026 **[F]** | Checked working-memory commits and component-localized blame on a frozen harness. Confirms external verified state; does not add a node. See [§14](#14-recuris-2026-08-26--cite-do-not-reshape-t3) |
+| **Recuris**, Yu et al., arXiv:2608.24876, 25 August 2026 **[F]** | Checked working-memory commits and component-localized blame on a frozen harness. Confirms external verified state; does not add a node. See [§14](#14-recuris-2026-08-26-cite-do-not-reshape-t3) |
 
 ## 6. Ideas used without a specific citation
 
@@ -386,10 +386,10 @@ No score-9 paper remains in the unread queue.
 
 | Paper | arXiv | Status |
 | --- | --- | --- |
-| **Falsifiable Release Gates for Self-Improving Systems** | [2607.13070](https://arxiv.org/abs/2607.13070) | Absorbed [§15.1](#151-falsifiable-release-gates-score-9--confirm) |
-| **Not All Skills Help: Measuring and Repairing Agent Knowledge** | [2606.15390](https://arxiv.org/abs/2606.15390) | Absorbed [§15.2](#152-assay-score-9--confirm) |
-| **PACE: Anytime-Valid Acceptance Tests for Self-Evolving Agents** | [2606.08106](https://arxiv.org/abs/2606.08106) | Absorbed [§15.3](#153-pace-score-9--confirm) |
-| **Self-Authored Verification Is Unreliable in Heuristic Self-Improving Agents** | [2607.24300](https://arxiv.org/abs/2607.24300) | Absorbed [§15.4](#154-self-authored-verification-score-9--confirm) |
+| **Falsifiable Release Gates for Self-Improving Systems** | [2607.13070](https://arxiv.org/abs/2607.13070) | Absorbed [§15.1](#151-falsifiable-release-gates-score-9-confirm) |
+| **Not All Skills Help: Measuring and Repairing Agent Knowledge** | [2606.15390](https://arxiv.org/abs/2606.15390) | Absorbed [§15.2](#152-assay-score-9-confirm) |
+| **PACE: Anytime-Valid Acceptance Tests for Self-Evolving Agents** | [2606.08106](https://arxiv.org/abs/2606.08106) | Absorbed [§15.3](#153-pace-score-9-confirm) |
+| **Self-Authored Verification Is Unreliable in Heuristic Self-Improving Agents** | [2607.24300](https://arxiv.org/abs/2607.24300) | Absorbed [§15.4](#154-self-authored-verification-score-9-confirm) |
 
 Reference lists extracted from the four score-10 papers are in
 [`../research/score10-references/`](../research/score10-references/) and
@@ -719,7 +719,7 @@ Relevance **9**, importance **7**. Closest published sibling. Confirm. No 16th n
 
 Frozen base model, frozen Meta-Agent, frozen gate, frozen tools. The moving object is a four-part memory-control package: experiential skills, working-memory spec, invocation policy, checkers. Working-memory status advances only when checkers plus environment agree. Failed traces are blamed onto one component before a patch is written. The gate admits a patch only if it repairs the source cluster and does not regress a frozen dev split of already-solved anchors. Abstract numbers, not ours: task success up in 35 of 37 completed model–benchmark pairs; tau-bench +17.8 on GPT-5.6 Sol and +15.6 on Claude Opus 5 (Opus 5 to 87.9%); SkillFlow +16.6 / +13.5 on Qwen3.6-27B / 35B; longest tasks +32.2; common long-horizon failures down by up to 80%. Neutral starter memory \(M_0\) does not beat the bare agent on the interesting suites; evolved memory does. Verifiers are programmatic (\(\tau^2\)-Retail / Airline, SkillFlow, Terminal-Bench 2.1).
 
-**Take:** checked working-memory commits (episodic store + `validate`); four-way blame (skill / WM spec / invocation / checkers) as an evolve taxonomy; lift tables that report bare / \(M_0\) / treatment; frozen evolve/dev/test plus regression on already-solved anchors as golden-gate hygiene. Assumption [`a10`](assumptions.md#a10-checked-working-memory-plus-component-localized-patches-lift-versus-m_0-on-repo-chore) stays `untested` until a Recertia three-arm run exists.
+**Take:** checked working-memory commits (episodic store + `validate`); four-way blame (skill / WM spec / invocation / checkers) as an evolve taxonomy; lift tables that report bare / \(M_0\) / treatment; frozen evolve/dev/test plus regression on already-solved anchors as golden-gate hygiene. Assumption [`a10`](assumptions.md#a10-checked-working-memory-plus-component-localized-patches-lift-versus-m-0-on-repo-chore) stays `untested` until a Recertia three-arm run exists.
 
 **Decline:** RSI branding for a fixed critic. Unbounded skill accretion (no Recertifier, no ADR-0006 cap). SkillFlow family-internal evolution sold as unseen-task transfer. Terminal-Bench adaptation that is mostly extra retries. LLM-authored skills with only a small-dev gate (SkillsBench, [§1.1](#11-self-authored-skills-showed-no-benefit-curation-was-the-bottleneck)).
 
@@ -755,7 +755,7 @@ Generation and curation are different jobs. Randomized masking finds causal hete
 
 The acceptor, not the proposer, is the weak point. "Keep it if the score went up," applied hundreds of times to the same noisy dev estimate, is uncontrolled adaptive testing. PACE commits only when a testing-by-betting e-process accumulates decisive evidence, with a per-decision false-commit bound under optional stopping. Abstract claims on Qwen2.5 (0.5B–3B) prompt-level self-evolution (GSM8K, SVAMP, ARC-Challenge): greedy commits 30–42% false and 10–33% harmful edits when a real improvement is hidden; with no real gain, greedy commits 13–21 spurious edits per run and drops the most fragile agent 4.9 points; PACE holds baseline.
 
-**Take:** confirms golden gates and the refuse-to-say-established rule. A single uptick is not a commit. Kin to the measured-null demand in [§1.11](#111-phantom-gains-every-transition-statistic-needs-a-measured-null--confirming-not-changing).
+**Take:** confirms golden gates and the refuse-to-say-established rule. A single uptick is not a commit. Kin to the measured-null demand in [§1.11](#111-phantom-gains-every-transition-statistic-needs-a-measured-null-confirming-not-changing).
 
 **Decline:** do not replace the golden gate with an e-process. PACE's object is prompt-level self-modification on small models. Recertia does not let the improver approve itself (ADR-0004, ADR-0005). No new acceptor node.
 
