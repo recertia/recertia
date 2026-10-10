@@ -1,0 +1,5 @@
+# Synthetic fixtures for the repo's own secret scanners (scripts/security_review.py,
+# recertia.memory.procedural.hygiene). Fingerprint-scoped per CTO_REVIEW §3, not whole files.
+a5e947a9c8ac9d9233f87ba14cc72fbb69f427c5:tests/contracts/test_security_review.py:github-pat:88
+a5e947a9c8ac9d9233f87ba14cc72fbb69f427c5:tests/unit/memory/test_hygiene.py:github-pat:67
+a5e947a9c8ac9d9233f87ba14cc72fbb69f427c5:tests/unit/memory/test_hygiene.py:private-key:65
