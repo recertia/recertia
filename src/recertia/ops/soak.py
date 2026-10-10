@@ -51,13 +51,13 @@ def _as_report(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def observation_count(report: dict[str, Any]) -> int:
-    """Live (non-fixture) observations implied by the weekly payload."""
+    """Live (non-fixture) observations implied by the weekly payload.
 
-    if report.get("first_attempt_success") is not None:
-        lift = report.get("causal_lift") or {}
-        treatment = int((lift.get("treatment") or {}).get("trials") or 0)
-        control = int((lift.get("control") or {}).get("trials") or 0)
-        return max(treatment + control, 1)
+    Counts only recorded lift-arm trials. A summary metric such as
+    ``first_attempt_success`` is not itself an observation: flooring at 1 when it was
+    set let a zero-trial week count toward ``gate_ready`` (empty must mean empty).
+    """
+
     lift = report.get("causal_lift") or {}
     treatment = int((lift.get("treatment") or {}).get("trials") or 0)
     control = int((lift.get("control") or {}).get("trials") or 0)
