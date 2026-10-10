@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import subprocess
 from pathlib import Path
 
 from contracts.failure import FailureSignal
@@ -173,6 +174,8 @@ def run_container_command(command: str, workdir: Path) -> dict:
         proc = run_configured_command(command, workdir=workdir, timeout_s=60)
     except SandboxError as exc:
         return {"returncode": 126, "stdout": "", "stderr": str(exc)}
+    except subprocess.TimeoutExpired:
+        return {"returncode": 124, "stdout": "", "stderr": "timed out after 60s"}
     return {
         "returncode": proc.returncode,
         "stdout": proc.stdout[-4000:],

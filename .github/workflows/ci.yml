@@ -190,4 +190,7 @@ jobs:
           RECERTIA_EXECUTION_BACKEND: container
           RECERTIA_CONTAINER_RUNTIME: docker
           RECERTIA_WORKDIR_WORLD_WRITE: "1"
-        run: pytest -v tests/e2e/test_container_smoke.py
+          # The real-docker timeout test fails (instead of skipping) here if Docker or the
+          # pre-pulled python:3.12-slim image is missing.
+          RECERTIA_REQUIRE_REAL_DOCKER: "1"
+        run: pytest -v -rs tests/e2e/test_container_smoke.py tests/runtime/test_hung_command_timeouts.py

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -220,10 +222,12 @@ def _container_run(
     spec: ContainerSpec,
     timeout_s: int,
 ) -> subprocess.CompletedProcess[str]:
+    name = f"rec-{uuid.uuid4().hex[:16]}"
     args = [
         runtime,
         "run",
         "--rm" if spec.remove else "",
+        f"--name={name}",
         f"--network={spec.network}",
         f"--user={spec.user}",
         f"--workdir={spec.workdir_mount}",
@@ -247,7 +251,33 @@ def _container_run(
         args.extend(["--tmpfs", "/tmp:rw,size=64m"])
     args = [a for a in args if a]
     args.extend([spec.image, "sh", "-c", command])
-    return subprocess.run(args, capture_output=True, text=True, timeout=timeout_s)
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        # Killing the CLI client does not stop the container; kill it by name.
+        _kill_container(runtime, name)
+        raise
+
+
+def _kill_container(runtime: str, name: str) -> None:
+    """Best-effort ``<runtime> kill <name>`` after a timeout (never raises)."""
+
+    try:
+        subprocess.run([runtime, "kill", name], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _kill_tree(proc: subprocess.Popen[str]) -> None:
+    """SIGKILL the child's whole process group (POSIX); plain kill on Windows."""
+
+    if sys.platform == "win32":
+        proc.kill()
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 def run_with_backend(
@@ -339,4 +369,15 @@ def _local_run(
 
         kwargs["preexec_fn"] = limit_process
 
-    return subprocess.run(command, **kwargs)
+    # Own session/process group: on timeout kill the whole tree, not just /bin/sh.
+    del kwargs["timeout"], kwargs["capture_output"]
+    with subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, **kwargs
+    ) as proc:
+        try:
+            out, err = proc.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            proc.communicate()
+            raise
+    return subprocess.CompletedProcess(command, proc.returncode, out, err)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import functools
 import json
 import operator
+import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -195,6 +196,8 @@ def _run_command(criterion: CriterionLike, ctx: NodeContext) -> CriterionResult:
         exit_code, output = proc.returncode, proc.stdout + proc.stderr
     except SandboxError as exc:
         exit_code, output = 126, str(exc)
+    except subprocess.TimeoutExpired:
+        exit_code, output = 124, f"timed out after {criterion.timeout_s}s"
     return CriterionResult(
         criterion_id=criterion.id,
         kind="command",
