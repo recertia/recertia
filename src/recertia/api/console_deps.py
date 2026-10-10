@@ -16,7 +16,6 @@ from recertia.api.jobs_store import JobRunStore
 from recertia.api.quotas import QuotaStore
 from recertia.programs.store import ProgramStore
 from recertia.proposals.store import ProposalStore
-from recertia.workers.run_worker import AsyncRunWorker
 
 
 class ConsoleContext:
@@ -63,6 +62,8 @@ class ConsoleContext:
         self.programs = ProgramStore(root / "programs.sqlite")
         self.job_runs = JobRunStore(root / "job_runs.sqlite")
         self._program_idempotency: dict[str, str] = {}
+        from recertia.workers.run_worker import AsyncRunWorker
+
         self.events = RunEventLog(root / "run_events")
         self.worker = AsyncRunWorker(
             events=self.events,
