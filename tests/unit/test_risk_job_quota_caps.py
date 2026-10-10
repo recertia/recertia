@@ -56,12 +56,19 @@ def test_exhausted_cap_rejects_positive_tokens(job: str) -> None:
     assert q.can_admit(job, tokens=1) is False  # type: ignore[arg-type]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG (b): can_admit with default tokens=0 admits work when weekly_token_cap is fully "
-    "spent (remaining() >= 0 is always true). CTO-rec to decide.",
-)
-@pytest.mark.parametrize("job", ["recertifier", "curator_retire", "fail_cluster_author", "compress"])
+@pytest.mark.parametrize("job", JOBS)
 def test_exhausted_cap_rejects_zero_token_admission(job: str) -> None:
+    """Bug 7 (CTO_REVIEW §4): tokens=0 must not bypass a fully spent weekly cap."""
     q = JobQuota(weekly_token_cap=100, tokens_spent=100)
     assert q.can_admit(job) is False  # type: ignore[arg-type]
+
+
+def test_exhausted_hex_share_rejects_zero_token_admission() -> None:
+    q = JobQuota(weekly_token_cap=1000, hex_share=0.25, hex_tokens_spent=250, tokens_spent=250)
+    assert q.can_admit("practice_hex") is False
+    assert q.can_admit("recertifier") is True
+
+
+def test_zero_cap_admits_nothing() -> None:
+    for job in JOBS:
+        assert JobQuota(weekly_token_cap=0).can_admit(job) is False  # type: ignore[arg-type]
