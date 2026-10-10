@@ -164,8 +164,12 @@ def _docker_ready() -> bool:
     return out.returncode == 0
 
 
-@pytest.mark.skipif(not _docker_ready(), reason="needs docker with python:3.12-slim pulled")
 def test_real_container_is_gone_after_timeout(tmp_path: Path) -> None:
+    if not _docker_ready():
+        msg = "needs docker with python:3.12-slim pulled"
+        if os.environ.get("RECERTIA_REQUIRE_REAL_DOCKER") == "1":
+            pytest.fail(f"RECERTIA_REQUIRE_REAL_DOCKER=1 but not ready: {msg}")
+        pytest.skip(msg)
     secs = _marker_seconds()
     with pytest.raises(subprocess.TimeoutExpired):
         container._container_run(
