@@ -8,6 +8,7 @@ import pytest
 
 from contracts.budget import (
     Budget,
+    BudgetExhaustedError,
     BudgetReservation,
     ResidualBudget,
     Spend,
@@ -76,11 +77,12 @@ def test_none_limits_are_unbounded_not_zero() -> None:
     assert budget_excess(b, huge, BudgetReservation(), BudgetReservation()) is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG (a): ResidualBudget.as_admission_budget clamps exhausted max_attempts=0 up to 1, "
-    "re-admitting one more attempt. CTO-rec to decide: fix or document caller pre-check.",
-)
 def test_exhausted_residual_attempts_do_not_readmit() -> None:
-    admission = ResidualBudget(max_attempts=0).as_admission_budget()
-    assert budget_excess(admission, Spend(), BudgetReservation(), BudgetReservation(attempts=1)) == "attempts"
+    """Bug 6 (CTO_REVIEW §4): exhausted attempts must fail closed, not clamp to 1."""
+    with pytest.raises(BudgetExhaustedError):
+        ResidualBudget(max_attempts=0).as_admission_budget()
+
+
+def test_positive_residual_attempts_pass_through() -> None:
+    for n in range(1, 6):
+        assert ResidualBudget(max_attempts=n).as_admission_budget().max_attempts == n
