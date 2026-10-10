@@ -8,27 +8,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths:
-      - "contracts/**"
-      - "docs/**"
-      - "facts/**"
-      - "research/**"
-      - "src/**"
-      - "scripts/**"
-      - "tests/**"
-      - "schema/**"
-      - "evals/**"
-      - "skills/**"
-      - "pyproject.toml"
-      - "conftest.py"
-      - ".github/workflows/ci.yml"
-      - "README.md"
-      - "CONTRIBUTING.md"
-      - "SECURITY.md"
-      - "CHANGELOG.md"
-      - "LICENSE"
-      - "NOTICE"
-      - "assets/**"
 
 jobs:
   ci:
