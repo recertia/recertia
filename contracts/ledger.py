@@ -10,7 +10,7 @@ Python snippet in the docs.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -49,5 +49,5 @@ class LedgerEntry(BaseModel):
     actor: str
     action: LedgerAction
     target: str
-    evidence: dict = Field(default_factory=dict)
+    evidence: dict[str, Any] = Field(default_factory=dict)
     at: datetime

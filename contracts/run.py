@@ -11,7 +11,7 @@ Variant B: ``Task.goal`` is the preferred primary input; ``request`` is optional
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -104,7 +104,7 @@ class SkillCandidateRef(BaseModel):
     score: float
     lexical_rank: int | None = None
     vector_rank: int | None = None
-    bound_parameters: dict = Field(default_factory=dict)
+    bound_parameters: dict[str, Any] = Field(default_factory=dict)
     staleness_factor: float | None = None
     shadow: bool = False
 
@@ -222,11 +222,11 @@ class RunState(BaseModel):
     failure_signal: FailureSignal | None = None
     failure: FailureVerdict | None = None
 
-    draft: dict | None = None
-    facts_extracted: list[dict] = Field(default_factory=list)
-    affordance_updates: list[dict] = Field(default_factory=list)
+    draft: dict[str, Any] | None = None
+    facts_extracted: list[dict[str, Any]] = Field(default_factory=list)
+    affordance_updates: list[dict[str, Any]] = Field(default_factory=list)
     reusability: ReusabilityVerdict | None = None
-    written_versions: list[dict] = Field(default_factory=list)
+    written_versions: list[dict[str, Any]] = Field(default_factory=list)
     execution_guide: ExecutionGuide | None = None
 
     budget: Budget = Budget()
