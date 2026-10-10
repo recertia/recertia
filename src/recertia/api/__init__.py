@@ -41,7 +41,6 @@ from recertia.solver.container import configured_backend, ensure_api_execution_r
 from recertia.solver.sandbox import SandboxError
 from recertia.store.blobs import FilesystemBlobStore, normalize_blob_digest
 from recertia.telemetry import get_telemetry, render_dashboard
-from recertia.workers.run_worker import AsyncRunRequest
 from recertia.workspaces.registry import WorkspaceRegistry
 
 DEFAULT_ROOT = Path(".recertia")
@@ -430,6 +429,8 @@ def create_app(
                 workspace_id=body.workspace_id,
                 workdir=str(workdir),
             )
+            from recertia.workers.run_worker import AsyncRunRequest
+
             runs[run_key] = placeholder
             console_ctx.worker.submit(
                 AsyncRunRequest(
