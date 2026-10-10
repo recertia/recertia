@@ -14,6 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # PR5: unit tests never hold real provider credentials; tests/conftest.py
+      # blocks non-loopback network (also forced on by CI=true).
+      OPENAI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      RECERTIA_NO_NETWORK: "1"
     steps:
       - uses: actions/checkout@v4
 
