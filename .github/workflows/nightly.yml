@@ -2,6 +2,10 @@ name: nightly
 
 # Not a required check. Python 3.11 at lowest-direct deps and 3.13 at newest,
 # plus the batched import-all test (bugs 12 and 13).
+#
+# pip has no --resolution flag (that is uv). This repo's CI uses pip, so the
+# lowest arm pins each direct dependency at its pyproject.toml floor and lets
+# pip resolve remaining (transitive) deps.
 
 on:
   schedule:
@@ -33,7 +37,24 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if [ "${{ matrix.deps }}" = "lowest" ]; then
-            pip install -e ".[dev]" --resolution=lowest-direct
+            python - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          data = tomllib.loads(Path("pyproject.toml").read_text())
+          reqs = list(data["project"]["dependencies"])
+          reqs += data["project"]["optional-dependencies"]["dev"]
+          pins = []
+          for req in reqs:
+              head, ge, rest = req.partition(">=")
+              if not ge:
+                  raise SystemExit(f"direct dep has no >= floor: {req}")
+              pins.append(f"{head.strip()}=={rest.split(',', 1)[0].strip()}")
+          Path("lowest-direct.txt").write_text("\n".join(pins) + "\n")
+          print("lowest-direct pins:")
+          print("\n".join(pins))
+          PY
+            pip install -e ".[dev]" -c lowest-direct.txt
           else
             pip install -e ".[dev]"
           fi
