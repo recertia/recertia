@@ -80,13 +80,11 @@ class ConsoleContext:
         self._cancel_flags: set[str] = set()
 
     def tenant_skills_root(self, tenant_id: str) -> Path:
-        from recertia.settings import load_settings
+        from recertia.paths import tenant_skills_root
 
-        if load_settings().tenant_skills:
-            path = self.root / "tenants" / tenant_id / "skills"
-            path.mkdir(parents=True, exist_ok=True)
-            return path
-        return self.skills_root
+        return tenant_skills_root(
+            control_root=self.root, shared=self.skills_root, tenant_id=tenant_id
+        )
 
     def tenant_runs_root(self, tenant_id: str) -> Path:
         return self.root / "runs" / tenant_id
@@ -161,15 +159,25 @@ class RouteState:
             return user.active_tenant
         return principal.tenant_id
 
-    def require_workspace_admin(self, request: Request, principal: Any) -> str:
-        """Admin API key or console role admin may mutate the registry."""
+    def require_host_admin(self, request: Request, principal: Any) -> str:
+        """Binding a host directory requires platform_admin, not tenant admin."""
 
         user = self.optional_console_user(request)
-        if user is not None and user.may("admin"):
-            return user.user_id
-        if "admin" in principal.scopes:
-            return principal.key_id
-        raise HTTPException(status_code=403, detail="admin required to register workspace")
+        roles = user.roles if user is not None else None
+        if self.ctx.pdp.may_admin_host(principal, console_roles=roles):
+            return user.user_id if user is not None else principal.key_id
+        raise HTTPException(
+            status_code=403, detail="platform_admin required to register a host root"
+        )
+
+    def require_workspace_admin(self, request: Request, principal: Any) -> str:
+        """Tenant admin may patch or disable a workspace. Host registration is separate."""
+
+        user = self.optional_console_user(request)
+        console_is_admin = user.may("admin") if user is not None else None
+        if self.ctx.pdp.may_admin_registry(principal, console_is_admin=console_is_admin):
+            return user.user_id if user is not None else principal.key_id
+        raise HTTPException(status_code=403, detail="admin required to update workspace")
 
     def require_library_write(
         self, request: Request, principal: Any, *, scope: str, min_role: str = "reviewer"

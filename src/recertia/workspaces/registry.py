@@ -8,7 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from contracts.workspace import RegisteredWorkspace
-from recertia.paths import HostRootError, normalize_host_root, validate_workspace_id
+from recertia.paths import (
+    HostRootError,
+    assert_host_root_allowed,
+    normalize_host_root,
+    validate_workspace_id,
+)
 from recertia.persistence.db import open_db
 
 
@@ -66,7 +71,9 @@ class WorkspaceRegistry:
     ) -> RegisteredWorkspace:
         workspace_id = validate_workspace_id(workspace_id)
         try:
-            normalized = normalize_host_root(host_root, must_exist=True)
+            normalized = assert_host_root_allowed(
+                normalize_host_root(host_root, must_exist=True)
+            )
         except HostRootError:
             raise
         now = self._now()

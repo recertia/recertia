@@ -12,7 +12,9 @@ from recertia.errors import InvalidTenantId
 
 _TENANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
-# Wire scopes an API key may carry. ``platform_admin`` is a role, not a key scope.
+# Wire scopes an API key may carry. ``platform_admin`` is also a role: tenant
+# ``admin`` does not imply it. SEC-8 skips a distinct ``evals`` key scope so
+# existing metrics keys keep calling eval routes. Reissue is a later break.
 OPERATOR_SCOPES = frozenset({"admin", "runs", "blobs", "metrics", "exec", "promote", "jobs"})
 _TENANT_LOCAL_SCOPES = OPERATOR_SCOPES - {"admin"}
 

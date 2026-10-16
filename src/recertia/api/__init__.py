@@ -571,7 +571,7 @@ def create_app(
                     script=body.script,
                     arm=body.arm,
                     approve_tools=approve_tools,
-                    skills_root=skills_root,
+                    skills_root=console_ctx.tenant_skills_root(principal.tenant_id),
                     facts_root=facts_root,
                     runs_root=root / "runs" / principal.tenant_id,
                     index_path=root / "runs" / principal.tenant_id / "skill_index.db",
@@ -627,7 +627,7 @@ def create_app(
 
         bundle = build_default_orchestrator(
             root / "runs" / principal.tenant_id,
-            skills_root=skills_root,
+            skills_root=console_ctx.tenant_skills_root(principal.tenant_id),
             facts_root=facts_root,
             index_path=root / "runs" / principal.tenant_id / "skill_index.db",
             approve_default_tools=approve_tools,
@@ -744,7 +744,7 @@ def create_app(
         try:
             bundle = build_default_orchestrator(
                 root / "runs" / principal.tenant_id,
-                skills_root=skills_root,
+                skills_root=console_ctx.tenant_skills_root(principal.tenant_id),
                 facts_root=facts_root,
                 index_path=root / "runs" / principal.tenant_id / "skill_index.db",
                 approve_default_tools=_principal_may_exec(principal),

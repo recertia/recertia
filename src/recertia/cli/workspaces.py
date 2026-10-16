@@ -29,6 +29,16 @@ def workspaces_register(
 ) -> None:
     """Register an allowlisted host root for API/Pilot ``workspace_id`` binds."""
 
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.policy_load import load_policy
+    from recertia.ports.identity import Principal
+    from recertia.settings import load_settings
+
+    principal = Principal.local_operator()
+    pdp = PolicyDecisionPoint.open(load_settings(), load_policy(), surface="cli")
+    if not pdp.may_admin_host(principal):
+        typer.echo("forbidden: registering a host root requires platform_admin", err=True)
+        raise typer.Exit(code=3)
     registry = WorkspaceRegistry(runs_root / "workspaces_registry.sqlite")
     try:
         ws = registry.register(

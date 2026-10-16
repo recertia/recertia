@@ -159,6 +159,26 @@ class PolicyDecisionPoint:
             return bool(console_may_review)
         return "admin" in principal.scopes
 
+    def may_admin_host(
+        self, principal: Principal, *, console_roles: frozenset[str] | None = None
+    ) -> bool:
+        """Registering a host root is platform_admin. Tenant admin is not enough."""
+
+        if console_roles is not None:
+            return "platform_admin" in console_roles
+        return principal.has_role("platform_admin") or "platform_admin" in principal.scopes
+
+    def may_admin_registry(
+        self, principal: Principal, *, console_is_admin: bool | None = None
+    ) -> bool:
+        """Patching or disabling a workspace is tenant admin or platform_admin."""
+
+        if console_is_admin is not None:
+            return console_is_admin
+        if principal.has_role("platform_admin") or "platform_admin" in principal.scopes:
+            return True
+        return "admin" in principal.scopes
+
 
 def _principal_may_exec(principal: Principal | None) -> bool:
     if principal is None:

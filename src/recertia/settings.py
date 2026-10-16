@@ -106,6 +106,7 @@ KNOWN_ENV_KEYS = frozenset(
         "RECERTIA_FETCH_TIMEOUT_S",
         "RECERTIA_PDF_EXTRACT",
         "RECERTIA_ALLOW_POSIX_WORKSPACE_ROOTS",
+        "RECERTIA_WORKSPACE_ROOTS",
         "RECERTIA_ALLOW_FULL_REPLAY",
         "RECERTIA_LOG_FORMAT",
         "RECERTIA_LOG_LEVEL",
@@ -149,6 +150,15 @@ def _choice(env: Mapping[str, str], key: str, allowed: set[str], default: str) -
     if raw not in allowed:
         raise ConfigError(f"{key} must be one of {sorted(allowed)}, got {raw!r}")
     return raw
+
+
+def _path_list(env: Mapping[str, str], key: str) -> tuple[str, ...]:
+    """Colon-separated (``os.pathsep``) absolute directory list."""
+
+    raw = env.get(key, "").strip()
+    if not raw:
+        return ()
+    return tuple(part.strip() for part in raw.split(os.pathsep) if part.strip())
 
 
 def _int(env: Mapping[str, str], key: str, default: int) -> int:
@@ -292,6 +302,7 @@ class Settings:
     fetch_timeout_s: float = 20.0
     pdf_extract: bool = True
     allow_posix_workspace_roots: bool = False
+    workspace_roots: tuple[str, ...] = ()
     allow_full_replay: bool = False
 
     log_format: Literal["json", "text"] = "json"
@@ -325,6 +336,12 @@ class Settings:
             raise ConfigError("multi_node requires RECERTIA_CONSOLE_SESSION_SECRET of at least 32 characters")
         if self.durability == "fast":
             raise ConfigError("multi_node refuses RECERTIA_DURABILITY=fast")
+        if not self.tenant_skills:
+            raise ConfigError(
+                "multi_node requires RECERTIA_TENANT_SKILLS=1 (shared skills/ is refused)"
+            )
+        if not self.workspace_roots:
+            raise ConfigError("multi_node requires RECERTIA_WORKSPACE_ROOTS")
         if not self.api_key_pepper:
             raise ConfigError("multi_node requires RECERTIA_API_KEY_PEPPER")
         for check in _DEPLOYMENT_CHECKS:
@@ -495,6 +512,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         fetch_timeout_s=_float(env, "RECERTIA_FETCH_TIMEOUT_S", 20.0),
         pdf_extract=_bool(env, "RECERTIA_PDF_EXTRACT", default=True),
         allow_posix_workspace_roots=_bool(env, "RECERTIA_ALLOW_POSIX_WORKSPACE_ROOTS"),
+        workspace_roots=_path_list(env, "RECERTIA_WORKSPACE_ROOTS"),
         allow_full_replay=_bool(env, "RECERTIA_ALLOW_FULL_REPLAY"),
         log_format=_choice(env, "RECERTIA_LOG_FORMAT", {"json", "text"}, "json"),  # type: ignore[arg-type]
         log_level=_raw(env, "RECERTIA_LOG_LEVEL", "INFO").strip() or "INFO",

@@ -33,7 +33,7 @@ def _proven_output_criterion() -> dict:
 
 def _client(tmp_path: Path, *, scopes: set[str] | None = None):
     app = create_app(root=tmp_path / "api-root")
-    scopes = scopes or {"runs", "exec", "admin"}
+    scopes = scopes or {"runs", "exec", "admin", "platform_admin"}
     issued = app.state.api_keys.issue(tenant_id="t1", scopes=scopes, actor="test")
     return app, TestClient(app), {"X-API-Key": issued.secret}
 

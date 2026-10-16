@@ -32,6 +32,7 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
     _optional_console_user = rs.optional_console_user
     _resolve_tenant = rs.resolve_tenant
     _require_workspace_admin = rs.require_workspace_admin
+    _require_host_admin = rs.require_host_admin
     _require_library_write = rs.require_library_write
     _public_user = rs.public_user
 
@@ -131,7 +132,7 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         if ctx.workspace_registry is None:
             raise HTTPException(status_code=500, detail="workspace registry unavailable")
-        actor = _require_workspace_admin(request, principal)
+        actor = _require_host_admin(request, principal)
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         from recertia.paths import HostRootError
 

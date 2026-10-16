@@ -22,7 +22,9 @@ from recertia.errors import SecretUnavailable
 from recertia.persistence.db import open_db
 from recertia.ports.identity import Principal, tenant_id
 
-_ALLOWED_SCOPES = frozenset({"runs", "blobs", "metrics", "admin", "exec", "promote", "jobs"})
+_ALLOWED_SCOPES = frozenset(
+    {"runs", "blobs", "metrics", "admin", "exec", "promote", "jobs", "platform_admin"}
+)
 
 # New secrets: rec_<key_id>.<token> — enables O(1) lookup by key_id.
 _STRUCTURED_SECRET_RE = re.compile(r"^rec_(key_[0-9a-f]+)\.([A-Za-z0-9_-]+)$")

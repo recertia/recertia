@@ -109,13 +109,20 @@ class AsyncRunWorker:
             submitted_at=datetime.now(timezone.utc),
             submitted_by="async-worker",
         )
+        from recertia.paths import tenant_skills_root
+
         scopes = frozenset({"runs", "exec"}) if req.approve_tools else frozenset({"runs"})
+        skills = tenant_skills_root(
+            control_root=req.runs_root.parent.parent,
+            shared=req.skills_root,
+            tenant_id=req.tenant_id,
+        )
         worker_principal = Principal.from_api_key(
             key_id="async-worker", tenant_id=req.tenant_id, scopes=scopes
         )
         bundle = build_default_orchestrator(
             req.runs_root,
-            skills_root=req.skills_root,
+            skills_root=skills,
             facts_root=req.facts_root,
             index_path=req.index_path,
             approve_default_tools=req.approve_tools,
