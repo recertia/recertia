@@ -106,11 +106,7 @@ ignore_imports = [
     "recertia.review.lifecycle -> recertia.evals.store",
     "recertia.review.shadow -> recertia.evals.store",
     "recertia.validation.judge -> recertia.solver.model",
-    "recertia.validation.sensitivity -> recertia.graph.ops",
-    "recertia.validation.sensitivity -> recertia.nodes.context",
     "recertia.validation.sensitivity -> recertia.nodes.validate",
-    "recertia.validation.sensitivity -> recertia.solver.container",
-    "recertia.validation.sensitivity -> recertia.solver.sandbox",
 ]
 
 [[tool.importlinter.contracts]]

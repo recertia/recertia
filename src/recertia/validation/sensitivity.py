@@ -16,7 +16,7 @@ from contracts.criteria import (
     sensitivity_evidence_hash,
     sensitivity_proof_binds,
 )
-from recertia.validation.assertions import UnsafeAssertionError, evaluate_assertion
+from recertia.nodes.validate import criterion_runner
 
 __all__ = [
     "author_sensitivity_proof",
@@ -95,43 +95,9 @@ def mutate_workspace(source: Path, *, drop_files: bool = True) -> Path:
 def _default_runner(
     criterion: TaskCriterion | SkillCertificationCriterion, workdir: Path
 ) -> bool:
-    """Run criteria through the configured sandbox / restricted assertion language."""
+    """Run criteria through the same scorer ``validate`` uses."""
 
-    if criterion.kind == "command":
-        assert criterion.run is not None
-        from recertia.solver.container import run_configured_command
-        from recertia.solver.sandbox import SandboxError
-
-        try:
-            proc = run_configured_command(
-                criterion.run, workdir=workdir, timeout_s=criterion.timeout_s
-            )
-        except SandboxError:
-            return False
-        return proc.returncode == criterion.expect_exit
-    if criterion.kind == "assertion":
-        assert criterion.expr is not None
-        try:
-            return evaluate_assertion(criterion.expr, workdir=workdir)
-        except UnsafeAssertionError:
-            return False
-    if criterion.kind in ("schema", "metric"):
-        from recertia.graph.ops import OperationLedger
-        from recertia.ledger import HashChainLedger
-        from recertia.nodes.context import NodeContext
-        from recertia.nodes.validate import _score_criterion
-        from recertia.workspace import WorkspaceManager
-
-        # Mechanical proof against the negative fixture workdir — same runners as validate.
-        ctx = NodeContext(
-            run_id="sensitivity",
-            attempt_no=0,
-            node="sensitivity",
-            workdir=workdir,
-            workspaces=WorkspaceManager(workdir / ".snapshots"),
-            ledger=HashChainLedger(workdir / ".ledger.jsonl"),
-            ops=OperationLedger(workdir / ".ops.db"),
-        )
-        return _score_criterion(criterion, ctx).passed
-    # Judges cannot author a mechanical proof here — treat as not rejected.
-    return True
+    if criterion.kind == "judge":
+        # Judges cannot author a mechanical proof here — treat as not rejected.
+        return True
+    return criterion_runner().score(criterion, workdir=workdir).passed
