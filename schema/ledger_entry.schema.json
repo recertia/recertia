@@ -37,7 +37,8 @@
         "faithfulness_report",
         "applicability_reject",
         "mea_activation_fallback",
-        "close_receipt"
+        "close_receipt",
+        "ledger_repaired"
       ],
       "title": "Action",
       "type": "string"

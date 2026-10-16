@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 
 from recertia.faults import fault_point
@@ -53,24 +53,41 @@ class JsonlAppender:
         return self.path.with_suffix(self.path.suffix + ".lock")
 
     def append(self, line: bytes) -> None:
-        payload = line if line.endswith(b"\n") else line + b"\n"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with file_lock(self._lock_path(), timeout_s=self.lock_timeout_s):
-            fd = os.open(self.path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
-            try:
-                os.write(fd, payload)
-                fault_point("jsonl.mid_write")
-                self._dirty = True
-                now = time.monotonic()
-                should_fsync = self.durability.fsync_file and (
-                    self.fsync_each or (now - self._last_fsync) >= self.batch_interval_s
-                )
-                if should_fsync:
-                    os.fsync(fd)
-                    self._last_fsync = now
-                    self._dirty = False
-            finally:
-                os.close(fd)
+            self.append_unlocked(line)
+
+    def append_unlocked(
+        self,
+        line: bytes,
+        *,
+        before_fsync: Callable[[], None] | None = None,
+    ) -> None:
+        """Append while the caller already holds this file's lock.
+
+        ``file_lock`` is not reentrant. The ledger critical section takes the
+        lock itself and calls this so the write stays inside the same hold.
+        """
+
+        payload = line if line.endswith(b"\n") else line + b"\n"
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+        try:
+            os.write(fd, payload)
+            fault_point("jsonl.mid_write")
+            if before_fsync is not None:
+                before_fsync()
+            self._dirty = True
+            now = time.monotonic()
+            should_fsync = self.durability.fsync_file and (
+                self.fsync_each or (now - self._last_fsync) >= self.batch_interval_s
+            )
+            if should_fsync:
+                os.fsync(fd)
+                self._last_fsync = now
+                self._dirty = False
+        finally:
+            os.close(fd)
 
     def append_many(self, lines: Sequence[bytes]) -> None:
         for line in lines:

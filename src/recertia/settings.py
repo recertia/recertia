@@ -110,6 +110,7 @@ KNOWN_ENV_KEYS = frozenset(
         "RECERTIA_EXEC_MAX_OUTPUT_BYTES",
         "RECERTIA_JSONL_FSYNC_INTERVAL_S",
         "RECERTIA_LEDGER_LOCK_TIMEOUT_S",
+        "RECERTIA_LEDGER_VERIFY_FULL",
         "RECERTIA_EXECUTOR_MODE",
     }
 )
@@ -291,6 +292,7 @@ class Settings:
     exec_max_output_bytes: int = 262144
     jsonl_fsync_interval_s: float = 1.0
     ledger_lock_timeout_s: float = 5.0
+    ledger_verify_full: bool = False
     executor_mode: str = ""
 
     def validate_deployment(self, *, role: ProcessRole) -> None:
@@ -487,5 +489,6 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         exec_max_output_bytes=_int(env, "RECERTIA_EXEC_MAX_OUTPUT_BYTES", 262144),
         jsonl_fsync_interval_s=_float(env, "RECERTIA_JSONL_FSYNC_INTERVAL_S", 1.0),
         ledger_lock_timeout_s=_float(env, "RECERTIA_LEDGER_LOCK_TIMEOUT_S", 5.0),
+        ledger_verify_full=_bool(env, "RECERTIA_LEDGER_VERIFY_FULL"),
         executor_mode=_raw(env, "RECERTIA_EXECUTOR_MODE").strip(),
     )

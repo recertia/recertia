@@ -20,6 +20,7 @@ from recertia.config import load_model_config
 from recertia.graph.engine import GraphOrchestrator
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.ledger import HashChainLedger, LedgerVerificationError
+from recertia.runtime.errors import LedgerUnavailable
 from recertia.solver.container import ensure_execution_ready, execution_backend_override
 from recertia.solver.factory import ModelConfigError
 from recertia.solver.sandbox import SandboxError
@@ -352,17 +353,62 @@ def runs_show(
         orchestrator.close()
 
 
+def _ledger_path(runs_root: Path, tenant: str | None) -> Path:
+    if tenant:
+        from recertia.persistence.layout import RuntimeLayout
+
+        return RuntimeLayout(runs_root).tenant(tenant).ledger_path
+    return runs_root / "ledger.jsonl"
+
+
 @ledger_app.command("verify")
 def ledger_verify(
     runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
+    tenant: Optional[str] = typer.Option(None, "--tenant"),
 ) -> None:
-    ledger = HashChainLedger(runs_root / "ledger.jsonl")
+    ledger = HashChainLedger(_ledger_path(runs_root, tenant))
     try:
-        ledger.verify()
+        report = ledger.verify()
     except LedgerVerificationError as exc:
         typer.echo(f"LEDGER INVALID: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    typer.echo(f"ledger OK: {len(ledger.entries())} entries verified")
+        raise typer.Exit(code=2) from exc
+    except LedgerUnavailable as exc:
+        typer.echo(f"LEDGER INVALID: {exc}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    typer.echo(f"ledger OK: {report.entries} entries verified")
+
+
+@ledger_app.command("repair")
+def ledger_repair(
+    ctx: typer.Context,
+    truncate_torn_tail: bool = typer.Option(False, "--truncate-torn-tail"),
+    runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
+    tenant: Optional[str] = typer.Option(None, "--tenant"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """Truncate a partial EOF and record ``ledger_repaired``. Mid-chain damage is refused."""
+
+    principal = (ctx.obj or {}).get("principal") if isinstance(ctx.obj, dict) else None
+    if principal is None:
+        from recertia.ports.identity import Principal
+
+        principal = Principal.local_operator()
+    if not principal.has_role("platform_admin"):
+        typer.echo("forbidden: ledger repair requires platform_admin", err=True)
+        raise typer.Exit(code=3)
+    if not truncate_torn_tail:
+        typer.echo("pass --truncate-torn-tail to repair a torn tail", err=True)
+        raise typer.Exit(code=2)
+    ledger = HashChainLedger(_ledger_path(runs_root, tenant))
+    try:
+        report = ledger.repair_torn_tail(actor=principal.subject, dry_run=dry_run)
+    except LedgerUnavailable as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    if report.status == "dry_run":
+        typer.echo(f"would drop {report.dropped_bytes} bytes")
+        return
+    typer.echo(f"{report.status} dropped_bytes={report.dropped_bytes}")
 
 
 @goal_app.command("compile")

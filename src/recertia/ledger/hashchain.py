@@ -1,36 +1,54 @@
 """Hash-chain mechanics for the provenance ledger (specs §21).
 
-Storage is an append-only JSONL file: one ``LedgerEntry`` per line, in ``seq`` order. This is
-the M0-minimal persistence — durable across process restarts, trivially diffable, and exactly
-as much mechanism as ``recertia ledger verify`` needs. A SQLite/Postgres-backed store (per the
-tech stack in ``docs/archive/2026-Q3/implementation-plan.md``) can replace this later without changing
-``LedgerEntry`` itself, since the contract lives in ``contracts/ledger.py``, not here.
+Storage is an append-only JSONL file: one ``LedgerEntry`` per line, in ``seq`` order.
+Append holds a cross-process flock across tip re-read, write, and fsync. A torn tail
+is refused until ``recertia ledger repair --truncate-torn-tail``. A verified sidecar
+lets ``verify(full=False)`` scan only the suffix.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
-import sys
-import threading
-from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
-
-if sys.platform == "win32":
-    import msvcrt
-else:
-    import fcntl
+from typing import Protocol
 
 from contracts.ledger import LedgerAction, LedgerEntry
+from recertia.faults import fault_point
+from recertia.fsutil.atomic import Durability
+from recertia.fsutil.jsonl import JsonlAppender
+from recertia.fsutil.locks import file_lock
+from recertia.ledger.repair import RepairReport
+from recertia.ledger.sidecar import load_sidecar, sidecar_matches, sidecar_path, write_sidecar
+from recertia.runtime.errors import LedgerUnavailable
 
 GENESIS_HASH = "0" * 64
+_TORN = "torn tail; run `recertia ledger repair --truncate-torn-tail`"
 
 
 class LedgerVerificationError(Exception):
     """The chain does not verify: a hash mismatch, a broken link, or a gap in ``seq``."""
+
+
+class LedgerHook(Protocol):
+    """SEC-6 may sign inside ``before_append``. The writer stays one implementation."""
+
+    def before_append(self, entry: LedgerEntry) -> LedgerEntry:
+        """Return the entry to hash."""
+
+    def after_append(self, entry: LedgerEntry) -> None:
+        """Called after the line and the sidecar are durable."""
+
+
+@dataclass(frozen=True)
+class VerifyReport:
+    ok: bool
+    entries: int
+    full: bool
+    suffix_entries: int
+    tip_hash: str
 
 
 def _canonical_bytes(entry: LedgerEntry) -> bytes:
@@ -44,97 +62,105 @@ def compute_entry_hash(entry: LedgerEntry) -> str:
     return hashlib.sha256(_canonical_bytes(entry)).hexdigest()
 
 
-@contextmanager
-def _cross_process_lock(path: Path) -> Iterator[None]:
-    """Exclusive ``flock`` beside ``path`` (same pattern as the skill version lock).
+def read_tail(path: Path) -> tuple[LedgerEntry | None, int]:
+    """Return ``(last complete entry, byte length of the complete prefix)``.
 
-    Held across tip-read, append, and fsync so two processes cannot fork the chain.
-    The in-process ``threading.Lock`` is taken by the caller first.
+    A trailing partial line is excluded from the length. A complete line that
+    does not parse raises ``LedgerUnavailable``.
     """
 
-    lock_path = path.with_name(path.name + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    if not path.exists():
+        return None, 0
+    size = path.stat().st_size
+    if size == 0:
+        return None, 0
+    window = 1024 * 1024
+    with path.open("rb") as handle:
+        end = size
+        data = b""
+        start = 0
+        while True:
+            start = max(0, end - window)
+            handle.seek(start)
+            data = handle.read(end - start) + data
+            end = start
+            if data.count(b"\n") >= 2 or start == 0:
+                break
+            window *= 2
+    last_nl = data.rfind(b"\n")
+    if last_nl < 0:
+        return None, 0
+    base = size - len(data)
+    complete_len = base + last_nl + 1
+    prev_nl = data.rfind(b"\n", 0, last_nl)
+    line = data[:last_nl] if prev_nl < 0 else data[prev_nl + 1 : last_nl]
+    if not line.strip():
+        # Extra trailing newlines. Walk back to the previous non-empty record.
+        cursor = prev_nl
+        while cursor >= 0:
+            earlier = data.rfind(b"\n", 0, cursor)
+            candidate = data[:cursor] if earlier < 0 else data[earlier + 1 : cursor]
+            if candidate.strip():
+                line = candidate
+                break
+            if earlier < 0:
+                line = b""
+                break
+            cursor = earlier
+    if not line.strip():
+        return None, complete_len
     try:
-        if sys.platform == "win32":
-            if os.fstat(fd).st_size == 0:
-                os.write(fd, b"\0")
-                os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
-        else:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            if sys.platform == "win32":
-                try:
-                    os.lseek(fd, 0, os.SEEK_SET)
-                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-                except OSError:
-                    pass
-            else:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
+        entry = LedgerEntry.model_validate_json(line)
+    except Exception as exc:
+        raise LedgerUnavailable(f"ledger line does not parse: {exc}") from exc
+    return entry, complete_len
 
 
 class HashChainLedger:
     """One ledger, backed by one append-only JSONL file.
 
-    Thread-safe within a process via a lock, and cross-process safe via ``flock`` held
-    across tip-read, append, and fsync. ``verify`` recomputes the whole chain from disk
-    rather than trusting in-memory state. The hash is still SHA-256 of the canonical
-    payload.
-
-    ``append`` needs only the current tip ``(seq, entry_hash)``, so both are cached after
-    the first scan. The cache is validated against the file's ``(size, mtime_ns)`` before
-    every use: an external append or rewrite changes the stat and forces one rescan, which
-    keeps the fast path correct without re-parsing history on every write.
+    The flock covers tip re-read, append, and fsync. ``verify(full=False)`` trusts
+    a sidecar only when the prefix SHA-256 matches, then checks the new suffix.
     """
 
-    def __init__(self, path: Path | str) -> None:
+    def __init__(
+        self,
+        path: Path | str,
+        *,
+        durability: str | Durability | None = None,
+        hook: LedgerHook | None = None,
+        lock_timeout_s: float | None = None,
+    ) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
-        self._tip: tuple[int, str] | None = None  # (next_seq, tip_hash)
-        self._stat: tuple[int, int] | None = None  # (size, mtime_ns) when _tip was computed
+        self._hook = hook
+        self._tip: tuple[int, str] | None = None
+        self.lines_parsed = 0
+        name, timeout = _resolve_durability(durability, lock_timeout_s)
+        self._durability_name = name
+        self._durability = (
+            durability
+            if isinstance(durability, Durability)
+            else Durability(fsync_file=name != "fast", fsync_dir=name != "fast")
+        )
+        self._lock_timeout_s = timeout
 
     @property
     def path(self) -> Path:
         return self._path
 
-    def _file_stat(self) -> tuple[int, int] | None:
-        try:
-            st = self._path.stat()
-        except FileNotFoundError:
-            return None
-        return (st.st_size, st.st_mtime_ns)
+    def _lock_path(self) -> Path:
+        return self._path.with_name(self._path.name + ".lock")
 
-    def _tip_unlocked(self) -> tuple[int, str]:
-        """Current ``(next_seq, tip_hash)``; rescans only when the file changed on disk."""
-
-        if self._tip is not None and self._stat == self._file_stat():
-            return self._tip
-        entries = self._read_all()
-        tip = (len(entries), entries[-1].entry_hash if entries else GENESIS_HASH)
-        self._tip = tip
-        self._stat = self._file_stat()
-        return tip
-
-    def _read_all(self) -> list[LedgerEntry]:
-        if not self._path.exists():
-            return []
-        entries: list[LedgerEntry] = []
-        with self._path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    entries.append(LedgerEntry.model_validate_json(line))
-        return entries
+    def _held(self):
+        return file_lock(self._lock_path(), timeout_s=self._lock_timeout_s)
 
     def tip_hash(self) -> str:
-        with self._lock:
-            return self._tip_unlocked()[1]
+        with self._held():
+            last, _complete = read_tail(self._path)
+            if last is None:
+                return GENESIS_HASH
+            return last.entry_hash
 
     def append(
         self,
@@ -147,57 +173,217 @@ class HashChainLedger:
     ) -> LedgerEntry:
         """Append one entry. Returns the entry as written, with ``seq`` and hashes filled in."""
 
-        with self._lock, _cross_process_lock(self._path):
-            seq, prev_hash = self._tip_unlocked()
-            draft = LedgerEntry(
-                seq=seq,
-                prev_hash=prev_hash,
-                entry_hash="pending",
+        with self._held():
+            return self._append_locked(
                 actor=actor,
                 action=action,
                 target=target,
-                evidence=evidence or {},
-                at=at or datetime.now(timezone.utc),
+                evidence=evidence,
+                at=at,
             )
-            entry = draft.model_copy(update={"entry_hash": compute_entry_hash(draft)})
-            line = entry.model_dump_json() + "\n"
-            with self._path.open("a", encoding="utf-8") as f:
-                f.write(line)
-                f.flush()
-                os.fsync(f.fileno())
-            self._tip = (seq + 1, entry.entry_hash)
-            self._stat = self._file_stat()
-            return entry
+
+    def _append_locked(
+        self,
+        *,
+        actor: str,
+        action: LedgerAction,
+        target: str,
+        evidence: dict | None = None,
+        at: datetime | None = None,
+    ) -> LedgerEntry:
+        seq, prev_hash = self._tip_for_append()
+        draft = LedgerEntry(
+            seq=seq,
+            prev_hash=prev_hash,
+            entry_hash="pending",
+            actor=actor,
+            action=action,
+            target=target,
+            evidence=evidence or {},
+            at=at or datetime.now(timezone.utc),
+        )
+        if self._hook is not None:
+            draft = self._hook.before_append(draft)
+        entry = draft.model_copy(update={"entry_hash": compute_entry_hash(draft)})
+        line = (entry.model_dump_json() + "\n").encode("utf-8")
+        appender = JsonlAppender(
+            self._path,
+            durability=self._durability,
+            fsync_each=self._durability.fsync_file,
+            lock_timeout_s=self._lock_timeout_s,
+        )
+        appender.append_unlocked(
+            line,
+            before_fsync=lambda: fault_point("ledger.after_write_before_fsync"),
+        )
+        self._tip = (seq + 1, entry.entry_hash)
+        write_sidecar(
+            self._path,
+            entries=seq + 1,
+            tip_hash=entry.entry_hash,
+            durability_name=self._durability_name,
+            durability=self._durability,
+        )
+        if self._hook is not None:
+            self._hook.after_append(entry)
+        return entry
+
+    def _tip_for_append(self) -> tuple[int, str]:
+        last, complete_len = read_tail(self._path)
+        size = self._path.stat().st_size if self._path.exists() else 0
+        if size > complete_len:
+            raise LedgerUnavailable(_TORN)
+        observed = (0, GENESIS_HASH) if last is None else (last.seq + 1, last.entry_hash)
+        if self._tip is not None and self._tip != observed:
+            observed = self._scan_tip(complete_len)
+        elif self._tip is None:
+            side = load_sidecar(sidecar_path(self._path))
+            trusted = (
+                side is not None
+                and sidecar_matches(self._path, side)
+                and (side.next_seq, side.tip_hash) == observed
+            )
+            if not trusted:
+                observed = self._scan_tip(complete_len)
+        self._tip = observed
+        return observed
+
+    def _scan_tip(self, complete_len: int) -> tuple[int, str]:
+        raw = self._path.read_bytes()[:complete_len] if self._path.exists() else b""
+        entries = self._entries_from_bytes(raw)
+        if not entries:
+            return (0, GENESIS_HASH)
+        return (len(entries), entries[-1].entry_hash)
 
     def entries(self) -> list[LedgerEntry]:
-        return self._read_all()
+        with self._held():
+            size = self._path.stat().st_size if self._path.exists() else 0
+            _last, complete_len = read_tail(self._path)
+            if size > complete_len:
+                raise LedgerVerificationError(_TORN)
+            raw = self._path.read_bytes() if size else b""
+            return self._entries_from_bytes(raw)
 
-    def verify(self) -> None:
-        """Recompute the whole chain; raise :class:`LedgerVerificationError` on the first break.
+    def verify(self, *, full: bool = False) -> VerifyReport:
+        """Recompute the chain. Raise :class:`LedgerVerificationError` on the first break.
 
-        Mirrors ``GET /v1/ledger/verify`` (specs §21): every entry's ``entry_hash`` must
-        recompute correctly, every ``seq`` must be contiguous from 0, and every ``prev_hash``
-        must equal the predecessor's ``entry_hash``.
+        ``full=False`` uses a verified sidecar and checks only the suffix. A torn
+        tail always fails, including when the complete prefix would otherwise verify.
         """
 
-        entries = self._read_all()
-        with self._lock:
-            self._tip = (len(entries), entries[-1].entry_hash if entries else GENESIS_HASH)
-            self._stat = self._file_stat()
-        prev_hash = GENESIS_HASH
-        for i, entry in enumerate(entries):
-            if entry.seq != i:
-                raise LedgerVerificationError(f"entry at position {i} has seq={entry.seq}, expected {i}")
+        with self._held():
+            return self._verify_unlocked(full=full)
+
+    def _verify_unlocked(self, *, full: bool) -> VerifyReport:
+        self.lines_parsed = 0
+        size = self._path.stat().st_size if self._path.exists() else 0
+        try:
+            _last, complete_len = read_tail(self._path)
+        except LedgerUnavailable as exc:
+            raise LedgerVerificationError(str(exc)) from exc
+        if size > complete_len:
+            raise LedgerVerificationError(_TORN)
+        raw = self._path.read_bytes() if size else b""
+        side = None if full else load_sidecar(sidecar_path(self._path))
+        if side is not None and sidecar_matches(self._path, side) and side.prefix_bytes <= complete_len:
+            suffix = raw[side.prefix_bytes : complete_len]
+            suffix_entries = self._entries_from_bytes(suffix)
+            self._verify_chain(suffix_entries, start_seq=side.entries, prev_hash=side.tip_hash)
+            tip = suffix_entries[-1].entry_hash if suffix_entries else side.tip_hash
+            total = side.entries + len(suffix_entries)
+            self._tip = (total, tip)
+            if suffix_entries:
+                write_sidecar(
+                    self._path,
+                    entries=total,
+                    tip_hash=tip,
+                    durability_name=self._durability_name,
+                    durability=self._durability,
+                )
+            return VerifyReport(
+                ok=True,
+                entries=total,
+                full=False,
+                suffix_entries=len(suffix_entries),
+                tip_hash=tip,
+            )
+        entries = self._entries_from_bytes(raw[:complete_len])
+        self._verify_chain(entries, start_seq=0, prev_hash=GENESIS_HASH)
+        tip = entries[-1].entry_hash if entries else GENESIS_HASH
+        self._tip = (len(entries), tip)
+        write_sidecar(
+            self._path,
+            entries=len(entries),
+            tip_hash=tip,
+            durability_name=self._durability_name,
+            durability=self._durability,
+        )
+        return VerifyReport(
+            ok=True,
+            entries=len(entries),
+            full=True,
+            suffix_entries=len(entries),
+            tip_hash=tip,
+        )
+
+    def _entries_from_bytes(self, data: bytes) -> list[LedgerEntry]:
+        entries: list[LedgerEntry] = []
+        for line in data.splitlines():
+            if not line.strip():
+                continue
+            self.lines_parsed += 1
+            try:
+                entries.append(LedgerEntry.model_validate_json(line))
+            except Exception as exc:
+                raise LedgerVerificationError(f"ledger line does not parse: {exc}") from exc
+        return entries
+
+    def _verify_chain(
+        self,
+        entries: list[LedgerEntry],
+        *,
+        start_seq: int,
+        prev_hash: str,
+    ) -> None:
+        for offset, entry in enumerate(entries):
+            expected = start_seq + offset
+            if entry.seq != expected:
+                raise LedgerVerificationError(
+                    f"entry at position {expected} has seq={entry.seq}, expected {expected}"
+                )
             if entry.prev_hash != prev_hash:
                 raise LedgerVerificationError(
                     f"entry seq={entry.seq} has prev_hash={entry.prev_hash!r}, "
                     f"expected {prev_hash!r} (chain broken)"
                 )
-            draft = entry.model_copy(update={"entry_hash": "pending"})
-            recomputed = compute_entry_hash(draft)
+            recomputed = compute_entry_hash(entry.model_copy(update={"entry_hash": "pending"}))
             if recomputed != entry.entry_hash:
                 raise LedgerVerificationError(
                     f"entry seq={entry.seq} entry_hash={entry.entry_hash!r} does not match "
                     f"recomputed {recomputed!r} (tampered or corrupted)"
                 )
             prev_hash = entry.entry_hash
+
+    def repair_torn_tail(self, *, actor: str, dry_run: bool = False) -> RepairReport:
+        from recertia.ledger.repair import repair_locked
+
+        with self._held():
+            return repair_locked(self, actor=actor, dry_run=dry_run)
+
+
+def _resolve_durability(
+    durability: str | Durability | None,
+    lock_timeout_s: float | None,
+) -> tuple[str, float]:
+    if isinstance(durability, Durability):
+        name = "fast" if not durability.fsync_file else "normal"
+        return name, 5.0 if lock_timeout_s is None else lock_timeout_s
+    if durability is None or lock_timeout_s is None:
+        from recertia.settings import load_settings
+
+        settings = load_settings()
+        if durability is None:
+            durability = settings.durability
+        if lock_timeout_s is None:
+            lock_timeout_s = settings.ledger_lock_timeout_s
+    return str(durability), float(lock_timeout_s)

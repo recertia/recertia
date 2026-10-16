@@ -499,8 +499,17 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         path = ctx.tenant_runs_root(tenant_id) / "ledger.jsonl"
         ledger = HashChainLedger(path)
         try:
-            ledger.verify()
-            return {"ok": True, "entries": len(ledger.entries())}
+            from recertia.settings import load_settings
+
+            full = load_settings().ledger_verify_full
+            report = ledger.verify(full=full)
+            return {
+                "ok": report.ok,
+                "entries": report.entries,
+                "full": report.full,
+                "suffix_entries": report.suffix_entries,
+                "tip_hash": report.tip_hash,
+            }
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
