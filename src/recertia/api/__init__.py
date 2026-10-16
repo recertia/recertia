@@ -401,6 +401,9 @@ def create_app(
     configure_logging(loaded)
     root = root or DEFAULT_ROOT
     root.mkdir(parents=True, exist_ok=True)
+    from recertia.persistence.migrate_run_events import migrate_run_events
+
+    migrate_run_events(root)
     skills_root = Path(skills_root) if skills_root is not None else Path("skills")
     facts_root = Path(facts_root) if facts_root is not None else Path("facts")
     key_store = ApiKeyStore(root / "api_keys.sqlite")

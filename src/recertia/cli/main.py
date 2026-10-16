@@ -21,6 +21,7 @@ from recertia.cli.keys import keys_issue, keys_list, keys_revoke, register_keys_
 from recertia.cli.lift import lift_cmd, register_lift_commands
 from recertia.cli.memory_cmd import register_memory_commands
 from recertia.cli.metrics_cmd import metrics_cmd, register_metrics_commands
+from recertia.cli.migrate_cmd import register_migrate_commands
 from recertia.cli.policy_cmd import register_policy_commands
 from recertia.cli.probes import register_probes_commands
 from recertia.cli.proposals_cmd import register_proposals_commands
@@ -75,6 +76,7 @@ register_eval_commands(app)
 register_faithfulness_commands(app)
 register_policy_commands(app)
 register_memory_commands(app)
+register_migrate_commands(app)
 register_review_commands(app)
 register_facts_commands(app)
 register_cases_commands(app)
