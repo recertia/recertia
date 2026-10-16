@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
@@ -72,25 +70,6 @@ class QuotaSidecarCorrupt(RuntimeError):
         super().__init__(f"job quota sidecar is corrupt: {path}")
 
 
-def _atomic_write_text(path: Path, text: str) -> None:
-    """Write ``text`` via a same-directory temp file, fsync, then replace."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
-
-
 class QuotaSidecar:
     """Week-scoped spend. Rebuildable; never rewrite ``policy/*.json``."""
 
@@ -136,7 +115,14 @@ class QuotaSidecar:
             "computer_use_tokens_spent": quota.computer_use_tokens_spent,
             "hex_jobs_by_class": quota.hex_jobs_by_class,
         }
-        _atomic_write_text(self.path, json.dumps(payload, indent=2) + "\n")
+        from recertia.fsutil import atomic_write_text, durability_from_settings
+        from recertia.settings import load_settings
+
+        atomic_write_text(
+            self.path,
+            json.dumps(payload, indent=2) + "\n",
+            durability=durability_from_settings(load_settings()),
+        )
 
     def _read(self) -> dict:
         if not self.path.exists():
