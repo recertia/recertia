@@ -10,14 +10,16 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -65,6 +67,54 @@ def _max_in_flight_runs() -> int:
     from recertia.settings import load_settings
 
     return load_settings().api_max_in_flight_runs
+
+
+def _readiness(root: Path) -> tuple[bool, dict[str, object]]:
+    """SQLite writability, free disk, and an optional worker heartbeat.
+
+    A missing heartbeat is ignored. A present file older than 60s is not ready.
+    """
+
+    checks: dict[str, object] = {}
+    ok = True
+    try:
+        from recertia.persistence.db import open_db
+
+        conn = open_db(root / "quotas.sqlite")
+        try:
+            conn.execute("SELECT 1")
+        finally:
+            conn.close()
+        checks["sqlite"] = "ok"
+    except Exception:
+        _log.exception("readiness sqlite check failed")
+        ok = False
+        checks["sqlite"] = "error"
+    try:
+        free = shutil.disk_usage(root).free
+        checks["disk_free_bytes"] = free
+        if free < 4096:
+            ok = False
+            checks["disk"] = "low"
+        else:
+            checks["disk"] = "ok"
+    except OSError:
+        ok = False
+        checks["disk"] = "error"
+        checks["disk_free_bytes"] = 0
+    heartbeat = root / "worker.heartbeat"
+    if not heartbeat.is_file():
+        checks["worker"] = "absent"
+    else:
+        age = time.time() - heartbeat.stat().st_mtime
+        checks["worker_heartbeat_age_s"] = round(age, 3)
+        if age > 60:
+            ok = False
+            checks["worker"] = "stale"
+        else:
+            checks["worker"] = "ok"
+    checks["status"] = "ok" if ok else "not_ready"
+    return ok, checks
 
 
 def _validate_run_id(run_id: str) -> str:
@@ -342,6 +392,13 @@ def create_app(
 
     loaded = settings if isinstance(settings, Settings) else load_settings()
     loaded.validate_deployment(role="api")
+    from recertia.observability.logging import (
+        bind_log_context,
+        configure_logging,
+        reset_log_context,
+    )
+
+    configure_logging(loaded)
     root = root or DEFAULT_ROOT
     root.mkdir(parents=True, exist_ok=True)
     skills_root = Path(skills_root) if skills_root is not None else Path("skills")
@@ -356,6 +413,19 @@ def create_app(
     runs: dict[tuple[str, str], RunRecord] = {}
     run_slots = threading.Semaphore(_max_in_flight_runs())
     app = FastAPI(title="Recertia", version="0.1.0")
+
+    @app.middleware("http")
+    async def _request_log_context(request: Any, call_next: Any) -> Any:
+        raw = str(request.headers.get("x-request-id", ""))
+        safe = raw and len(raw) <= 128 and raw.isascii() and "\n" not in raw and "\r" not in raw
+        request_id = raw if safe else uuid4().hex
+        tokens = bind_log_context(request_id=request_id)
+        try:
+            response = await call_next(request)
+        finally:
+            reset_log_context(tokens)
+        response.headers["x-request-id"] = request_id
+        return response
 
     console_ctx = ConsoleContext(
         root=root,
@@ -387,6 +457,11 @@ def create_app(
     async def _http_exception(request: Any, exc: StarletteHTTPException) -> Any:
         return envelope_http_exception(request, exc)
 
+    @app.exception_handler(Exception)
+    async def _unhandled(_request: Any, exc: Exception) -> JSONResponse:
+        _log.error("unhandled error", exc_info=exc)
+        return JSONResponse(status_code=500, content={"error": "internal error"})
+
     console_dir = Path(__file__).resolve().parents[3] / "console" / "static"
     if console_dir.is_dir():
         app.mount("/console/assets", StaticFiles(directory=console_dir), name="console-assets")
@@ -399,6 +474,11 @@ def create_app(
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/ready")
+    def ready() -> JSONResponse:
+        ok, body = _readiness(root)
+        return JSONResponse(status_code=200 if ok else 503, content=body)
 
     @app.post("/v1/runs", response_model=None)
     def create_run(

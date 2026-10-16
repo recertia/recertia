@@ -68,4 +68,6 @@ def configure_logging(settings: Settings) -> None:
         handler.setFormatter(JsonFormatter())
     else:
         handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
-    root.handlers = [handler]
+    # pytest's caplog handler is a StreamHandler subclass. Keep it; replace the rest.
+    kept = [existing for existing in root.handlers if type(existing).__name__ == "LogCaptureHandler"]
+    root.handlers = [*kept, handler]
