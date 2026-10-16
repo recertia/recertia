@@ -68,8 +68,11 @@ def estimate_cost_usd(
     if in_rate is None or out_rate is None:
         table = _lookup_table(model_id)
         if table is None:
-            in_rate = float(os.environ.get("RECERTIA_DEFAULT_INPUT_USD_PER_MTOK", "1.0"))
-            out_rate = float(os.environ.get("RECERTIA_DEFAULT_OUTPUT_USD_PER_MTOK", "3.0"))
+            from recertia.settings import load_settings
+
+            settings = load_settings()
+            in_rate = settings.default_input_usd_per_mtok
+            out_rate = settings.default_output_usd_per_mtok
         else:
             if in_rate is None:
                 in_rate = table[0]

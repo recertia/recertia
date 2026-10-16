@@ -18,13 +18,9 @@ from recertia.solver.transcript import TranscriptWriter
 
 
 def scratch_max_steps() -> int:
-    import os
+    from recertia.settings import load_settings
 
-    raw = os.environ.get("RECERTIA_SCRATCH_MAX_STEPS", "5")
-    try:
-        return max(1, min(20, int(raw)))
-    except ValueError:
-        return 5
+    return max(1, min(20, load_settings().scratch_max_steps))
 
 
 def solve_scratch_observe_act(

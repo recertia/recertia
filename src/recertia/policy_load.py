@@ -27,7 +27,9 @@ def _packaged_policy_text() -> str:
 def default_policy_path() -> Path:
     """Return the override path, or the packaged default when it is on disk."""
 
-    override = os.environ.get("RECERTIA_POLICY_PATH", "").strip()
+    from recertia.settings import load_settings
+
+    override = load_settings().policy_path.strip()
     if override:
         return Path(override)
     resource = files("recertia").joinpath(_PACKAGED_POLICY)
@@ -49,7 +51,9 @@ def load_policy(path: Path | str | None = None) -> Policy:
     if path is not None:
         target = Path(path)
         return Policy.model_validate_json(target.read_text(encoding="utf-8"))
-    override = os.environ.get("RECERTIA_POLICY_PATH", "").strip()
+    from recertia.settings import load_settings
+
+    override = load_settings().policy_path.strip()
     if override:
         return Policy.model_validate_json(Path(override).read_text(encoding="utf-8"))
     return Policy.model_validate_json(_packaged_policy_text())

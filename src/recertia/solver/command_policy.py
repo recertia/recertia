@@ -7,7 +7,6 @@ set) unless ``RECERTIA_COMMAND_POLICY=off`` (tests / break-glass only).
 
 from __future__ import annotations
 
-import os
 import shlex
 
 # Default prefixes for single-user repo-chore. Override with RECERTIA_COMMAND_ALLOWLIST
@@ -51,12 +50,15 @@ class CommandPolicyError(PermissionError):
 
 
 def command_policy_enabled() -> bool:
-    raw = os.environ.get("RECERTIA_COMMAND_POLICY", "on").strip().lower()
-    return raw not in {"0", "false", "off", "no"}
+    from recertia.settings import load_settings
+
+    return load_settings().command_policy != "off"
 
 
 def allowlist() -> tuple[str, ...]:
-    raw = os.environ.get("RECERTIA_COMMAND_ALLOWLIST", "").strip()
+    from recertia.settings import load_settings
+
+    raw = load_settings().command_allowlist.strip()
     if not raw:
         return _DEFAULT_ALLOWLIST
     return tuple(p for p in (s.strip() for s in raw.split(",")) if p)

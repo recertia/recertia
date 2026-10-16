@@ -88,17 +88,19 @@ def load_model_config(
     else:
         verifier_model_id = env_verifier
 
+    from recertia.settings import load_settings
+
+    settings = load_settings()
     api_key_env = {
         "anthropic": "ANTHROPIC_API_KEY",
         "openai": "OPENAI_API_KEY",
         "stub": "",
     }[provider]
-    override = os.environ.get("RECERTIA_API_KEY_ENV")
-    if override:
-        api_key_env = override
+    if settings.api_key_env:
+        api_key_env = settings.api_key_env
 
-    timeout_s = float(os.environ.get("RECERTIA_MODEL_TIMEOUT_S", "60"))
-    max_retries = int(os.environ.get("RECERTIA_MODEL_MAX_RETRIES", "2"))
+    timeout_s = settings.model_timeout_s
+    max_retries = settings.model_max_retries
     return ModelConfig(
         provider=provider,
         model_id=model_id or "stub",

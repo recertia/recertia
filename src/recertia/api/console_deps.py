@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,7 +72,9 @@ class ConsoleContext:
         self._cancel_flags: set[str] = set()
 
     def tenant_skills_root(self, tenant_id: str) -> Path:
-        if os.environ.get("RECERTIA_TENANT_SKILLS", "").strip() in {"1", "true", "yes"}:
+        from recertia.settings import load_settings
+
+        if load_settings().tenant_skills:
             path = self.root / "tenants" / tenant_id / "skills"
             path.mkdir(parents=True, exist_ok=True)
             return path

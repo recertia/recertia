@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import sys
 from pathlib import Path
@@ -86,11 +85,9 @@ def split_rel_subpath(subpath: str | None) -> tuple[str, ...]:
 
 
 def _posix_roots_allowed() -> bool:
-    return os.environ.get("RECERTIA_ALLOW_POSIX_WORKSPACE_ROOTS", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
+    from recertia.settings import load_settings
+
+    return load_settings().allow_posix_workspace_roots
 
 
 def normalize_host_root(host_root: str, *, must_exist: bool = True) -> str:

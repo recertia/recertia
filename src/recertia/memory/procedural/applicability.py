@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from datetime import datetime, timezone
 from typing import Protocol
 
@@ -30,7 +29,9 @@ def environment_model_from_registry(registry: object | None = None) -> Environme
     has one; otherwise fall back to ``default_registry()``.
     """
 
-    backend = os.environ.get("RECERTIA_EXECUTION_BACKEND", "container")
+    from recertia.settings import load_settings
+
+    backend = load_settings().execution_backend
     if registry is not None and hasattr(registry, "names"):
         names = list(registry.names())
         return EnvironmentModel(tools=names, backend=backend)

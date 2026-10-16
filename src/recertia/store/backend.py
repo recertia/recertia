@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -93,7 +92,9 @@ class PostgresBackend:
 def open_backend(url: str | None = None, *, sqlite_path: Path | None = None) -> StoreBackend:
     """Open a backend from ``DATABASE_URL`` / ``url``, else local SQLite."""
 
-    dsn = url or os.environ.get("DATABASE_URL")
+    from recertia.settings import load_settings
+
+    dsn = url or load_settings().database_url
     if dsn and dsn.startswith(("postgres://", "postgresql://")):
         return PostgresBackend(dsn=dsn)
     path = sqlite_path or Path(".recertia/store.sqlite")

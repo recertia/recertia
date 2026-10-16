@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import urllib.error
 import urllib.parse
 from pathlib import Path
@@ -146,8 +145,11 @@ def fetch_handler(inputs: dict, workdir: Path) -> ToolResult:
             exit_code=126,
             stderr=f"host not allowlisted: {parsed.hostname}",
         )
-    timeout_s = float(os.environ.get("RECERTIA_FETCH_TIMEOUT_S", "20"))
-    max_bytes = int(os.environ.get("RECERTIA_FETCH_MAX_BYTES", str(512 * 1024)))
+    from recertia.settings import load_settings
+
+    settings = load_settings()
+    timeout_s = settings.fetch_timeout_s
+    max_bytes = settings.fetch_max_bytes
     try:
         raw = _registry._https_get(url, timeout_s=timeout_s, max_bytes=max_bytes)
     except urllib.error.HTTPError as exc:

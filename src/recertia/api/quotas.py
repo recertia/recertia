@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -22,10 +21,13 @@ class TenantQuota:
 
 
 def quota_from_env() -> TenantQuota:
+    from recertia.settings import load_settings
+
+    settings = load_settings()
     return TenantQuota(
-        max_runs_per_day=int(os.environ.get("RECERTIA_TENANT_MAX_RUNS_PER_DAY", "100")),
-        max_cost_usd_per_day=float(os.environ.get("RECERTIA_TENANT_MAX_COST_USD_PER_DAY", "50")),
-        max_in_flight=int(os.environ.get("RECERTIA_TENANT_MAX_IN_FLIGHT", "4")),
+        max_runs_per_day=settings.tenant_max_runs_per_day,
+        max_cost_usd_per_day=settings.tenant_max_cost_usd_per_day,
+        max_in_flight=settings.tenant_max_in_flight,
     )
 
 

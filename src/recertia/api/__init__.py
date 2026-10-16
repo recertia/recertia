@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,9 +47,24 @@ from recertia.workspaces.registry import WorkspaceRegistry
 _log = logging.getLogger("recertia.api")
 
 DEFAULT_ROOT = Path(".recertia")
-_MAX_BLOB_BYTES = int(os.environ.get("RECERTIA_MAX_BLOB_BYTES", str(16 * 1024 * 1024)))
-_API_MAX_CRITERION_TIMEOUT_S = int(os.environ.get("RECERTIA_API_MAX_CRITERION_TIMEOUT_S", "300"))
-_MAX_IN_FLIGHT_RUNS = int(os.environ.get("RECERTIA_API_MAX_IN_FLIGHT_RUNS", "4"))
+
+
+def _max_blob_bytes() -> int:
+    from recertia.settings import load_settings
+
+    return load_settings().max_blob_bytes
+
+
+def _api_max_criterion_timeout_s() -> int:
+    from recertia.settings import load_settings
+
+    return load_settings().api_max_criterion_timeout_s
+
+
+def _max_in_flight_runs() -> int:
+    from recertia.settings import load_settings
+
+    return load_settings().api_max_in_flight_runs
 
 
 def _validate_run_id(run_id: str) -> str:
@@ -76,9 +90,9 @@ def _tenant_has_checkpoints(root: Path, tenant_id: str, run_id: str) -> bool:
 def _clamp_criteria_for_api(criteria: list[TaskCriterion]) -> list[TaskCriterion]:
     clamped: list[TaskCriterion] = []
     for criterion in criteria:
-        if criterion.timeout_s > _API_MAX_CRITERION_TIMEOUT_S:
+        if criterion.timeout_s > _api_max_criterion_timeout_s():
             clamped.append(
-                criterion.model_copy(update={"timeout_s": _API_MAX_CRITERION_TIMEOUT_S})
+                criterion.model_copy(update={"timeout_s": _api_max_criterion_timeout_s()})
             )
         else:
             clamped.append(criterion)
@@ -340,7 +354,7 @@ def create_app(
     blobs_by_tenant: dict[str, FilesystemBlobStore] = {}
     # Keyed by (tenant_id, run_id) so tenants cannot collide on run_id.
     runs: dict[tuple[str, str], RunRecord] = {}
-    run_slots = threading.Semaphore(_MAX_IN_FLIGHT_RUNS)
+    run_slots = threading.Semaphore(_max_in_flight_runs())
     app = FastAPI(title="Recertia", version="0.1.0")
 
     console_ctx = ConsoleContext(
@@ -474,7 +488,7 @@ def create_app(
                     runs_root=root / "runs" / principal.tenant_id,
                     index_path=root / "runs" / principal.tenant_id / "skill_index.db",
                     model_config=model_config,
-                    max_criterion_timeout_s=_API_MAX_CRITERION_TIMEOUT_S,
+                    max_criterion_timeout_s=_api_max_criterion_timeout_s(),
                 )
             )
             from fastapi.responses import JSONResponse
@@ -532,7 +546,7 @@ def create_app(
             approve_default_tools=approve_tools,
             model_config=model_config,
         )
-        bundle.orchestrator.max_criterion_timeout_s = _API_MAX_CRITERION_TIMEOUT_S
+        bundle.orchestrator.max_criterion_timeout_s = _api_max_criterion_timeout_s()
         cost_usd = 0.0
         succeeded = False
         try:
@@ -652,7 +666,7 @@ def create_app(
                     _principal_may_exec(principal) or configured_backend() == "container"
                 ),
             )
-            bundle.orchestrator.max_criterion_timeout_s = _API_MAX_CRITERION_TIMEOUT_S
+            bundle.orchestrator.max_criterion_timeout_s = _api_max_criterion_timeout_s()
             state = bundle.orchestrator.resume(run_id, workdir=workdir)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -693,10 +707,10 @@ def create_app(
             principal.tenant_id, FilesystemBlobStore(_tenant_blob_root(root, principal.tenant_id))
         )
         data = str(payload.get("data", "")).encode()
-        if len(data) > _MAX_BLOB_BYTES:
+        if len(data) > _max_blob_bytes():
             raise HTTPException(
                 status_code=413,
-                detail=f"blob exceeds max size of {_MAX_BLOB_BYTES} bytes",
+                detail=f"blob exceeds max size of {_max_blob_bytes()} bytes",
             )
         digest = blobs.put(data, content_type=str(payload.get("content_type", "text/plain")))
         return {"digest": digest}

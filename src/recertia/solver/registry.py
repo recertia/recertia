@@ -90,12 +90,9 @@ class ToolRegistry:
 
 
 def _fetch_allowlist() -> tuple[str, ...]:
-    import os
+    from recertia.settings import load_settings
 
-    raw = os.environ.get(
-        "RECERTIA_FETCH_ALLOWLIST",
-        "pypi.org,files.pythonhosted.org,raw.githubusercontent.com,api.github.com",
-    )
+    raw = load_settings().fetch_allowlist
     return tuple(host.strip().lower() for host in raw.split(",") if host.strip())
 
 

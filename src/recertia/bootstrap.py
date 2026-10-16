@@ -6,7 +6,6 @@ library apply paths — not a bare checkpoint engine.
 
 from __future__ import annotations
 
-import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -89,7 +88,10 @@ def build_run_manifest(
         store = bundle.orchestrator.store
         if store is not None and hasattr(store, "library_fingerprint"):
             snapshot_id = f"fp:{store.library_fingerprint()}"
-    library_commit = os.environ.get("RECERTIA_LIBRARY_COMMIT") or _git_head()
+    from recertia.settings import load_settings
+
+    settings = load_settings()
+    library_commit = settings.library_commit or _git_head()
     if library_commit is None and snapshot_id:
         library_commit = str(snapshot_id)
     return RunManifest(
@@ -97,7 +99,7 @@ def build_run_manifest(
         model_version=model_id,
         index_snapshot_id=str(snapshot_id) if snapshot_id else None,
         library_commit=library_commit,
-        policy_version=os.environ.get("RECERTIA_POLICY_VERSION"),
+        policy_version=settings.policy_version or None,
         seed=seed,
     )
 

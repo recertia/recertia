@@ -11,7 +11,6 @@ and ``RECERTIA_OPENAI_EXTRA_BODY``.
 from __future__ import annotations
 
 import json
-import os
 import urllib.error
 import urllib.request
 from typing import Any
@@ -112,19 +111,19 @@ def _http_json(
 def openai_compat_headers() -> dict[str, str]:
     """Optional headers for OpenAI-compatible gateways (e.g. OpenRouter rankings)."""
 
+    from recertia.settings import load_settings
+
+    settings = load_settings()
     headers: dict[str, str] = {}
-    referer = os.environ.get("RECERTIA_OPENAI_HTTP_REFERER", "").strip()
+    referer = settings.openai_http_referer
     if referer:
         headers["HTTP-Referer"] = referer
-    title = (
-        os.environ.get("RECERTIA_OPENAI_TITLE", "").strip()
-        or os.environ.get("RECERTIA_OPENROUTER_TITLE", "").strip()
-    )
+    title = settings.openai_title or settings.openrouter_title
     if title:
         # OpenRouter accepts both; send the documented header plus the short alias.
         headers["X-OpenRouter-Title"] = title
         headers["X-Title"] = title
-    extra_raw = os.environ.get("RECERTIA_OPENAI_EXTRA_HEADERS", "").strip()
+    extra_raw = settings.openai_extra_headers
     if extra_raw:
         try:
             extra = json.loads(extra_raw)
@@ -144,7 +143,10 @@ def openai_compat_headers() -> dict[str, str]:
 def openai_compat_extra_body() -> dict[str, Any]:
     """Optional Chat Completions body fields (temperature, provider prefs, …)."""
 
-    raw = os.environ.get("RECERTIA_OPENAI_EXTRA_BODY", "").strip()
+    from recertia.settings import load_settings
+
+    settings = load_settings()
+    raw = settings.openai_extra_body
     extra: dict[str, Any] = {}
     if raw:
         try:
@@ -155,12 +157,9 @@ def openai_compat_extra_body() -> dict[str, Any]:
             raise ProviderError("RECERTIA_OPENAI_EXTRA_BODY must be a JSON object")
         blocked = {"model", "messages"}
         extra = {str(k): v for k, v in parsed.items() if str(k) not in blocked}
-    max_raw = os.environ.get("RECERTIA_OPENAI_MAX_TOKENS", "").strip()
-    if max_raw and "max_tokens" not in extra:
-        try:
-            extra["max_tokens"] = int(max_raw)
-        except ValueError as exc:
-            raise ProviderError("RECERTIA_OPENAI_MAX_TOKENS must be an integer") from exc
+    max_tokens = settings.openai_max_tokens
+    if max_tokens is not None and "max_tokens" not in extra:
+        extra["max_tokens"] = max_tokens
     return extra
 
 
