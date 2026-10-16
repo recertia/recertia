@@ -1,0 +1,42 @@
+# Ignore lines copied into [tool.importlinter] contracts.
+# An ignore may only be removed. Adding one requires a real current import.
+# contract: Recertia layers
+recertia.distill.paper -> recertia.jobs.arxiv
+recertia.governance.sandbox -> recertia.solver.sandbox
+recertia.graph.engine -> recertia.review
+recertia.mea.runtime -> recertia.nodes._util
+recertia.memory.affordance -> recertia.solver.tools
+recertia.memory.procedural.active_set -> recertia.evals.store
+recertia.memory.procedural.active_set -> recertia.review.autonomy_config
+recertia.memory.procedural.applicability -> recertia.solver.registry
+recertia.memory.procedural.contribution -> recertia.evals.statistics
+recertia.memory.procedural.lint -> recertia.solver.claims
+recertia.memory.procedural.portfolio -> recertia.review.autonomy_config
+recertia.memory.procedural.promote -> recertia.evals.golden
+recertia.nodes.context -> recertia.review
+recertia.programs.materialize -> recertia.nodes._util
+recertia.review -> recertia.evals.golden
+recertia.review.field_failures -> recertia.evals.store
+recertia.review.lifecycle -> recertia.evals.store
+recertia.review.shadow -> recertia.evals.store
+recertia.validation.judge -> recertia.solver.model
+recertia.validation.sensitivity -> recertia.graph.ops
+recertia.validation.sensitivity -> recertia.nodes.context
+recertia.validation.sensitivity -> recertia.nodes.validate
+recertia.validation.sensitivity -> recertia.solver.container
+recertia.validation.sensitivity -> recertia.solver.sandbox
+# contract: t3-unreachable
+recertia.solver.sandbox -> recertia.governance.sandbox
+# contract: memory-down
+recertia.memory.affordance -> recertia.solver.tools
+recertia.memory.procedural.lint -> recertia.solver.claims
+recertia.memory.procedural.promote -> recertia.evals.golden
+recertia.memory.procedural.contribution -> recertia.evals.statistics
+recertia.memory.procedural.active_set -> recertia.evals.store
+recertia.memory.procedural.active_set -> recertia.review.autonomy_config
+recertia.memory.procedural.portfolio -> recertia.review.autonomy_config
+recertia.memory.procedural.applicability -> recertia.solver.registry
+# contract: evals-no-engine
+recertia.evals.golden -> recertia.graph.engine
+# contract: api-cli-independent
+recertia.cli.keys -> recertia.api.auth
