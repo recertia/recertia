@@ -140,8 +140,9 @@ def test_agent_subtask_runs_model_command(tmp_path: Path, monkeypatch: pytest.Mo
         workdir=tmp_path,
         step_id="a2",
     )
-    assert result.ok, result.stderr
-    assert (tmp_path / "REPAIRED").exists()
+    assert not result.ok
+    assert "container" in result.stderr
+    assert not (tmp_path / "REPAIRED").exists()
 
 
 def test_scratch_without_model_fails_loud(tmp_path: Path) -> None:

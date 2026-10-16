@@ -144,6 +144,7 @@ class ToolRuntime:
         step_id: str,
         extra_claims: list[ResourceClaim] | None = None,
         step_context: StepInvokeContext | None = None,
+        origin: CommandOrigin = "tool",
     ) -> ToolResult:
         tool = self._registry.get(tool_name)
         if (
@@ -193,6 +194,7 @@ class ToolRuntime:
                         limits=self.sandbox_limits,
                         model=self.model,
                         step=step_context or StepInvokeContext(),
+                        origin=origin,
                     ),
                 )
             else:

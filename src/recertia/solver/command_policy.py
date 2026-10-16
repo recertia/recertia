@@ -78,6 +78,38 @@ def normalize_command(command: str, *, allow_redirects: bool = False) -> str:
     return text
 
 
+def _argv0_allowed(command: str) -> bool:
+    """Allowlist matches the executable token, not a prefix of the raw line."""
+
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    if not argv:
+        return False
+    head = argv[0]
+    for prefix in allowlist():
+        token = prefix.split()[0].rstrip()
+        if head == token or head == prefix.rstrip():
+            return True
+    return False
+
+
+def enforce_model_shell(command: str) -> str:
+    """Argv allowlist, then refuse model shell unless the backend is container."""
+
+    text = assert_command_allowed(command, allow_redirects=False)
+    if not _argv0_allowed(text):
+        raise CommandPolicyError(f"command argv is not allowlisted: {text!r}")
+    from recertia.settings import load_settings
+
+    if load_settings().execution_backend != "container":
+        raise CommandPolicyError(
+            "model-origin shell is refused unless the execution backend is container"
+        )
+    return text
+
+
 def assert_command_allowed(command: str, *, allow_redirects: bool = False) -> str:
     """Return the normalized command or raise :class:`CommandPolicyError`.
 

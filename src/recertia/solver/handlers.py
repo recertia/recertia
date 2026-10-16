@@ -77,10 +77,17 @@ def _run_handler_command(
 
 
 def shell_handler(inputs: dict, workdir: "Path | HandlerContext") -> ToolResult:
+    from recertia.solver.command_policy import CommandPolicyError, enforce_model_shell
     from recertia.solver.sandbox import SandboxError
 
     command = str(inputs.get("command", "true"))
     root, limits, ctx = _command_binding(workdir)
+    origin = ctx.origin if ctx is not None else "tool"
+    if origin == "model":
+        try:
+            command = enforce_model_shell(command)
+        except CommandPolicyError as exc:
+            return ToolResult(tool="shell", ok=False, exit_code=126, stderr=str(exc))
     try:
         proc = _run_handler_command(
             command, workdir=root, limits=limits, timeout_s=60, ctx=ctx
@@ -239,7 +246,7 @@ def agent_subtask_handler(inputs: dict, workdir: "Path | HandlerContext") -> Too
 
     from recertia.solver.command_policy import (
         CommandPolicyError,
-        assert_command_allowed,
+        enforce_model_shell,
         wrap_untrusted,
     )
     from recertia.solver.runtime import active_model, active_step_context
@@ -294,7 +301,7 @@ def agent_subtask_handler(inputs: dict, workdir: "Path | HandlerContext") -> Too
             stderr="model returned an empty/no-op command",
         )
     try:
-        command = assert_command_allowed(command)
+        command = enforce_model_shell(command)
     except CommandPolicyError as exc:
         return ToolResult(
             tool="agent_subtask", ok=False, exit_code=126, stderr=str(exc)
