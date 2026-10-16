@@ -54,7 +54,7 @@
 | Topic | Binding shape | Where applied |
 |---|---|---|
 | Identity | `Principal` and `TenantId` live in `recertia/ports/identity.py`. Today's `Principal` is the frozen dataclass in `api/auth.py:29-32` (`key_id`, `tenant_id: str`, `scopes`). REL consumes the port type; SEC identity owns the move. | S8, every signature |
-| Execution | `ExecutionBackend` is a `Literal` in `recertia/ports/execution.py`. Today the alias is `Backend = Literal["container", "local"]` in `solver/container.py:17`, read by `configured_backend()` at line 53 (`RECERTIA_EXECUTION_BACKEND`, default `"container"`). The port widens it with `"executor"`. SEC's config object is `ExecutionConfig` (frozen). `run_id`, `owner_id`, `fencing_token`, and SEC-5 `origin` are **fields on `CommandRequest`**. There is no `ExecutionContext` type. | REL-3, REL-9, REL-10 |
+| Execution | `ExecutionBackend` is a `Literal` in `recertia/ports/execution.py`. Today the alias is `Backend = Literal["container", "local"]` in `solver/container.py:17`, read by `configured_backend()` at line 53 (`RECERTIA_EXECUTION_BACKEND`, default `"container"`). The port keeps that pair. The out-of-process daemon is `RemoteExecutor`, a `CommandExecutor` that holds the frozen `ExecutionConfig`, selected by `RECERTIA_EXECUTOR_MODE`. `run_id`, `owner_id`, `fencing_token`, and SEC-5 `origin` are **fields on `CommandRequest`**. There is no `ExecutionContext` type. | REL-3, REL-9, REL-10 |
 | Run events | Path is `root/runs/<tenant>/run_events/<run_id>.jsonl`. SEC-3 owns the migration off the legacy locations. REL-4 and REL-6 call `RunsRootLayout.run_events_path`. The path is **not** `root/run_events/<tenant>/`. | REL-4, REL-6 |
 | Layout | ARCH-7 defines two classes, `RuntimeLayout` and `RunsRootLayout`. REL requires `runtime_db`, `control_db`, `locks_dir`, `root_lock`, and `api_lock`. Tenant methods take `TenantId`. | S1 |
 | Observability | Package is `recertia/observability/` (`logging.py`, `metrics.py`, `tracing.py`, `systems.py`). It is not `obs/`. | REL-7 |
@@ -438,7 +438,7 @@ def validate_deployment(
 
 **D2 scope rule.** The `runs` scope may submit caller-supplied commands on container and on local. A raw `script` field requires `exec` or `admin`. That rule is owned by the SEC exec gate. The current check is `api/__init__.py:374-378`. REL code carries `origin` on `CommandRequest` and does not widen or narrow the rule.
 
-`golden_backend` (`RECERTIA_GOLDEN_BACKEND`) is `Literal["inherit", "container", "local", "executor"]` with default `inherit`. `inherit` resolves to `Settings.execution_backend`.
+`golden_backend` (`RECERTIA_GOLDEN_BACKEND`) is `Literal["inherit", "container", "local"]` with default `inherit`. `inherit` resolves to `Settings.execution_backend`.
 
 ### S8. Identity and tenancy plumbing
 
@@ -1083,7 +1083,7 @@ class WorkspaceLock:
 `CommandRequest` (ARCH-3, fields owned jointly with SEC-5), consumed when a fenced owner dispatches a tool:
 
 ```python
-ExecutionBackend = Literal["local", "container", "executor"]
+ExecutionBackend = Literal["container", "local"]
 
 @dataclass(frozen=True)
 class CommandRequest:
@@ -1096,7 +1096,7 @@ class CommandRequest:
     origin: str          # SEC-5
 ```
 
-There is no `ExecutionContext`. `ExecutionConfig` remains the frozen process config (image, network, runtime). REL does not redefine it.
+There is no `ExecutionContext`. `ExecutionConfig` remains the frozen config held by each `CommandExecutor` (image, network, runtime). The out-of-process daemon is `RemoteExecutor` under `RECERTIA_EXECUTOR_MODE`, not a third backend value. REL does not redefine `ExecutionConfig`.
 
 #### Run lease state machine
 
@@ -2615,7 +2615,7 @@ This phase is committed. It is not behind an ADR gate.
 
 ### Non-goals
 
-- Building the executor service itself. SEC executor isolation owns the sandbox. REL-10 supplies the `ExecutionBackend="executor"` client settings and refuses `local`.
+- Building the executor service itself. SEC executor isolation owns the sandbox. REL-10 supplies the `RemoteExecutor` client (`CommandExecutor` holding `ExecutionConfig`, `RECERTIA_EXECUTOR_MODE`) and refuses `local`.
 - Tenant provisioning UX, export bundles, and crypto-shred. Those are REL-11. REL-10 provides the schema and the RLS that REL-11 deletes through.
 - Automatic dual-write between SQLite and Postgres. Cutover is `migrate export` then a config flip.
 

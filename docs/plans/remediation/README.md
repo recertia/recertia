@@ -35,7 +35,7 @@ These names are shared. A spec that introduces a second type for the same role i
 | Topic | Binding shape |
 | --- | --- |
 | Principal location | `Principal` and `TenantId` live in `recertia/ports/identity.py`. `Principal.local_operator()` is D5. |
-| ExecutionBackend vs ExecutionConfig | `ExecutionBackend` is a `Literal` (`"container"` \| `"local"`) in `recertia/ports/execution.py`. The SEC config object is `ExecutionConfig` (image, network, user, resource limits). `run_id`, `owner_id`, `fencing_token`, and SEC-5 `origin` are fields on `CommandRequest`. There is no `ExecutionContext` type. |
+| ExecutionBackend vs ExecutionConfig | `ExecutionBackend` is a `Literal` (`"container"` \| `"local"`) in `recertia/ports/execution.py`. The frozen config object is `ExecutionConfig` (image, network, user, resource limits), held by each `CommandExecutor`. The out-of-process daemon is `RemoteExecutor`, selected by `RECERTIA_EXECUTOR_MODE`. `run_id`, `owner_id`, `fencing_token`, and SEC-5 `origin` are fields on `CommandRequest`. There is no `ExecutionContext` type. |
 | PDP location | `PolicyDecisionPoint` lives in `recertia/app/authz.py`. Routes and services call `pdp.require(principal, action, resource)`. |
 | HOME | The command environment sets `HOME` to the run workdir (the container mount inside the executor, the host workdir for the local backend). A host `HOME` is not inherited. |
 | Run-events path | `root/runs/<tenant>/run_events/<run_id>.jsonl`. SEC-3 owns the move off `root/run_events`. REL-4 and REL-6 read it through `RunsRootLayout.run_events_path`. |
@@ -81,7 +81,7 @@ Seventeen small PRs. Each one closes a hole on the current tree. The phase that 
 | --- | --- | --- | --- |
 | 0.1 | Stop writing `RECERTIA_EXECUTION_BACKEND` into `os.environ`. Pass the backend into the call. | `cli/runs.py` `_prepare_execution`; `evals/golden.py` (the two assignments around the golden orchestrator start) | ARCH-2 |
 | 0.2 | Exec check stays script-only. Quote and confine `file_exists` and `file_contains` paths in `compile_goal`. | `api/__init__.py` (`body.script`); `contracts/goal.py` | SEC-2 (the quoting stays) |
-| 0.3 | Validate every session tenant id, and require `active_tenant` to be a member of that set, at issue and at parse. | `api/console_auth.py`; `api/console_session_routes.py` dev-login | SEC-8 |
+| 0.3 | Validate every session tenant id, and require `active_tenant` to be a member of that set, at issue and at parse. | `api/console_auth.py`; `api/console_session_routes.py` dev-login | SEC-10 |
 | 0.4 | Key run events and cancel by tenant. Cancel resolves the tenant and only cancels that tenant's run. Event files move to `root/runs/<tenant>/run_events/<run_id>.jsonl`. | `api/console_deps.py` (`RunEventLog(root/"run_events")`); `api/console_library_routes.py` `run_events`, `cancel_run` | SEC-3 |
 | 0.5 | The reviews alias applies the same T2 gate as proposal decision: reviewer session, or an admin key, when `payload.tier == "T2"` or the kind is `correction`. | `api/remaining_routes.py` `decide_review`; the check already in `api/console_library_routes.py` `decide_proposal` | SEC-7 |
 | 0.6 | `POST /v1/runs/{id}/resume` calls `quota_store.admit` and releases on failure, as create does. | `api/__init__.py` `resume_run` | REL-4 (`RunService.resume`) |
@@ -114,10 +114,9 @@ Land a phase when every item in it is done and the items it depends on (section 
 | REL-1 | Atomic file state. Torn JSON is quarantined. The quota sidecar fails closed and keeps every spend field. Write-once blobs detect a torn body. `RevokeQueue` drain takes the file lock. |
 | REL-2 | Ledger `flock`, fsync per the durability policy, and a tip that does not rescan the file on every append. Repair is Phase 3. |
 | REL-8 | Model client retries only retryable failures, honours `Retry-After`, and stops spending after the deadline. A 4xx is not retried. |
-| REL-7 logging | JSON logs and the 500 path from hotfix 0.15. Metrics, tracing, and `/ready` wait for Phase 4. |
+| REL-7 logging | JSON logs and the 500 path from hotfix 0.15. Metrics, tracing, and `/ready` wait for Phase 4. Log and error redaction is SEC-13. Disclosure (interactive docs, fetch) is SEC-11. |
 | SEC-1 | Every tenant data path takes an authenticated `TenantId`. An unbound call fails. |
 | SEC-4a | Container policy on the current runtime: allowlist, non-root, `network=none`, read-only root, `HOME` is the workdir, custom image only when the flag is `1`. |
-| SEC-9 | Logs and the error envelope redact secrets, script bodies, and command text. |
 
 ### Phase 2 — services, authorization, run ownership
 
@@ -129,7 +128,8 @@ Land a phase when every item in it is done and the items it depends on (section 
 | SEC-7 | `PolicyDecisionPoint` in `app/authz.py`, including the T2 reviewer rule from hotfix 0.5. |
 | SEC-2 | D2 gate on the port: `runs` commands on container (and local only in `single_node` with the break-glass); `exec` only for raw `script`. |
 | SEC-5 | `CommandRequest.origin` (`goal`, `script`, `operator`). |
-| SEC-8 | OIDC session cookie is signed, tenant membership is the directory's set, dev-login is off unless the development flags are set, and `multi_node` has no unsigned fallback. |
+| SEC-8 | `platform_admin` is not tenant `admin`. `host_root`, per-tenant skill libraries, and the `evals` scope follow that split. Who may change an admission cap is this split; enforcement is REL-11. |
+| SEC-10 | OIDC session cookie is signed, CSRF is checked, tenant membership is the directory's set, dev-login is off unless the development flags are set, and `multi_node` has no unsigned fallback. |
 | SEC-3 | Tenant-keyed events and cancel, on the binding path. Migration of legacy `root/run_events`. |
 | REL-3 | One owner per run: leases, fencing tokens, workdir exclusivity, durable `run_id` uniqueness, scratch resume replays the recorded model call. |
 
@@ -141,7 +141,6 @@ Land a phase when every item in it is done and the items it depends on (section 
 | REL-5 | One transaction for the checkpoint and the outbox. Trajectory events, the eval observation, quota spend, affordance updates, and program versions stop doing read-modify-write after the fact. |
 | REL-2 repair | `recertia ledger repair` truncates a torn tail and appends a `ledger_repaired` entry. Full verify is an explicit action, not the console page load. |
 | SEC-6 | Ledger appends are signed. `ledger.repair` and `ledger.verify_full` require `platform_admin`. In `multi_node` a tenant scope cannot repair. |
-| SEC-13 | Per-tenant admission caps fail closed, and a denial is audited. In `multi_node` a missing cap configuration refuses the tenant's creates. |
 
 ### Phase 4 — reads, operations, multi-tenant control plane
 
@@ -152,10 +151,10 @@ REL-10 is in this phase because D1 is accepted. Nothing in this phase waits on a
 | REL-6 | List endpoints page. SSE follows new events. The orchestrator is not rebuilt per request. Checkpoints store a delta. In-process maps are bounded. |
 | REL-7 | Metrics, tracing, and `/ready`. `/ready` fails when the deployment validation would fail, including a local backend in `multi_node`. |
 | REL-9 | Backups copy a quiescent snapshot. Restore takes `root_lock`. Containers carry owner labels. GC keeps snapshots of non-terminal runs. Disk space is checked before a snapshot copy. |
-| REL-10 | Postgres schemas `recertia` and `recertia_ctl`, RLS, object storage, per-tenant ledger scope. Application replicas do not run DDL and do not use the owner role. |
-| REL-11 | Tenant provision, limits, export, verified deletion with crypto-shred, noisy-neighbour controls, per-tenant cost. |
-| SEC-10 | RLS policies and object-storage prefix grants. An unbound database role sees no tenant rows. |
-| SEC-11 | Envelope encryption per tenant and the KMS review REL-11 needs. |
+| REL-10 | Postgres schemas `recertia` and `recertia_ctl`, RLS, object-storage prefix grants, per-tenant ledger scope. An unbound database role sees no tenant rows. Application replicas do not run DDL and do not use the owner role. |
+| REL-11 | Tenant provision, limits, export, verified deletion with crypto-shred, noisy-neighbour controls, per-tenant cost. Admission caps fail closed, a denial is audited, and `multi_node` refuses a tenant with no cap row. |
+| SEC-9 | API keys are HMAC-SHA256 with a pepper. The limiter keys on client IP and `key_id`. Audit rows are capped. |
+| SEC-13 | Per-tenant secrets and model credentials, envelope-encrypted (KMS or local KEK). Logs, errors, and transcripts redact secrets, script bodies, and command text. |
 | SEC-4c | Executor service. The API process has no container socket. One tenant's executor cannot see another's workdir. |
 | ARCH-8 | Low-severity maintainability. No other item depends on these edits. |
 
@@ -163,7 +162,8 @@ REL-10 is in this phase because D1 is accepted. Nothing in this phase waits on a
 
 | Item | Outcome |
 | --- | --- |
-| SEC-12 | Dependency review for the libraries this train adds (`cryptography`, `prometheus_client`, `boto3`, the Postgres driver), and the threat-model note for multi-tenant mode. |
+| SEC-11 | Low-severity items: git `tip_sha`, keyed proofs, disclosure, and `fetch` through the egress proxy. Dependency review for `cryptography`, `prometheus_client`, `boto3`, and the Postgres driver, plus the multi-tenant threat-model note. |
+| SEC-12 | `scripts/security_review.py` AST checks and the exploit regressions under `tests/security/`. |
 | ARCH-1 blocking | The Phase 1 guardrails fail CI. They stay in warn mode until the tree is clean, which is this phase. |
 
 The following release after Phase 3 flips `RECERTIA_API_DEFAULT_ASYNC` to `1` (D4). That flip is a default change, not a new item.
@@ -190,7 +190,6 @@ flowchart TD
     REL7L[REL-7 logging]
     SEC1[SEC-1 tenant binding]
     SEC4A[SEC-4a container policy]
-    SEC9[SEC-9 redaction]
   end
   subgraph p2 [Phase 2]
     ARCH4[ARCH-4 import cycle]
@@ -199,7 +198,8 @@ flowchart TD
     SEC7[SEC-7 PDP]
     SEC2[SEC-2 exec gate]
     SEC5[SEC-5 origin]
-    SEC8[SEC-8 sessions]
+    SEC8[SEC-8 privilege]
+    SEC10[SEC-10 sessions]
     SEC3[SEC-3 run events]
     REL3[REL-3 run ownership]
   end
@@ -208,7 +208,6 @@ flowchart TD
     REL5[REL-5 outbox]
     REL2R[REL-2 repair]
     SEC6[SEC-6 ledger signing]
-    SEC13[SEC-13 admission caps]
   end
   subgraph p4 [Phase 4]
     REL6[REL-6 read path]
@@ -216,13 +215,14 @@ flowchart TD
     REL9[REL-9 backup and GC]
     REL10[REL-10 control plane]
     REL11[REL-11 tenant lifecycle]
-    SEC10[SEC-10 RLS and prefixes]
-    SEC11[SEC-11 envelope keys]
+    SEC9[SEC-9 API keys]
+    SEC13[SEC-13 secrets]
     SEC4C[SEC-4c executor service]
     ARCH8[ARCH-8 maintainability]
   end
   subgraph p5 [Phase 5]
-    SEC12[SEC-12 supply chain]
+    SEC11[SEC-11 low-severity and supply chain]
+    SEC12[SEC-12 review automation]
     ARCH1B[ARCH-1 blocking]
   end
 
@@ -234,7 +234,7 @@ flowchart TD
   ARCH3 --> SEC4A
   ARCH3 --> SEC2
   ARCH2 --> SEC1
-  SEC9 --> REL7L
+  REL7L --> SEC13
   ARCH2 --> REL8
 
   ARCH4 --> ARCH6
@@ -243,10 +243,12 @@ flowchart TD
   SEC7 --> ARCH5
   SEC1 --> SEC7
   SEC1 --> SEC8
+  SEC1 --> SEC10
+  SEC7 --> SEC8
   SEC2 --> REL3
   SEC5 --> REL3
   ARCH3 --> SEC5
-  SEC8 --> SEC3
+  SEC10 --> SEC3
 
   REL3 --> REL4
   ARCH5 --> REL4
@@ -257,7 +259,6 @@ flowchart TD
   REL2 --> REL2R
   REL2R --> SEC6
   SEC7 --> SEC6
-  REL4 --> SEC13
 
   REL4 --> REL6
   REL5 --> REL6
@@ -269,18 +270,19 @@ flowchart TD
   REL4 --> REL10
   REL5 --> REL10
   SEC1 --> REL10
-  SEC8 --> REL10
   SEC10 --> REL10
   SEC4A --> SEC4C
   REL10 --> SEC4C
   REL10 --> REL11
   SEC13 --> REL11
-  REL11 --> SEC11
+  ARCH7 --> SEC9
+  SEC13 --> SEC9
   ARCH5 --> ARCH8
 
-  REL10 --> SEC12
-  REL7 --> SEC12
-  REL11 --> SEC12
+  REL10 --> SEC11
+  REL7 --> SEC11
+  REL11 --> SEC11
+  SEC11 --> SEC12
   ARCH1 --> ARCH1B
   SEC12 --> ARCH1B
 ```
@@ -317,12 +319,12 @@ Findings F1–F33 and G1–G5 are the reliability review. Reproductions and the 
 | REL-7 | JSON logging (Phase 1), then metrics, tracing, and `/ready` (Phase 4). Cost events carry `tenant_id`. | F26, G4 | `observability/`, `api/` health |
 | REL-8 | Model client: retry only retryable status, `Retry-After`, deadline checked before the call, circuit breaker. | F27 | `solver/model.py`, `solver/providers.py` |
 | REL-9 | Consistent backup, `root_lock` around restore, container labels, disk check, GC that skips non-terminal runs. | F28, F29, F30, F31 | `ops/backup.py`, `retention.py`, `solver/container.py` |
-| REL-10 | Pooled Postgres with `tenant_id` and RLS, object storage, per-tenant ledger scope, scheduler role for control tables. Not gated. | F32, G5 | `persistence/` Postgres, migrations, connection pool |
-| REL-11 | Tenant lifecycle: provision, limits, export, crypto-shred delete, noisy-neighbour caps, per-tenant cost. | G1, G2, G3, G4 | `runtime/tenancy.py`, admin CLI, REL-10 schemas |
+| REL-10 | Pooled Postgres with `tenant_id` and RLS, object-storage prefix grants, per-tenant ledger scope, scheduler role for control tables. An unbound role sees no tenant rows. Not gated. | F32, G5 | `persistence/` Postgres, migrations, connection pool |
+| REL-11 | Tenant lifecycle: provision, limits, export, crypto-shred delete, noisy-neighbour caps, per-tenant cost. Admission caps fail closed and a denial is audited. | G1, G2, G3, G4 | `runtime/tenancy.py`, admin CLI, REL-10 schemas |
 
 ### SEC-1 to SEC-13
 
-SEC-4 is two slices. There is no SEC-4b. SEC-1, SEC-8, SEC-10, SEC-4c, SEC-6, and SEC-13 are the strict form in `multi_node` (ADR-0021).
+SEC-4 is two slices. There is no SEC-4b. SEC-1, SEC-10, SEC-4c, SEC-6, SEC-8, and SEC-13 are the strict form in `multi_node` (ADR-0021). RLS and object-storage prefixes are REL-10. Admission caps are REL-11; who may change a cap is SEC-8.
 
 | ID | Deliverable | Closes | Size |
 | --- | --- | --- | --- |
@@ -334,12 +336,12 @@ SEC-4 is two slices. There is no SEC-4b. SEC-1, SEC-8, SEC-10, SEC-4c, SEC-6, an
 | SEC-5 | `CommandRequest.origin` so the PDP can tell a goal criterion from a raw script. | Commands that arrive with no provenance | field on `CommandRequest` |
 | SEC-6 | Signed ledger append. Repair and full verify require `platform_admin`. Tenant scopes cannot repair in `multi_node`. | Unsigned chain; repair as a tenant-level tool | `ledger/`, SEC-7 actions |
 | SEC-7 | `PolicyDecisionPoint`, including the T2 reviewer rule on the reviews alias. | `decide_review` skipping the T2 check (0.5) | `app/authz.py` |
-| SEC-8 | Signed session cookie, tenant ids checked at issue and parse, no dev-login and no random session secret in `multi_node`. | Unvalidated session tenant lists (0.3); `console_auth.py` secret fallback | `api/console_auth.py` |
-| SEC-9 | Redaction rules for logs and `RecertiaError` bodies. | Script and command text in 500 logs and criterion excerpts | `observability/logging.py`, `api/errors.py` |
-| SEC-10 | RLS policies in `migrations/pg/rls/` and object-storage grants limited to `tenants/<tenant_id>/`. | A pooled role that can `SELECT` every tenant; G5 | SQL policies, bucket policy |
-| SEC-11 | Per-tenant envelope encryption. KMS review before REL-11 deletion shreds keys. | Tenant blobs readable with the bucket key alone | crypto helper, REL-11 delete |
-| SEC-12 | Review of new dependencies and a multi-tenant threat-model note beside `docs/architecture/threat-model-deltas.md`. | Unreviewed `boto3`, `cryptography`, `prometheus_client`, Postgres driver | `pyproject.toml`, docs |
-| SEC-13 | Per-tenant caps enforced at `RunService.create` and `resume`. A denial is an audit event. `multi_node` refuses a tenant with no cap row. | FIFO claim with no per-tenant ceiling; G3 | `RunService`, `workers/` |
+| SEC-8 | `platform_admin` is distinct from tenant `admin`. `host_root` stays inside configured workspace roots. Skill libraries are per-tenant in `multi_node`. `evals` is its own scope. Changing an admission cap uses this split; REL-11 enforces the cap. | Shared skill library; `admin` treated as `platform_admin`; `metrics` used to run evals | `app/authz.py`, workspace registry, skills roots |
+| SEC-9 | API keys stored as HMAC-SHA256 with a pepper. Rate limit by client IP and `key_id`. Audit rows are capped. | PBKDF2 on the request path; limiter keyed by the presented secret | `persistence/api_keys.py` |
+| SEC-10 | Signed OIDC session cookie, CSRF, membership loaded at parse, dev-login off unless the development flags are set, and no unsigned fallback in `multi_node`. | Unvalidated session tenant lists (0.3); `console_auth.py` secret fallback | `api/console_auth.py` |
+| SEC-11 | Git `tip_sha` is a commit, sensitivity proofs are keyed, interactive docs are off in production, `fetch` uses the egress proxy, and new dependencies are reviewed (`cryptography`, `prometheus_client`, `boto3`, the Postgres driver) with a multi-tenant threat-model note. | Unreviewed dependencies; docs exposed in production | `programs/git_tip.py`, CI, `docs/architecture/threat-model-deltas.md` |
+| SEC-12 | `scripts/security_review.py` gains cross-component AST checks. `tests/security/` holds the exploit regressions. | Substring needles that miss a dropped policy call | `scripts/security_review.py`, `tests/security/` |
+| SEC-13 | Per-tenant provider keys and model credentials. Envelope encryption with a KMS or a local KEK. Logs, errors, and transcripts redact secrets, script bodies, and command text. | One process-wide provider key; script text in 500 logs | `secrets/`, `redaction.py` |
 
 ---
 
@@ -404,4 +406,4 @@ One base type. HTTP bodies stay `{"error": {code, message, retryable, run_id?, d
 | [ADR-0021](../../adr/0021-deployment-model.md) | D1–D5. Why the control plane is pooled and execution is isolated. Startup refusals for `multi_node`. |
 | [arch-specs.md](arch-specs.md) | ARCH-1 through ARCH-8: guardrails, `Settings`, the executor port, the import cycle, services, hooks, layout, maintainability. |
 | [rel-specs.md](rel-specs.md) | REL-1 through REL-11: storage layout for both modes, durability, errors, migrations, and the reliability findings. |
-| [sec-specs.md](sec-specs.md) | SEC-1 through SEC-13: identity, the D2 gate, events, container and executor isolation, origin, ledger signing, the PDP, sessions, redaction, RLS, keys, supply chain, admission caps. |
+| [sec-specs.md](sec-specs.md) | SEC-1 through SEC-13: identity, the D2 gate, events, container and executor isolation, origin, ledger signing, the PDP, the privilege model, API-key hashing, sessions, low-severity items, review automation, and per-tenant secrets. |

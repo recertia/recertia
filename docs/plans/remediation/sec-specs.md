@@ -199,7 +199,7 @@ Rules:
 ARCH-3 owns `recertia/ports/execution.py`. SEC specifies these members; ARCH-3 owns the executor methods around them.
 
 ```python
-ExecutionBackend = Literal["container", "local", "executor"]
+ExecutionBackend = Literal["container", "local"]
 CommandOrigin = Literal["caller", "model", "skill", "criterion", "freeze"]
 
 @dataclass(frozen=True)
@@ -234,7 +234,7 @@ class ExecutionConfig:
     tmpfs_noexec: bool
 ```
 
-`resolve_backend()` is the only function that reads `Policy.isolation.default_backend`. Precedence inside that function: `RECERTIA_EXECUTION_BACKEND` when set, otherwise the policy field. In `multi_node`, a result of `local` raises `ExecutionUnavailable` during startup, before the process serves traffic. The API and worker roles in `multi_node` resolve to `executor` (the UNIX-socket client). The executor role resolves to `container` with the selected sandbox runtime.
+`resolve_backend()` is the only function that reads `Policy.isolation.default_backend`. Precedence inside that function: `RECERTIA_EXECUTION_BACKEND` when set, otherwise the policy field. In `multi_node`, a result of `local` raises `ExecutionUnavailable` during startup, before the process serves traffic. API and worker roles in `multi_node` stay on backend `container` and use `RemoteExecutor` (`CommandExecutor` holding `ExecutionConfig`) when `RECERTIA_EXECUTOR_MODE` selects the daemon. The executor role runs `container` with the selected sandbox runtime.
 
 ### S4. Errors
 
@@ -638,12 +638,12 @@ def resolve_golden_backend(
         if capability is None:
             raise ExecutionUnavailable("local golden gate requires LocalExecutionCapability")
         return "local"
-    if mode in {"container", "executor"}:
-        return mode  # type: ignore[return-value]
+    if mode == "container":
+        return "container"
     raise InvalidInput(f"unsupported golden backend {mode!r}")
 ```
 
-`run_skill_golden` and `run_goal_fixture` stop assigning `RECERTIA_EXECUTION_BACKEND=local` when the variable is unset (`evals/golden.py:189-213`, `336-363`). `tests/conftest.py` already forces the local backend for pytest; it will pass `capability=LocalExecutionCapability(purpose="pytest")` into the harness so CI without Docker keeps working. Production promotion uses `inherit`, which is `container` or `executor`.
+`run_skill_golden` and `run_goal_fixture` stop assigning `RECERTIA_EXECUTION_BACKEND=local` when the variable is unset (`evals/golden.py:189-213`, `336-363`). `tests/conftest.py` already forces the local backend for pytest; it will pass `capability=LocalExecutionCapability(purpose="pytest")` into the harness so CI without Docker keeps working. Production promotion uses `inherit`, which is `container` or `local`.
 
 ### Files
 
@@ -859,7 +859,7 @@ class ExecutorServer:
     def serve(self, socket_path: Path) -> None: ...
 
 # recertia/executor/client.py
-class ExecutorClient(CommandExecutor):
+class RemoteExecutor(CommandExecutor):
     def run(self, request: CommandRequest, *, token: CapabilityToken) -> CommandResult: ...
 
 @dataclass(frozen=True)
@@ -879,7 +879,7 @@ def verify_capability(token: str, *, key: bytes, now: int) -> CapabilityToken: .
 ```
 
 - Socket path: `RECERTIA_EXECUTOR_SOCKET`, mode `0600`, directory mode `0700`.
-- The API and worker processes depend on `ExecutorClient` only. They do not import `docker` and they do not call `subprocess` with `docker` or `podman`. SEC-12's AST check enforces that under `recertia/api/` and `recertia/workers/`.
+- The API and worker processes depend on `RemoteExecutor` only. They do not import `docker` and they do not call `subprocess` with `docker` or `podman`. SEC-12's AST check enforces that under `recertia/api/` and `recertia/workers/`. `RECERTIA_EXECUTOR_MODE` selects that daemon; `ExecutionBackend` stays `container`.
 - The executor process is the only role that calls `_container_run`.
 - One sandbox per run is the default (`RECERTIA_SANDBOX_SCOPE=run`). `RECERTIA_SANDBOX_SCOPE=tenant` keeps a long-lived sandbox for the tenant and still starts each command with a fresh workdir mount and a fresh capability check.
 - `RECERTIA_SANDBOX_RUNTIME=runc` (default), `runsc` (gVisor: `--runtime=runsc`), or `firecracker` (a microVM per `SANDBOX_SCOPE`, virtio mount of the workdir, no NIC unless the tenant egress policy is non-empty, in which case the NIC is a tap that only routes to the egress proxy).
@@ -937,7 +937,7 @@ def verify_capability(token: str, *, key: bytes, now: int) -> CapabilityToken: .
 
 ### Goal
 
-`shell_handler` enforces an argv-level policy selected by `CommandRequest.origin`. Origin `model` runs only in a container or executor sandbox and only as an allowlisted argv. The local executor does not use `shell=True`, forces `HOME` and `TMPDIR` to the workdir, fails closed when rlimits cannot be set, and applies a `/proc` mitigation. Caller-supplied commands remain allowed on local under D2, with that confinement, and only outside `multi_node`.
+`shell_handler` enforces an argv-level policy selected by `CommandRequest.origin`. Origin `model` runs only on backend `container` (in-process or through `RemoteExecutor`) and only as an allowlisted argv. The local executor does not use `shell=True`, forces `HOME` and `TMPDIR` to the workdir, fails closed when rlimits cannot be set, and applies a `/proc` mitigation. Caller-supplied commands remain allowed on local under D2, with that confinement, and only outside `multi_node`.
 
 ### Non-goals
 
@@ -969,9 +969,9 @@ Policy by origin:
 
 | Origin | mode | Backend | Allowlist |
 |---|---|---|---|
-| `model` | `argv` | `container` or `executor` only. `local` raises `CommandRefused` | `argv[0]` equals an allowlist entry with the trailing space stripped. `python`/`python3` with `-c` is refused |
-| `skill` | `argv` | `container` or `executor`. `local` raises `CommandRefused` | Same list. Redirects stay refused. A skill step that needs a shell is rewritten by the author into argv or it does not run on this path |
-| `caller`, `criterion` | `shell` | container, executor, or local when S5 allows local | No model allowlist. The string is executed as `sh -c` inside the sandbox. On local, the child is `["/bin/sh", "-c", command]` with `shell=False` |
+| `model` | `argv` | `container` only (`RemoteExecutor` reports `container`). `local` raises `CommandRefused` | `argv[0]` equals an allowlist entry with the trailing space stripped. `python`/`python3` with `-c` is refused |
+| `skill` | `argv` | `container` only (`RemoteExecutor` included). `local` raises `CommandRefused` | Same list. Redirects stay refused. A skill step that needs a shell is rewritten by the author into argv or it does not run on this path |
+| `caller`, `criterion` | `shell` | `container`, or `local` when S5 allows local | No model allowlist. The string is executed as `sh -c` inside the sandbox. On local, the child is `["/bin/sh", "-c", command]` with `shell=False` |
 | `freeze` | `argv` | any allowed backend | Exactly `python` or `python3`, `-c`, and the quoted script. No extra arguments |
 
 `shell_handler` reads the active request:
@@ -1200,7 +1200,7 @@ class PolicyDecisionPoint:
 **Tool grants** (`approve_tools`), replacing `approve_default_tools`:
 
 - Read and pure tools (`read_file`, `grep`) are granted.
-- `shell`, `edit_file`, and `agent_subtask` are granted when the resolved backend is `container` or `executor` and `policy.require_tool_approval_for_non_read` is true, with `actor="pdp"` and `reason="container-default"`. The command policy (SEC-5) still applies inside `shell`. This grant is what keeps container solves working after the blanket flag is removed. It is recorded per tool name, not "every name in the registry".
+- `shell`, `edit_file`, and `agent_subtask` are granted when the resolved backend is `container` and `policy.require_tool_approval_for_non_read` is true, with `actor="pdp"` and `reason="container-default"`. The command policy (SEC-5) still applies inside `shell`. This grant is what keeps container solves working after the blanket flag is removed. It is recorded per tool name, not "every name in the registry".
 - `fetch` is granted only with the container grant and is executed via the egress proxy (SEC-11).
 - `external_computer` is granted only when `isolation.allow_external_computer` and the allowlist checks in `solver/external_computer.py` already pass. The PDP calls that existing function. It does not grant the tool because the registry lists it.
 - When `require_tool_approval_for_non_read` is false, write tools are granted without a human record. `multi_node` startup refuses that policy value (`execution_unavailable`).
@@ -1926,7 +1926,8 @@ ARCH-2 owns the settings object. SEC requires these fields. Names in the environ
 |---|---|---|---|
 | `deployment_mode` | `RECERTIA_DEPLOYMENT_MODE` | `single_node` | `multi_node` |
 | `process_role` | `RECERTIA_PROCESS_ROLE` | `api` | `api`, `worker`, `executor`, or `cli` |
-| `execution_backend` | `RECERTIA_EXECUTION_BACKEND` | unset, then `policy.isolation.default_backend` via `resolve_backend()` | `executor` for api/worker |
+| `execution_backend` | `RECERTIA_EXECUTION_BACKEND` | unset, then `policy.isolation.default_backend` via `resolve_backend()` | `container` (`local` refused) |
+| `executor_mode` | `RECERTIA_EXECUTOR_MODE` | in-process `CommandExecutor` | `remote` (`RemoteExecutor` holding `ExecutionConfig`) |
 | `api_allow_local_exec` | `RECERTIA_API_ALLOW_LOCAL_EXEC` | unset | ignored; startup already refused local |
 | `api_max_criterion_timeout_s` | `RECERTIA_API_MAX_CRITERION_TIMEOUT_S` | `300` | same |
 | `golden_backend` | `RECERTIA_GOLDEN_BACKEND` | `inherit` | `inherit` |

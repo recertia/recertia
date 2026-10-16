@@ -61,7 +61,7 @@ Every CLI command builds `Principal.local_operator()`. That principal carries `p
 **In scope now**
 
 - REL-10 and REL-11 ship in the remediation train. REL-10 is not gated on a further ADR.
-- In `multi_node`, SEC-1, SEC-8, SEC-10, SEC-4c, SEC-6, and SEC-13 are the strict form of those controls: an unbound tenant fails closed, dev-login and the unsigned session fallback are off, RLS and the object-storage prefix are mandatory, the API holds no container socket, a tenant scope cannot repair the ledger, and per-tenant admission caps fail closed.
+- In `multi_node`, SEC-1, SEC-10, SEC-4c, SEC-6, SEC-8, and SEC-13 are the strict form of those controls: an unbound tenant fails closed, dev-login and the unsigned session fallback are off, the API holds no container socket, a tenant scope cannot repair the ledger, `platform_admin` is not implied by tenant `admin`, and per-tenant secrets are envelope-encrypted. RLS and the object-storage prefix are REL-10. Per-tenant admission caps fail closed under REL-11; changing a cap is SEC-8.
 - SEC-2 is D2. Container execution of `runs`-scope commands is the normal path. Local execution of those commands exists only in `single_node` with the break-glass. Raw `script` stays on `exec`.
 
 **Startup refuses `multi_node` when any of these hold**
@@ -86,4 +86,4 @@ Every CLI command builds `Principal.local_operator()`. That principal carries `p
 
 ## What this does not decide
 
-The receipt as the durability unit ([ADR-0020](0020-store-receipts.md)), idle-state residency ([ADR-0018](0018-idle-state-offloading.md)), and the cyclic graph ([ADR-0001](0001-graph-with-loops.md)) stand. This ADR does not pick a Postgres major version, an object-store vendor beyond an S3 API, or a KMS vendor. Envelope encryption and the KMS review are SEC-11 and REL-11. Schema and repository shape are ARCH-7 and REL-10, specified in the remediation plan.
+The receipt as the durability unit ([ADR-0020](0020-store-receipts.md)), idle-state residency ([ADR-0018](0018-idle-state-offloading.md)), and the cyclic graph ([ADR-0001](0001-graph-with-loops.md)) stand. This ADR does not pick a Postgres major version, an object-store vendor beyond an S3 API, or a KMS vendor. Envelope encryption is SEC-13. REL-11 crypto-shreds those keys. Dependency review is SEC-11 and SEC-12. Schema and repository shape are ARCH-7 and REL-10, specified in the remediation plan.
