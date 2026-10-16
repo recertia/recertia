@@ -24,7 +24,6 @@ from recertia.solver.apply import SkillApplicator
 from recertia.solver.factory import build_solver_and_verifier
 from recertia.solver.tools import ClaimScheduler, ToolRuntime, default_registry
 from recertia.solver.transcript import TranscriptStore
-from recertia.workspace import WorkspaceManager
 
 if TYPE_CHECKING:
     from recertia.graph.engine import GraphOrchestrator
@@ -129,6 +128,7 @@ def build_default_orchestrator(
     """
 
     from recertia.graph.engine import GraphOrchestrator
+    from recertia.graph.persistence import open_run_persistence
     from recertia.memory.procedural.lineage import LineageServices
     from recertia.policy_load import load_policy
     from recertia.review import ReviewService
@@ -181,7 +181,8 @@ def build_default_orchestrator(
         model=model,
         result_cache=tool_cache,
     )
-    workspaces = WorkspaceManager(runs_root / "snapshots")
+    persistence = open_run_persistence(runs_root)
+    workspaces = persistence.workspaces
     transcripts = TranscriptStore(runs_root / "transcripts")
     applicator = SkillApplicator(tools, workspaces)
 
@@ -211,6 +212,7 @@ def build_default_orchestrator(
 
     orch = GraphOrchestrator(
         runs_root,
+        persistence=persistence,
         store=store,
         retriever=retriever,
         tools=tools,
@@ -227,8 +229,6 @@ def build_default_orchestrator(
         policy=policy,
         on_finalize=_record_eval,
     )
-    # Share the same WorkspaceManager the applicator uses for attempt isolation.
-    orch.workspaces = workspaces
     return OrchestratorBundle(orchestrator=orch, index=index, model_config=cfg)
 
 

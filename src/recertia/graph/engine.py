@@ -9,8 +9,9 @@ class only validates that a node's chosen route is legal and walks the resulting
 
 from __future__ import annotations
 
+import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,16 +22,13 @@ from contracts.criteria import TaskCriterion
 from contracts.graph import legal_routes
 from contracts.run import RouteEntry, RunManifest, RunState, Task, WorkspaceSnapshot
 from contracts.trajectory import TrajectoryEvent
-from recertia.graph.ops import OperationLedger
-from recertia.graph.store import CheckpointStore
-from recertia.ledger import HashChainLedger
-from recertia.mea.runtime import audit_after_validate, bind_after_intake
-from recertia.mea.store import AuditedStateStore
+from recertia.graph.hooks import Hop, HopHook, StateHop, default_hop_hooks, default_state_hops
+from recertia.graph.persistence import RunPersistence, open_run_persistence
 from recertia.memory.procedural.capability import CandidateSkillStoreAdapter
 from recertia.nodes import NODE_FUNCS, NodeContext, NodeOutcome
+from recertia.nodes.capabilities import undeclared_capabilities
 from recertia.trajectory.emitter import TrajectoryEmitter
-from recertia.trajectory.store import TrajectoryStore
-from recertia.workspace import OffloadHandle, WorkspaceManager
+from recertia.workspace import OffloadHandle
 
 if TYPE_CHECKING:
     from contracts.policy import Policy
@@ -48,6 +46,8 @@ if TYPE_CHECKING:
 MAX_GRAPH_STEPS = 500
 """A safety valve against a routing defect looping forever. Not a budget concept — a run that
 legitimately needs this many node-hops has a routing bug, not a slow task."""
+
+_log = logging.getLogger("recertia.graph.engine")
 
 
 class RoutingError(RuntimeError):
@@ -79,13 +79,18 @@ class GraphOrchestrator:
         policy: "Policy | None" = None,
         on_finalize: Callable[["RunState"], None] | None = None,
         max_criterion_timeout_s: int | None = None,
+        persistence: RunPersistence | None = None,
+        hooks: Sequence[HopHook] | None = None,
+        state_hops: Sequence[StateHop] | None = None,
+        capability_warn: bool = False,
     ) -> None:
         self.runs_root = Path(runs_root)
         self.runs_root.mkdir(parents=True, exist_ok=True)
-        self.checkpoints = CheckpointStore(self.runs_root / "checkpoints.db")
-        self.ops = OperationLedger(self.runs_root / "operations.db")
-        self.ledger = HashChainLedger(self.runs_root / "ledger.jsonl")
-        self.workspaces = WorkspaceManager(self.runs_root / "snapshots")
+        self.persistence = persistence if persistence is not None else open_run_persistence(self.runs_root)
+        self.checkpoints = self.persistence.checkpoints
+        self.ops = self.persistence.operations
+        self.ledger = self.persistence.ledger
+        self.workspaces = self.persistence.workspaces
         self.retriever = retriever
         self.store = store
         self.env_fingerprint = env_fingerprint or {}
@@ -102,16 +107,18 @@ class GraphOrchestrator:
         self.policy = policy
         self.on_finalize = on_finalize
         self.max_criterion_timeout_s = max_criterion_timeout_s
-        self.trajectories = TrajectoryStore(self.runs_root / "trajectories")
+        self.trajectories = self.persistence.trajectories
         self._trajectory_emitter = TrajectoryEmitter()
-        self.audited_states = AuditedStateStore(self.runs_root / "audited_states")
+        self.audited_states = self.persistence.audited_states
+        self.hooks = list(hooks) if hooks is not None else default_hop_hooks()
+        self.state_hops = list(state_hops) if state_hops is not None else default_state_hops()
+        self.capability_warn = capability_warn
         self.tenant_id = "local"
         self._last_hop_ended: float | None = None
         self._offload_handles: dict[str, OffloadHandle] = {}
 
     def close(self) -> None:
-        self.checkpoints.close()
-        self.ops.close()
+        self.persistence.close()
 
     def _emit_trajectory(
         self,
@@ -199,6 +206,20 @@ class GraphOrchestrator:
             ),
             max_criterion_timeout_s=self.max_criterion_timeout_s,
         )
+
+    def _hop_before(self, hop: Hop) -> None:
+        for hook in self.hooks:
+            try:
+                hook.before(hop)
+            except Exception:
+                _log.warning("hop hook before failed for %s", hop.node, exc_info=True)
+
+    def _hop_after(self, hop: Hop, outcome: NodeOutcome, *, hop_ms: float, idle_gap_ms: float) -> None:
+        for hook in self.hooks:
+            try:
+                hook.after(hop, outcome, hop_ms=hop_ms, idle_gap_ms=idle_gap_ms)
+            except Exception:
+                _log.warning("hop hook after failed for %s", hop.node, exc_info=True)
 
     def _choose_route(self, node_name: str, outcome: NodeOutcome):
         legal = legal_routes(node_name, outcome.state)
@@ -330,15 +351,18 @@ class GraphOrchestrator:
             idle_gap_ms = 0.0
             if self._last_hop_ended is not None:
                 idle_gap_ms = (hop_started - self._last_hop_ended) * 1000.0
-            from recertia.ops.systems import component_class, hop_finished_attrs
-            from recertia.telemetry import emit_in_run, telemetry_run
+            from recertia.telemetry import telemetry_run
 
+            hop = Hop(
+                run_id=state.run_id,
+                tenant=self.tenant_id,
+                node=node_name,
+                attempt_no=attempt_no_for_ctx,
+                seq=next_seq,
+                workdir=workdir,
+            )
             with telemetry_run(tenant_id=self.tenant_id, run_id=state.run_id):
-                emit_in_run(
-                    "node.started",
-                    node=node_name,
-                    component_class=component_class(node_name),
-                )
+                self._hop_before(hop)
                 ctx = self._build_node_context(
                     state=state,
                     node_name=node_name,
@@ -346,19 +370,13 @@ class GraphOrchestrator:
                     script=script,
                     attempt_no=attempt_no_for_ctx,
                 )
+                if self.capability_warn:
+                    for name in undeclared_capabilities(node_name, ctx):
+                        _log.warning("node %s sees undeclared capability %s", node_name, name)
                 outcome = NODE_FUNCS[node_name](state, ctx)
                 new_state = outcome.state
                 hop_ms = (time.monotonic() - hop_started) * 1000.0
-                emit_in_run(
-                    "node.finished",
-                    **hop_finished_attrs(
-                        node_name,
-                        hop_ms=hop_ms,
-                        workdir=workdir,
-                        idle_gap_ms=idle_gap_ms,
-                        tokens=int(getattr(new_state.spent, "tokens", 0) or 0),
-                    ),
-                )
+                self._hop_after(hop, outcome, hop_ms=hop_ms, idle_gap_ms=idle_gap_ms)
             self._last_hop_ended = time.monotonic()
             if new_state.spent.versions_written > new_state.budget.max_versions_written:
                 raise RoutingError(
@@ -397,28 +415,14 @@ class GraphOrchestrator:
             new_state = new_state.model_copy(update={"route_log": [*new_state.route_log, route_entry]})
 
             extra_events: list[TrajectoryEvent] = []
-            if node_name == "intake":
-                new_state = bind_after_intake(
-                    new_state,
-                    policy=self.policy,
-                    store=self.audited_states,
-                    ledger=self.ledger,
-                )
-            elif node_name == "validate":
-                new_state, delta = audit_after_validate(
-                    new_state,
-                    store=self.audited_states,
+            for state_hop in self.state_hops:
+                new_state, produced = state_hop.adjust(
+                    self,
+                    node=node_name,
+                    state=new_state,
                     attempt_no=attempt_no_for_ctx,
                 )
-                if delta is not None:
-                    extra_events.append(
-                        self._trajectory_emitter.from_auditor_delta(
-                            new_state,
-                            node=node_name,
-                            attempt_no=attempt_no_for_ctx,
-                            delta=delta,
-                        )
-                    )
+                extra_events.extend(produced)
 
             self._emit_trajectory(
                 prior=state,
