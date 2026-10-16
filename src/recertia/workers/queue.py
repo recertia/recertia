@@ -1,0 +1,412 @@
+"""SQLite ``run_queue`` with deficit-round-robin claim.
+
+Sync ``POST /v1/runs`` still executes on the request thread. This queue is what
+``recertia worker`` drains. ``RECERTIA_API_DEFAULT_ASYNC`` stays off.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import threading
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Literal
+
+from recertia.persistence.db import apply_migrations, open_db
+from recertia.persistence.layout import RuntimeLayout
+from recertia.ports.identity import tenant_id
+
+_MIGRATIONS = Path(__file__).resolve().parents[1] / "persistence" / "migrations" / "control"
+_DEFICIT_CAP = 1000
+_CLAIM_COST = 1
+_TERMINAL = frozenset({"succeeded", "failed", "cancelled", "dead"})
+QueueStatus = Literal["succeeded", "failed", "cancelled"]
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass(frozen=True)
+class QueueItem:
+    tenant_id: str
+    run_id: str
+    kind: str
+    payload: dict[str, Any]
+    priority: int = 0
+    max_attempts: int = 3
+    enqueued_at: str | None = None
+    not_before: str | None = None
+
+
+@dataclass(frozen=True)
+class Claim:
+    tenant_id: str
+    run_id: str
+    kind: str
+    claim_token: int
+    attempt: int
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class QueueRow:
+    tenant_id: str
+    run_id: str
+    kind: str
+    status: str
+    claim_token: int
+    attempt: int
+    payload: dict[str, Any]
+    error_code: str | None
+
+
+class RunQueue:
+    """One connection to ``root/control.db``."""
+
+    def __init__(self, path: Path | str) -> None:
+        self.path = Path(path)
+        self._lock = threading.Lock()
+        self._conn = open_db(self.path)
+        self._conn.isolation_level = None
+        self._conn.row_factory = sqlite3.Row
+        apply_migrations(self._conn, _MIGRATIONS)
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def enqueue(self, item: QueueItem) -> None:
+        tenant = str(tenant_id(item.tenant_id))
+        if item.kind not in {"run", "eval", "job"}:
+            raise ValueError(f"unsupported queue kind {item.kind!r}")
+        stamp = item.enqueued_at or _now()
+        due = item.not_before or stamp
+        with self._lock:
+            self._ensure_tenant(tenant)
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO run_queue (
+                        tenant_id, run_id, kind, status, priority, enqueued_at, not_before,
+                        claim_token, attempt, max_attempts, payload_json
+                    ) VALUES (?, ?, ?, 'queued', ?, ?, ?, 0, 0, ?, ?)
+                    """,
+                    (
+                        tenant,
+                        item.run_id,
+                        item.kind,
+                        item.priority,
+                        stamp,
+                        due,
+                        item.max_attempts,
+                        json.dumps(item.payload),
+                    ),
+                )
+                self._conn.execute("COMMIT")
+            except sqlite3.IntegrityError as exc:
+                self._conn.execute("ROLLBACK")
+                raise ValueError(
+                    f"queue item {(tenant, item.run_id, item.kind)} already exists"
+                ) from exc
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def claim(self, worker_id: str, *, limit: int = 1) -> list[Claim]:
+        claimed: list[Claim] = []
+        for _ in range(max(0, limit)):
+            one = self._claim_one(worker_id)
+            if one is None:
+                break
+            claimed.append(one)
+        return claimed
+
+    def heartbeat_claim(self, claim: Claim) -> None:
+        stamp = _now()
+        with self._lock:
+            self._conn.execute(
+                """
+                UPDATE run_queue SET heartbeat_at=?
+                WHERE tenant_id=? AND run_id=? AND kind=? AND claim_token=?
+                  AND status IN ('claimed', 'running')
+                """,
+                (stamp, claim.tenant_id, claim.run_id, claim.kind, claim.claim_token),
+            )
+
+    def mark_running(self, claim: Claim) -> None:
+        self._transition(claim, status="running", error_code=None, from_status=("claimed",))
+
+    def finish(
+        self,
+        claim: Claim,
+        *,
+        status: QueueStatus,
+        error_code: str | None = None,
+    ) -> None:
+        self._transition(
+            claim,
+            status=status,
+            error_code=error_code,
+            from_status=("claimed", "running"),
+        )
+
+    def wait(
+        self,
+        tenant: str,
+        run_id: str,
+        *,
+        timeout_s: float,
+        kind: str = "run",
+        poll_s: float = 0.05,
+    ) -> QueueRow | None:
+        deadline = time.monotonic() + timeout_s
+        while True:
+            row = self.get(tenant, run_id, kind=kind)
+            if row is not None and row.status in _TERMINAL:
+                return row
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(poll_s)
+
+    def get(self, tenant: str, run_id: str, *, kind: str = "run") -> QueueRow | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT tenant_id, run_id, kind, status, claim_token, attempt,
+                       payload_json, error_code
+                FROM run_queue WHERE tenant_id=? AND run_id=? AND kind=?
+                """,
+                (str(tenant_id(tenant)), run_id, kind),
+            ).fetchone()
+        if row is None:
+            return None
+        return _row(row)
+
+    def inflight(self, tenant: str) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT COUNT(*) FROM run_queue
+                WHERE tenant_id=? AND kind='run' AND status IN ('claimed', 'running')
+                """,
+                (str(tenant_id(tenant)),),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def depth(self, tenant: str) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM run_queue WHERE tenant_id=? AND status='queued'",
+                (str(tenant_id(tenant)),),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def set_max_in_flight(self, tenant: str, max_in_flight: int) -> None:
+        ident = str(tenant_id(tenant))
+        with self._lock:
+            self._ensure_tenant(ident)
+            self._conn.execute(
+                "UPDATE tenant_limits SET max_in_flight=? WHERE tenant_id=?",
+                (max_in_flight, ident),
+            )
+
+    def set_maintenance(self, mode: str) -> None:
+        if mode not in {"open", "quiescing", "frozen"}:
+            raise ValueError(f"unsupported maintenance mode {mode!r}")
+        with self._lock:
+            self._conn.execute(
+                "UPDATE maintenance SET mode=?, since=? WHERE id=1",
+                (mode, _now()),
+            )
+
+    def register_worker(self, worker_id: str, *, capacity: int, hostname: str, pid: int) -> None:
+        stamp = _now()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO workers (
+                    worker_id, started_at, heartbeat_at, hostname, pid, capacity, inflight
+                ) VALUES (?, ?, ?, ?, ?, ?, 0)
+                ON CONFLICT(worker_id) DO UPDATE SET
+                    heartbeat_at=excluded.heartbeat_at,
+                    hostname=excluded.hostname,
+                    pid=excluded.pid,
+                    capacity=excluded.capacity
+                """,
+                (worker_id, stamp, stamp, hostname, pid, capacity),
+            )
+
+    def _claim_one(self, worker_id: str) -> Claim | None:
+        stamp = _now()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                mode = self._conn.execute("SELECT mode FROM maintenance WHERE id=1").fetchone()
+                if mode is None or mode[0] in {"frozen", "quiescing"}:
+                    self._conn.execute("COMMIT")
+                    return None
+                picked = self._conn.execute(
+                    """
+                    SELECT q.tenant_id, q.run_id, q.kind, q.attempt, q.payload_json, q.claim_token
+                    FROM run_queue q
+                    JOIN tenant_sched s ON s.tenant_id = q.tenant_id
+                    JOIN tenant_limits lim ON lim.tenant_id = q.tenant_id
+                    WHERE q.status = 'queued'
+                      AND q.not_before <= ?
+                      AND (
+                        SELECT COUNT(*) FROM run_queue r
+                        WHERE r.tenant_id = q.tenant_id
+                          AND r.status IN ('claimed', 'running')
+                      ) < lim.max_in_flight
+                    ORDER BY s.deficit DESC, q.enqueued_at ASC
+                    LIMIT 1
+                    """,
+                    (stamp,),
+                ).fetchone()
+                if picked is None:
+                    self._conn.execute("COMMIT")
+                    return None
+                tenant = str(picked["tenant_id"])
+                run_id = str(picked["run_id"])
+                kind = str(picked["kind"])
+                attempt = int(picked["attempt"])
+                payload = _object_dict(picked["payload_json"])
+                token = int(picked["claim_token"])
+                cur = self._conn.execute(
+                    """
+                    UPDATE run_queue
+                    SET status='claimed', claimed_by=?, claim_token=claim_token + 1,
+                        heartbeat_at=?
+                    WHERE tenant_id=? AND run_id=? AND kind=? AND status='queued'
+                    """,
+                    (worker_id, stamp, tenant, run_id, kind),
+                )
+                if cur.rowcount != 1:
+                    self._conn.execute("ROLLBACK")
+                    return None
+                self._conn.execute(
+                    """
+                    UPDATE tenant_sched
+                    SET deficit = MIN(deficit + weight, ?)
+                    WHERE tenant_id != ?
+                    """,
+                    (_DEFICIT_CAP, tenant),
+                )
+                self._conn.execute(
+                    """
+                    UPDATE tenant_sched
+                    SET deficit = deficit - ?, last_claim_at=?
+                    WHERE tenant_id=?
+                    """,
+                    (_CLAIM_COST, stamp, tenant),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        return Claim(
+            tenant_id=tenant,
+            run_id=run_id,
+            kind=kind,
+            claim_token=token + 1,
+            attempt=attempt,
+            payload=payload,
+        )
+
+    def _transition(
+        self,
+        claim: Claim,
+        *,
+        status: str,
+        error_code: str | None,
+        from_status: tuple[str, ...],
+    ) -> None:
+        placeholders = ", ".join("?" for _ in from_status)
+        stamp = _now()
+        finished = stamp if status in _TERMINAL else None
+        with self._lock:
+            cur = self._conn.execute(
+                f"""
+                UPDATE run_queue
+                SET status=?, heartbeat_at=?, error_code=?, finished_at=COALESCE(?, finished_at)
+                WHERE tenant_id=? AND run_id=? AND kind=? AND claim_token=?
+                  AND status IN ({placeholders})
+                """,
+                (
+                    status,
+                    stamp,
+                    error_code,
+                    finished,
+                    claim.tenant_id,
+                    claim.run_id,
+                    claim.kind,
+                    claim.claim_token,
+                    *from_status,
+                ),
+            )
+        if cur.rowcount == 1:
+            return
+        current = self.get(claim.tenant_id, claim.run_id, kind=claim.kind)
+        if current is not None and current.status == status and current.claim_token == claim.claim_token:
+            return
+        raise RuntimeError(
+            f"stale claim {(claim.tenant_id, claim.run_id, claim.kind)} token={claim.claim_token}"
+        )
+
+    def _ensure_tenant(self, tenant: str) -> None:
+        from recertia.settings import load_settings
+
+        settings = load_settings()
+        self._conn.execute(
+            """
+            INSERT INTO tenant_sched (tenant_id, deficit, weight)
+            VALUES (?, 0, 1)
+            ON CONFLICT(tenant_id) DO NOTHING
+            """,
+            (tenant,),
+        )
+        self._conn.execute(
+            """
+            INSERT INTO tenant_limits (
+                tenant_id, max_runs_per_day, max_cost_usd_per_day, max_in_flight,
+                max_queue_depth, max_sse_connections, max_model_spend_usd_per_day,
+                weekly_token_cap
+            ) VALUES (?, ?, ?, ?, 100, 32, ?, NULL)
+            ON CONFLICT(tenant_id) DO NOTHING
+            """,
+            (
+                tenant,
+                settings.tenant_max_runs_per_day,
+                settings.tenant_max_cost_usd_per_day,
+                settings.tenant_max_in_flight,
+                settings.tenant_max_cost_usd_per_day,
+            ),
+        )
+
+
+def open_run_queue(root: Path | str) -> RunQueue:
+    return RunQueue(RuntimeLayout(Path(root)).control_db)
+
+
+def _object_dict(raw: object) -> dict[str, Any]:
+    parsed = json.loads(raw if isinstance(raw, str) else "{}")
+    if isinstance(parsed, dict):
+        return parsed
+    return {}
+
+
+def _row(row: sqlite3.Row) -> QueueRow:
+    return QueueRow(
+        tenant_id=row["tenant_id"],
+        run_id=row["run_id"],
+        kind=row["kind"],
+        status=row["status"],
+        claim_token=int(row["claim_token"]),
+        attempt=int(row["attempt"]),
+        payload=_object_dict(row["payload_json"]),
+        error_code=row["error_code"],
+    )

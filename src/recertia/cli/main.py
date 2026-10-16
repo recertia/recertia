@@ -44,6 +44,7 @@ from recertia.cli.systems_cmd import register_systems_commands
 from recertia.cli.tabletop_cmd import register_tabletop_commands
 from recertia.cli.task_state_cmd import register_task_state_commands
 from recertia.cli.trajectory_cmd import register_trajectory_commands
+from recertia.cli.worker_cmd import register_worker_commands
 from recertia.cli.workspaces import register_workspaces_commands
 
 app = typer.Typer(help="Recertia: a self-improving agent system.")
@@ -91,6 +92,7 @@ register_soak_commands(app)
 register_systems_commands(app)
 register_task_state_commands(app)
 register_trajectory_commands(app)
+register_worker_commands(app)
 
 __all__ = [
     "app",
