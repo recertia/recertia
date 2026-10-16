@@ -110,3 +110,10 @@ class RateLimited(RecertiaError):
     http_status = 429
     retryable = True
     exit_code = 4
+
+
+class SecretUnavailable(RecertiaError):
+    code = "secret_unavailable"
+    http_status = 503
+    retryable = False
+    exit_code = 7

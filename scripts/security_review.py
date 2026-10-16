@@ -443,8 +443,8 @@ _RECERTIA_CONTROLS: tuple[tuple[str, str | tuple[str, ...], tuple[str, ...], str
     (
         "api-key-pbkdf2",
         "src/recertia/api/auth.py",
-        ("pbkdf2_hmac", "key_hash", "salt"),
-        "API keys must be stored as salted PBKDF2 hashes, not plaintext",
+        ("pbkdf2_hmac", "key_hash", "salt", "hmac-sha256", "pepper"),
+        "API keys are HMAC-SHA256 with a pepper; PBKDF2 rows rehash on use",
     ),
     (
         "hygiene-refuse-store",
