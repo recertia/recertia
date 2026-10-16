@@ -160,6 +160,14 @@ def _quoted_relative_path(path: str, *, what: str) -> str:
     return shlex.quote(path)
 
 
+def _assertion_string(value: str, *, what: str) -> str:
+    """Python ``repr`` for an assertion argument. Rejects NUL and newlines."""
+
+    if "\x00" in value or "\n" in value or "\r" in value:
+        raise ValueError(f"{what} contains a newline or NUL")
+    return repr(value)
+
+
 def compile_goal(
     goal: Goal,
     *,
@@ -189,27 +197,31 @@ def _desired_to_criterion(
     source: Literal["caller", "task_class_template", "critic"],
 ) -> TaskCriterion:
     if d.kind == "file_exists":
-        quoted = _quoted_relative_path(d.path or "", what=f"DesiredState {d.id!r}")
+        path = d.path or ""
+        what = f"DesiredState {d.id!r}"
+        _quoted_relative_path(path, what=what)
         return TaskCriterion(
             id=d.id,
-            kind="command",
-            run=f"test -f {quoted}",
-            expect_exit=0,
+            kind="assertion",
+            expr=f"file_exists({_assertion_string(path, what=what)})",
             weight=d.weight,
             timeout_s=d.timeout_s,
             source=source,
             preregistered=True,
         )
     if d.kind == "file_contains":
-        quoted = _quoted_relative_path(d.path or "", what=f"DesiredState {d.id!r}")
+        path = d.path or ""
         pattern = d.pattern or ""
-        if "\n" in pattern or "\r" in pattern or "\x00" in pattern:
-            raise ValueError(f"DesiredState {d.id!r} pattern contains a newline or NUL")
+        what = f"DesiredState {d.id!r}"
+        _quoted_relative_path(path, what=what)
         return TaskCriterion(
             id=d.id,
-            kind="command",
-            run=f"grep -qE {shlex.quote(pattern)} {quoted}",
-            expect_exit=0,
+            kind="assertion",
+            expr=(
+                "file_contains("
+                f"{_assertion_string(path, what=what)}, "
+                f"{_assertion_string(pattern, what=what + ' pattern')})"
+            ),
             weight=d.weight,
             timeout_s=d.timeout_s,
             source=source,

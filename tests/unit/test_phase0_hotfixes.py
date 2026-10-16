@@ -119,8 +119,9 @@ def test_file_exists_rejects_shell_metacharacters_and_keeps_safe_paths() -> None
     safe = compile_goal(
         Goal(desired=[DesiredState(id="ec", kind="file_exists", path=".editorconfig")])
     )
-    assert safe[0].kind == "command"
-    assert safe[0].run == "test -f .editorconfig"
+    assert safe[0].kind == "assertion"
+    assert safe[0].expr == "file_exists('.editorconfig')"
+    assert safe[0].run is None
 
     contains = compile_goal(
         Goal(
@@ -134,10 +135,12 @@ def test_file_exists_rejects_shell_metacharacters_and_keeps_safe_paths() -> None
             ]
         )
     )
-    assert contains[0].run is not None
-    assert contains[0].run.startswith("grep -qE ")
-    assert ".editorconfig" in contains[0].run
-    assert "';" not in contains[0].run
+    assert contains[0].kind == "assertion"
+    assert contains[0].expr is not None
+    assert contains[0].expr.startswith("file_contains(")
+    assert ".editorconfig" in contains[0].expr
+    assert contains[0].run is None
+    assert "';" not in contains[0].expr
 
     for bad in ("foo; touch pwned", "/etc/passwd", "../etc/passwd", "foo/../../etc/passwd", "a b"):
         with pytest.raises(ValueError):

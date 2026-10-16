@@ -16,7 +16,6 @@ from contracts.criteria import (
     sensitivity_evidence_hash,
     sensitivity_proof_binds,
 )
-from recertia.nodes.validate import criterion_runner
 
 __all__ = [
     "author_sensitivity_proof",
@@ -100,4 +99,6 @@ def _default_runner(
     if criterion.kind == "judge":
         # Judges cannot author a mechanical proof here — treat as not rejected.
         return True
+    from recertia.nodes.validate import criterion_runner
+
     return criterion_runner().score(criterion, workdir=workdir).passed
