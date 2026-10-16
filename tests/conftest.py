@@ -100,3 +100,12 @@ def pytest_unconfigure(config: Any) -> None:
     setattr(socket.socket, "connect_ex", _REAL["connect_ex"])
     setattr(socket, "getaddrinfo", _REAL["getaddrinfo"])
     setattr(socket, "create_connection", _REAL["create_connection"])
+
+
+def pytest_runtest_setup(item: Any) -> None:
+    """Each test starts with a closed model circuit so failures do not leak."""
+
+    del item
+    from recertia.solver.resilience import default_breaker
+
+    default_breaker().reset()

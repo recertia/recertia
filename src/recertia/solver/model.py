@@ -13,6 +13,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Callable
 
+from recertia.observability.metrics import metrics
+from recertia.solver.resilience import (
+    CircuitBreaker,
+    ModelUnavailable,
+    Outcome,
+    backoff_s,
+    classify,
+    default_breaker,
+)
+
 
 @dataclass
 class ModelResponse:
@@ -39,19 +49,24 @@ class ModelClient(ABC):
         max_retries: int = 2,
         timeout_s: float = 60.0,
         retry_backoff_s: float = 0.05,
+        backoff_cap_s: float = 8.0,
         provider: str | None = None,
         model_id: str | None = None,
         role: str = "solver",
         credential_id: str | None = None,
+        breaker: CircuitBreaker | None = None,
     ) -> None:
         self.max_retries = max_retries
         self.timeout_s = timeout_s
         self.retry_backoff_s = retry_backoff_s
+        self.backoff_cap_s = backoff_cap_s
         self.provider = provider
         self.model_id = model_id
         self.role = role
         self.credential_id = credential_id
         self.spend = ModelSpend()
+        self.breaker = default_breaker() if breaker is None else breaker
+        self._call_timeout_s = timeout_s
 
     def model_identity(self) -> tuple[str, str, str] | None:
         """Return a comparable provider identity when configured.
@@ -73,43 +88,82 @@ class ModelClient(ABC):
             return False
         return left == right
 
-    def complete(self, prompt: str, *, system: str | None = None) -> ModelResponse:
-        """Call the provider with retry/timeout; accumulate spend on success."""
+    def _circuit_key(self) -> tuple[str, str]:
+        return (self.provider or "unknown", self.model_id or "unknown")
 
-        last_exc: Exception | None = None
+    def _charge(self, response: ModelResponse, *, late: bool) -> None:
+        self.spend.calls += 1
+        self.spend.tokens += response.prompt_tokens + response.completion_tokens
+        self.spend.cost_usd += response.cost_usd
+        if late:
+            metrics.inc("recertia_model_cost_usd_late", value=response.cost_usd)
+
+    def complete(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        deadline_s: float | None = None,
+    ) -> ModelResponse:
+        """Call the provider. Retry only retryable outcomes, and charge late responses."""
+
+        deadline: float | None = None
+        budget = self.timeout_s if deadline_s is None else deadline_s
+        key = self._circuit_key()
         for attempt in range(self.max_retries + 1):
             started = time.monotonic()
+            if deadline is None:
+                deadline = started + budget
+            remaining = deadline - started
+            if remaining <= 0:
+                raise ModelUnavailable(
+                    "model call exceeded deadline",
+                    details={"reason": "deadline"},
+                )
+            self.breaker.before_call(key)
+            self._call_timeout_s = remaining
             try:
                 response = self._complete_once(prompt, system=system)
-                response.latency_s = time.monotonic() - started
-                if response.latency_s > self.timeout_s:
-                    raise TimeoutError(
-                        f"model call exceeded timeout_s={self.timeout_s} "
-                        f"(took {response.latency_s:.2f}s)"
-                    )
-                self.spend.calls += 1
-                self.spend.tokens += response.prompt_tokens + response.completion_tokens
-                self.spend.cost_usd += response.cost_usd
-                if attempt > 0:
-                    self.spend.retries += attempt
-                from recertia.telemetry import emit_in_run
-
-                emit_in_run(
-                    "model.completed",
-                    role=self.role,
-                    model=response.model,
-                    tokens=response.prompt_tokens + response.completion_tokens,
-                    latency_ms=round(response.latency_s * 1000.0, 3),
-                    retries=attempt,
+            except Exception as exc:
+                outcome = classify(exc)
+                if outcome in (Outcome.RETRYABLE, Outcome.TIMEOUT):
+                    self.breaker.record_failure(key)
+                if outcome is Outcome.CLIENT_ERROR or attempt >= self.max_retries:
+                    raise
+                retry_after = getattr(exc, "retry_after_s", None)
+                delay = backoff_s(
+                    attempt,
+                    base_s=self.retry_backoff_s,
+                    cap_s=self.backoff_cap_s,
+                    retry_after_s=retry_after if isinstance(retry_after, (int, float)) else None,
                 )
-                return response
-            except Exception as exc:  # noqa: BLE001 — retryable boundary
-                last_exc = exc
-                if attempt >= self.max_retries:
-                    break
-                time.sleep(self.retry_backoff_s * (2**attempt))
-        assert last_exc is not None
-        raise last_exc
+                time.sleep(delay)
+                continue
+            finished = time.monotonic()
+            response.latency_s = finished - started
+            if finished > deadline:
+                self._charge(response, late=True)
+                self.breaker.record_failure(key)
+                raise ModelUnavailable(
+                    "model call exceeded deadline",
+                    details={"reason": "deadline"},
+                )
+            self._charge(response, late=False)
+            if attempt > 0:
+                self.spend.retries += attempt
+            self.breaker.record_success(key)
+            from recertia.telemetry import emit_in_run
+
+            emit_in_run(
+                "model.completed",
+                role=self.role,
+                model=response.model,
+                tokens=response.prompt_tokens + response.completion_tokens,
+                latency_ms=round(response.latency_s * 1000.0, 3),
+                retries=attempt,
+            )
+            return response
+        raise ModelUnavailable("model retries exhausted", details={"reason": "retries"})
 
     @abstractmethod
     def _complete_once(self, prompt: str, *, system: str | None) -> ModelResponse:

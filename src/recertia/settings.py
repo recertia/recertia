@@ -58,6 +58,11 @@ KNOWN_ENV_KEYS = frozenset(
         "RECERTIA_API_KEY_ENV",
         "RECERTIA_MODEL_TIMEOUT_S",
         "RECERTIA_MODEL_MAX_RETRIES",
+        "RECERTIA_MODEL_BACKOFF_BASE_S",
+        "RECERTIA_MODEL_BACKOFF_CAP_S",
+        "RECERTIA_CIRCUIT_FAILURES",
+        "RECERTIA_CIRCUIT_WINDOW_S",
+        "RECERTIA_CIRCUIT_OPEN_S",
         "RECERTIA_ALLOW_STUB_MODEL",
         "RECERTIA_ANTHROPIC_BASE_URL",
         "RECERTIA_OPENAI_BASE_URL",
@@ -234,6 +239,11 @@ class Settings:
     api_key_env: str = ""
     model_timeout_s: float = 60.0
     model_max_retries: int = 2
+    model_backoff_base_s: float = 0.25
+    model_backoff_cap_s: float = 8.0
+    circuit_failures: int = 5
+    circuit_window_s: float = 30.0
+    circuit_open_s: float = 30.0
     allow_stub_model: bool = False
     anthropic_base_url: str | None = None
     openai_base_url: str | None = None
@@ -431,6 +441,11 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         api_key_env=api_key_env,
         model_timeout_s=_float(env, "RECERTIA_MODEL_TIMEOUT_S", 60.0),
         model_max_retries=_int(env, "RECERTIA_MODEL_MAX_RETRIES", 2),
+        model_backoff_base_s=_float(env, "RECERTIA_MODEL_BACKOFF_BASE_S", 0.25),
+        model_backoff_cap_s=_float(env, "RECERTIA_MODEL_BACKOFF_CAP_S", 8.0),
+        circuit_failures=_int(env, "RECERTIA_CIRCUIT_FAILURES", 5),
+        circuit_window_s=_float(env, "RECERTIA_CIRCUIT_WINDOW_S", 30.0),
+        circuit_open_s=_float(env, "RECERTIA_CIRCUIT_OPEN_S", 30.0),
         allow_stub_model=_bool(env, "RECERTIA_ALLOW_STUB_MODEL"),
         anthropic_base_url=anthropic_base,
         openai_base_url=openai_base,

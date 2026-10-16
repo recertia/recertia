@@ -45,6 +45,13 @@ class Metrics:
     def observe(self, name: str, value: float, **labels: str) -> None:
         self.inc(name, value=value, **labels)
 
+    def value(self, name: str, **labels: str) -> float:
+        key = (name, tuple(sorted(labels.items())))
+        with self._lock:
+            if key in self._gauges:
+                return self._gauges[key]
+            return self._counters.get(key, 0.0)
+
     def set_gauge(self, name: str, value: float, **labels: str) -> None:
         key = (name, tuple(sorted(labels.items())))
         with self._lock:
