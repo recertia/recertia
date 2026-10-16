@@ -5,9 +5,7 @@ from __future__ import annotations
 import random
 import threading
 import time
-import urllib.error
 from enum import StrEnum
-from http.client import IncompleteRead
 
 from recertia.errors import RecertiaError
 from recertia.observability.metrics import metrics
@@ -48,10 +46,10 @@ def classify(exc: BaseException) -> Outcome:
             return Outcome.CLIENT_ERROR
         if isinstance(current, TimeoutError):
             return Outcome.TIMEOUT
-        if isinstance(
-            current,
-            (urllib.error.URLError, ConnectionResetError, ConnectionError, IncompleteRead),
-        ):
+        if isinstance(current, (ConnectionResetError, ConnectionError)):
+            return Outcome.RETRYABLE
+        names = {cls.__name__ for cls in type(current).__mro__}
+        if "URLError" in names or "IncompleteRead" in names:
             return Outcome.RETRYABLE
         current = current.__cause__
         seen += 1
