@@ -40,7 +40,7 @@ from recertia.graph.engine import GraphOrchestrator, RunIdExistsError
 from recertia.graph.store import CheckpointStore
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.paths import HostRootError, looks_absolute, resolve_under_host_root
-from recertia.solver.container import configured_backend, ensure_api_execution_ready
+from recertia.solver.container import ensure_api_execution_ready
 from recertia.solver.sandbox import SandboxError
 from recertia.store.blobs import FilesystemBlobStore, normalize_blob_digest
 from recertia.telemetry import get_telemetry, render_dashboard
@@ -534,7 +534,7 @@ def create_app(
             [TaskCriterion.model_validate(c) for c in (body.criteria or [])]
         )
         budget = Budget.model_validate(body.budget) if body.budget else Budget()
-        approve_tools = _principal_may_exec(principal) or configured_backend() == "container"
+        approve_tools = _principal_may_exec(principal)
 
         # ----- async path (console C2) -----
         if body.mode == "async":
@@ -625,13 +625,14 @@ def create_app(
                 retryable=True,
             )
 
-        # Container backend isolates tools; local API requires exec (or admin) for grants.
         bundle = build_default_orchestrator(
             root / "runs" / principal.tenant_id,
             skills_root=skills_root,
             facts_root=facts_root,
             index_path=root / "runs" / principal.tenant_id / "skill_index.db",
             approve_default_tools=approve_tools,
+            principal=principal,
+            surface="api",
             model_config=model_config,
         )
         bundle.orchestrator.max_criterion_timeout_s = _api_max_criterion_timeout_s()
@@ -746,9 +747,9 @@ def create_app(
                 skills_root=skills_root,
                 facts_root=facts_root,
                 index_path=root / "runs" / principal.tenant_id / "skill_index.db",
-                approve_default_tools=(
-                    _principal_may_exec(principal) or configured_backend() == "container"
-                ),
+                approve_default_tools=_principal_may_exec(principal),
+                principal=principal,
+                surface="api",
             )
             bundle.orchestrator.max_criterion_timeout_s = _api_max_criterion_timeout_s()
             state = bundle.orchestrator.resume(run_id, workdir=workdir)

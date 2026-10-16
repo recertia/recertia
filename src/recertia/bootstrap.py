@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 from contracts.run import RunManifest
 from recertia.config import ModelConfig, load_model_config
-from recertia.governance.sandbox import ApprovalGate
 from recertia.memory.affordance import AffordanceStore
 from recertia.memory.episodic import EpisodicStore
 from recertia.memory.procedural.store import SkillStore
@@ -27,6 +26,8 @@ from recertia.solver.transcript import TranscriptStore
 
 if TYPE_CHECKING:
     from recertia.graph.engine import GraphOrchestrator
+    from recertia.ports.execution import Surface
+    from recertia.ports.identity import Principal
     from recertia.solver.model import ModelClient
 
 
@@ -112,6 +113,8 @@ def build_default_orchestrator(
     golden_root: Path | str | None = None,
     env_fingerprint: dict[str, str] | None = None,
     approve_default_tools: bool = True,
+    principal: "Principal | None" = None,
+    surface: "Surface" = "cli",
     model_config: ModelConfig | None = None,
     model: "ModelClient | None" = None,
     verifier_model: "ModelClient | None" = None,
@@ -127,11 +130,14 @@ def build_default_orchestrator(
     fails loud instead of silently no-oping.
     """
 
+    from recertia.app.authz import PolicyDecisionPoint
     from recertia.graph.engine import GraphOrchestrator
     from recertia.graph.persistence import open_run_persistence
     from recertia.memory.procedural.lineage import LineageServices
     from recertia.policy_load import load_policy
+    from recertia.ports.identity import Principal
     from recertia.review import ReviewService
+    from recertia.settings import load_settings
 
     runs_root = Path(runs_root)
     runs_root.mkdir(parents=True, exist_ok=True)
@@ -164,10 +170,17 @@ def build_default_orchestrator(
     retriever.result_cache.ttl_s = sm.retrieval_cache_ttl_s
 
     registry = default_registry()
-    gate = ApprovalGate()
-    if approve_default_tools:
-        for name in registry.names():
-            gate.approve(name, actor="runtime-bootstrap", reason="default offline grant")
+    settings = load_settings()
+    pdp = PolicyDecisionPoint.open(settings, policy, surface=surface)
+    # CLI with no explicit principal is the local operator (D5). The flag no
+    # longer approves every registry name: local runs stay on the PDP grant
+    # list, and container runs auto-approve only the sandboxed tools.
+    grant_as = principal
+    if grant_as is None and surface == "cli" and approve_default_tools:
+        grant_as = Principal.local_operator()
+    if not approve_default_tools:
+        grant_as = None
+    pdp.approve_tools(grant_as, origin="tool")
     from recertia.solver.result_cache import ToolResultCache
 
     tool_cache = ToolResultCache(
@@ -177,7 +190,8 @@ def build_default_orchestrator(
     tools = ToolRuntime(
         registry,
         ClaimScheduler(),
-        approval_gate=gate,
+        require_approval_for_non_read=policy.require_tool_approval_for_non_read,
+        approval_gate=pdp,
         model=model,
         result_cache=tool_cache,
     )

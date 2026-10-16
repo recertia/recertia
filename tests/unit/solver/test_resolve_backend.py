@@ -77,6 +77,19 @@ def test_golden_inherit_follows_settings() -> None:
     assert executor.config.backend == "container"
 
 
+def test_context_override_selects_local_without_reading_policy() -> None:
+    from recertia.solver.container import execution_backend_override
+
+    settings = Settings(
+        execution_backend="container",
+        execution_backend_was_set=True,
+    )
+    with execution_backend_override("local"):
+        assert (
+            resolve_backend(settings, None, surface="cli", capability=None) == "local"
+        )
+
+
 def test_golden_local_without_capability_raises() -> None:
     settings = Settings(golden_backend="local", execution_backend="container")
     with pytest.raises(ExecutionUnavailable):

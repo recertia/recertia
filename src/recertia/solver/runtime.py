@@ -8,9 +8,10 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 from contracts.resources import ResourceClaim
+from recertia.ports.approval import ApprovalPolicy as ApprovalGate
 from recertia.ports.execution import CommandOrigin
 from recertia.solver.claims import ClaimScheduler
 from recertia.solver.registry import ToolRegistry, ToolResult
@@ -87,12 +88,6 @@ def active_step_context() -> StepInvokeContext:
     """Intent / bound params for the in-flight skill step (empty outside applicator)."""
 
     return _ACTIVE_STEP_CONTEXT.get() or StepInvokeContext()
-
-
-class ApprovalGate(Protocol):
-    """Capability required of any approval gate wired into ``ToolRuntime``."""
-
-    def is_approved(self, tool: str, step_id: str) -> bool: ...
 
 
 class ApprovalRequiredError(PermissionError):

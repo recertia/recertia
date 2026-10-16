@@ -21,7 +21,7 @@ from contracts.run import Task
 from recertia.api.events import RunEventLog
 from recertia.bootstrap import build_default_orchestrator, resolve_task_class
 from recertia.config import ModelConfig
-from recertia.solver.container import configured_backend
+from recertia.ports.identity import Principal
 
 
 @dataclass
@@ -109,12 +109,18 @@ class AsyncRunWorker:
             submitted_at=datetime.now(timezone.utc),
             submitted_by="async-worker",
         )
+        scopes = frozenset({"runs", "exec"}) if req.approve_tools else frozenset({"runs"})
+        worker_principal = Principal.from_api_key(
+            key_id="async-worker", tenant_id=req.tenant_id, scopes=scopes
+        )
         bundle = build_default_orchestrator(
             req.runs_root,
             skills_root=req.skills_root,
             facts_root=req.facts_root,
             index_path=req.index_path,
-            approve_default_tools=req.approve_tools or configured_backend() == "container",
+            approve_default_tools=req.approve_tools,
+            principal=worker_principal,
+            surface="worker",
             model_config=req.model_config,
         )
         bundle.orchestrator.max_criterion_timeout_s = req.max_criterion_timeout_s

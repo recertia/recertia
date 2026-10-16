@@ -49,6 +49,12 @@ def container_runtime() -> str | None:
     return next((runtime for runtime in ("docker", "podman") if shutil.which(runtime)), None)
 
 
+def backend_override() -> Backend | None:
+    """Context-local backend from ``--local-exec``. ``None`` when unset."""
+
+    return _backend_override.get()
+
+
 def configured_backend() -> Backend:
     """Read the execution mode for this context; production defaults to OCI.
 

@@ -276,15 +276,20 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         rec = ctx.proposals.get(decision_id, tenant_id=tenant_id)
         if rec is None:
             raise V1HTTPError(404, code="not_found", message="review not found")
-        if rec.kind in {"correction"} or rec.payload.get("tier") == "T2":
-            if user is not None and not user.may("reviewer"):
+        console_may = user.may("reviewer") if user is not None else None
+        if not ctx.pdp.may_decide_proposal(
+            principal,
+            kind=rec.kind,
+            payload=rec.payload,
+            console_may_review=console_may,
+        ):
+            if user is not None:
                 raise V1HTTPError(403, code="forbidden", message="T2 requires reviewer")
-            if user is None and "admin" not in principal.scopes:
-                raise V1HTTPError(
-                    403,
-                    code="forbidden",
-                    message="T2 requires admin key or reviewer",
-                )
+            raise V1HTTPError(
+                403,
+                code="forbidden",
+                message="T2 requires admin key or reviewer",
+            )
         try:
             updated = ctx.proposals.decide(
                 decision_id,

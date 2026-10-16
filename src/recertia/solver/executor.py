@@ -18,7 +18,12 @@ from recertia.ports.execution import (
     Surface,
 )
 from recertia.settings import Settings
-from recertia.solver.container import _container_run, _local_run, container_runtime
+from recertia.solver.container import (
+    _container_run,
+    _local_run,
+    backend_override,
+    container_runtime,
+)
 from recertia.solver.sandbox import SandboxError
 
 
@@ -32,8 +37,8 @@ def resolve_backend(
     """The only reader of ``policy.isolation.default_backend``.
 
     Precedence: multi_node refusal, then an explicit capability on a surface
-    that allows local, then an operator-set backend, then the policy field,
-    then ``container``.
+    that allows local, then a context override (``--local-exec``), then an
+    operator-set backend, then the policy field, then ``container``.
     """
 
     def _refuse_local(reason: str) -> None:
@@ -47,6 +52,11 @@ def resolve_backend(
             if settings.deployment_mode != "multi_node":
                 return "local"
         # A capability that the surface does not honour does not select local.
+    override = backend_override()
+    if override is not None:
+        if override == "local":
+            _refuse_local("multi_node refuses the local execution backend")
+        return override
     if settings.execution_backend_was_set:
         if settings.execution_backend == "local":
             _refuse_local("multi_node refuses the local execution backend")

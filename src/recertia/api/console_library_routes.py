@@ -520,11 +520,16 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         rec = ctx.proposals.get(proposal_id, tenant_id=tenant_id)
         if rec is None:
             raise HTTPException(status_code=404, detail="proposal not found")
-        if rec.kind in {"correction"} or rec.payload.get("tier") == "T2":
-            if user is not None and not user.may("reviewer"):
+        console_may = user.may("reviewer") if user is not None else None
+        if not ctx.pdp.may_decide_proposal(
+            principal,
+            kind=rec.kind,
+            payload=rec.payload,
+            console_may_review=console_may,
+        ):
+            if user is not None:
                 raise HTTPException(status_code=403, detail="T2 requires reviewer")
-            if user is None and "admin" not in principal.scopes:
-                raise HTTPException(status_code=403, detail="T2 requires admin key or reviewer")
+            raise HTTPException(status_code=403, detail="T2 requires admin key or reviewer")
         actor = user.user_id if user else principal.key_id
         try:
             updated = ctx.proposals.decide(

@@ -39,6 +39,7 @@ class ConsoleContext:
         validate_run_id: Any,
         workspace_registry: Any = None,
         run_service: Any = None,
+        pdp: Any = None,
     ) -> None:
         self.root = root
         self.skills_root = skills_root
@@ -58,6 +59,11 @@ class ConsoleContext:
         self.validate_run_id = validate_run_id
         self.workspace_registry = workspace_registry
         self.run_service = run_service
+        if pdp is None:
+            from recertia.app.authz import PolicyDecisionPoint
+
+            pdp = PolicyDecisionPoint.load(surface="api")
+        self.pdp = pdp
         self.sessions = SessionStore()
         self.proposals = ProposalStore(root / "proposals.sqlite")
         self.programs = ProgramStore(root / "programs.sqlite")
