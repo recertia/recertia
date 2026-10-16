@@ -171,6 +171,8 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         skills_root = ctx.tenant_skills_root(tenant_id)
         runs_root = ctx.tenant_runs_root(tenant_id)
         eval_db = runs_root / "evals.db"
+        from recertia.review.gate import default_golden_factory
+
         store = EvalStore(eval_db)
         try:
             report = run_eval_suite(
@@ -181,6 +183,7 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
                 eval_store=store,
                 snapshot_id=body.snapshot or "eval-api",
                 golden_dir=_safe_golden_dir(body.golden_dir),
+                factory=default_golden_factory(),
             )
         finally:
             store.close()

@@ -22,10 +22,13 @@ from __future__ import annotations
 import json
 import shutil
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from contracts.budget import Budget
 from contracts.criteria import TaskCriterion
@@ -33,12 +36,48 @@ from contracts.goal import Goal, compile_goal
 from contracts.policy import ImprovementFlags, Policy
 from contracts.run import RunManifest, Task
 from contracts.skill import SkillVersion
-from recertia.graph.engine import GraphOrchestrator
 from recertia.memory.procedural.apply import script_from_skill
 from recertia.memory.procedural.store import SkillStore
 
 if TYPE_CHECKING:
     from recertia.evals.store import EvalStore
+
+_orchestrator_factory: ContextVar[Any] = ContextVar(
+    "recertia_golden_orchestrator_factory",
+    default=None,
+)
+
+
+def _current_factory() -> Any:
+    """Factory bound by the caller, or the review package's default.
+
+    The default is loaded dynamically. A static import would chain this package
+    to ``recertia.graph.engine`` through the factory, which evals-no-engine forbids.
+    """
+
+    current = _orchestrator_factory.get()
+    if current is not None:
+        return current
+    import importlib
+
+    gate = importlib.import_module("recertia.review.gate")
+    return gate.default_golden_factory()
+
+
+def _start_orchestrator(runs_root: Path, *, policy: Policy | None = None) -> Any:
+    return _current_factory().build(runs_root, policy=policy)
+
+
+@contextmanager
+def _using_factory(factory: object | None) -> Iterator[None]:
+    if factory is None:
+        yield
+        return
+    token = _orchestrator_factory.set(factory)
+    try:
+        yield
+    finally:
+        _orchestrator_factory.reset(token)
 
 
 @dataclass
@@ -184,7 +223,7 @@ def run_golden_for_skill(
         library_commit=snapshot_id,
     )
     request = task_spec.get("request") or (goal.context if goal else None)
-    orch = GraphOrchestrator(runs_root / "golden-runs")
+    orch = _start_orchestrator(runs_root / "golden-runs")
     try:
         state = orch.start(
             run_id,
@@ -249,6 +288,25 @@ def _policy_for_mea_fixture(goal: Goal | None, task_spec: dict) -> Policy | None
 
 
 def run_goal_fixture(
+    golden_dir: Path,
+    *,
+    runs_root: Path,
+    eval_store: "EvalStore | None" = None,
+    snapshot_id: str | None = None,
+    model_version: str | None = None,
+    factory: object | None = None,
+) -> GoldenResult:
+    with _using_factory(factory):
+        return _run_goal_fixture(
+            golden_dir,
+            runs_root=runs_root,
+            eval_store=eval_store,
+            snapshot_id=snapshot_id,
+            model_version=model_version,
+        )
+
+
+def _run_goal_fixture(
     golden_dir: Path,
     *,
     runs_root: Path,
@@ -323,7 +381,7 @@ def run_goal_fixture(
         library_commit=snapshot_id or "mea-golden",
     )
     request = task_spec.get("request") or goal.context
-    orch = GraphOrchestrator(
+    orch = _start_orchestrator(
         runs_root / "golden-runs",
         policy=_policy_for_mea_fixture(goal, task_spec),
     )
@@ -398,6 +456,29 @@ def run_task_class_gate(
 
 
 def select_and_run_gate(
+    version: SkillVersion,
+    *,
+    runs_root: Path,
+    golden_root: Path | None = None,
+    golden_dir: Path | None = None,
+    require_task_class_gate: bool = False,
+    require_fixture: bool = False,
+    extra_golden_dirs: list[Path] | None = None,
+    factory: object | None = None,
+) -> GoldenReport:
+    with _using_factory(factory):
+        return _select_and_run_gate(
+            version,
+            runs_root=runs_root,
+            golden_root=golden_root,
+            golden_dir=golden_dir,
+            require_task_class_gate=require_task_class_gate,
+            require_fixture=require_fixture,
+            extra_golden_dirs=extra_golden_dirs,
+        )
+
+
+def _select_and_run_gate(
     version: SkillVersion,
     *,
     runs_root: Path,
@@ -515,6 +596,25 @@ def run_seed_library_gate(
     runs_root: Path,
     log_path: Path,
     skill_ids: list[str] | None = None,
+    factory: object | None = None,
+) -> GoldenReport:
+    with _using_factory(factory):
+        return _run_seed_library_gate(
+            store,
+            golden_root,
+            runs_root=runs_root,
+            log_path=log_path,
+            skill_ids=skill_ids,
+        )
+
+
+def _run_seed_library_gate(
+    store: SkillStore,
+    golden_root: Path,
+    *,
+    runs_root: Path,
+    log_path: Path,
+    skill_ids: list[str] | None = None,
 ) -> GoldenReport:
     report = GoldenReport()
     for version, _status, _stats in store.iter_loaded():
@@ -591,6 +691,31 @@ def _criteria_from_task(task_spec: dict, version: SkillVersion) -> list[TaskCrit
 
 
 def run_eval_suite(
+    *,
+    task_class: str,
+    golden_root: Path,
+    skills_root: Path,
+    runs_root: Path,
+    eval_store: EvalStore,
+    snapshot_id: str,
+    model_version: str | None = None,
+    golden_dir: Path | None = None,
+    factory: object | None = None,
+) -> GoldenReport:
+    with _using_factory(factory):
+        return _run_eval_suite(
+            task_class=task_class,
+            golden_root=golden_root,
+            skills_root=skills_root,
+            runs_root=runs_root,
+            eval_store=eval_store,
+            snapshot_id=snapshot_id,
+            model_version=model_version,
+            golden_dir=golden_dir,
+        )
+
+
+def _run_eval_suite(
     *,
     task_class: str,
     golden_root: Path,

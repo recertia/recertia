@@ -92,17 +92,13 @@ ignore_imports = [
     "recertia.graph.engine -> recertia.review",
     "recertia.mea.runtime -> recertia.nodes._util",
     "recertia.memory.affordance -> recertia.solver.tools",
-    "recertia.memory.procedural.active_set -> recertia.evals.store",
-    "recertia.memory.procedural.active_set -> recertia.review.autonomy_config",
     "recertia.memory.procedural.applicability -> recertia.solver.registry",
-    "recertia.memory.procedural.contribution -> recertia.evals.statistics",
     "recertia.memory.procedural.lint -> recertia.solver.claims",
-    "recertia.memory.procedural.portfolio -> recertia.review.autonomy_config",
-    "recertia.memory.procedural.promote -> recertia.evals.golden",
+    "recertia.memory.procedural.promote -> recertia.review.promotion",
     "recertia.nodes.context -> recertia.review",
     "recertia.programs.materialize -> recertia.nodes._util",
-    "recertia.review -> recertia.evals.golden",
     "recertia.review.field_failures -> recertia.evals.store",
+    "recertia.review.gate -> recertia.evals.golden",
     "recertia.review.lifecycle -> recertia.evals.store",
     "recertia.review.shadow -> recertia.evals.store",
     "recertia.validation.judge -> recertia.solver.model",
@@ -152,13 +148,9 @@ forbidden_modules = [
 ]
 ignore_imports = [
     "recertia.memory.affordance -> recertia.solver.tools",
-    "recertia.memory.procedural.lint -> recertia.solver.claims",
-    "recertia.memory.procedural.promote -> recertia.evals.golden",
-    "recertia.memory.procedural.contribution -> recertia.evals.statistics",
-    "recertia.memory.procedural.active_set -> recertia.evals.store",
-    "recertia.memory.procedural.active_set -> recertia.review.autonomy_config",
-    "recertia.memory.procedural.portfolio -> recertia.review.autonomy_config",
     "recertia.memory.procedural.applicability -> recertia.solver.registry",
+    "recertia.memory.procedural.lint -> recertia.solver.claims",
+    "recertia.memory.procedural.promote -> recertia.review.promotion",
 ]
 
 [[tool.importlinter.contracts]]
@@ -166,9 +158,6 @@ name = "evals-no-engine"
 type = "forbidden"
 source_modules = ["recertia.evals"]
 forbidden_modules = ["recertia.graph.engine"]
-ignore_imports = [
-    "recertia.evals.golden -> recertia.graph.engine",
-]
 
 [[tool.importlinter.contracts]]
 name = "api-cli-independent"

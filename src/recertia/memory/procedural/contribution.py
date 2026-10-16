@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from contracts.eval import BinomialSample
 from contracts.stats import Contribution, RetrievalAblationEffect
-from recertia.evals.statistics import newcombe_wilson_difference
+from recertia.stats import newcombe_wilson_difference
 
 
 def estimate_contribution(
