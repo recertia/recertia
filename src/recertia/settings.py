@@ -118,6 +118,7 @@ KNOWN_ENV_KEYS = frozenset(
         "RECERTIA_LEDGER_LOCK_TIMEOUT_S",
         "RECERTIA_LEDGER_VERIFY_FULL",
         "RECERTIA_EXECUTOR_MODE",
+        "RECERTIA_QUOTA_RESERVE_TTL_S",
     }
 )
 
@@ -315,6 +316,7 @@ class Settings:
     ledger_lock_timeout_s: float = 5.0
     ledger_verify_full: bool = False
     executor_mode: str = ""
+    quota_reserve_ttl_s: int = 86400
 
     def validate_deployment(self, *, role: ProcessRole) -> None:
         """Refuse an unsafe ``multi_node`` process. ``single_node`` has no extra rules."""
@@ -524,4 +526,5 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         ledger_lock_timeout_s=_float(env, "RECERTIA_LEDGER_LOCK_TIMEOUT_S", 5.0),
         ledger_verify_full=_bool(env, "RECERTIA_LEDGER_VERIFY_FULL"),
         executor_mode=_raw(env, "RECERTIA_EXECUTOR_MODE").strip(),
+        quota_reserve_ttl_s=_int(env, "RECERTIA_QUOTA_RESERVE_TTL_S", 86400),
     )
