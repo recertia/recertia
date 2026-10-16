@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from contracts.program import MigrationProgram
+from recertia.persistence.db import open_db
 
 
 class ProgramStore:
@@ -18,7 +19,7 @@ class ProgramStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
+        self._conn = open_db(self.path)
         self._conn.row_factory = sqlite3.Row
         with self._conn:
             self._conn.execute(

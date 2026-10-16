@@ -12,6 +12,7 @@ import threading
 from pathlib import Path
 
 from contracts.run import RunState
+from recertia.persistence.db import open_db
 
 
 class CheckpointConflict(RuntimeError):
@@ -25,7 +26,7 @@ class CheckpointStore:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._conn = open_db(self._db_path)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute(
             """

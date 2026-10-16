@@ -12,6 +12,7 @@ from pathlib import Path
 from contracts.eval import BinomialSample, ControlBaseline, EvalObservation
 from contracts.run import RunState
 from contracts.stats import RetrievalAblationEffect
+from recertia.persistence.db import open_db
 
 
 class ObservationError(ValueError):
@@ -25,7 +26,7 @@ class EvalStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
+        self._conn = open_db(self.path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._init()

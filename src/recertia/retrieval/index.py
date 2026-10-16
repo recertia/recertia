@@ -22,6 +22,7 @@ from typing import Iterable, Sequence
 from contracts.skill import SkillVersion
 from contracts.stats import SkillStats
 from contracts.status import SkillStatus
+from recertia.persistence.db import open_db
 
 EMBED_DIM = 64
 _TOKEN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -72,7 +73,7 @@ class SkillIndex:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._conn = open_db(self.db_path)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._emb_cache: dict[tuple[str, int], tuple[float, ...]] | None = None
         self._init_schema()

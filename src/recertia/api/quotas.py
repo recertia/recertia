@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from recertia.persistence.db import open_db
+
 
 class QuotaExceeded(Exception):
     """Tenant would exceed a configured daily or in-flight quota."""
@@ -39,7 +41,7 @@ class QuotaStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.defaults = defaults or quota_from_env()
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
+        self._conn = open_db(self.path)
         self._conn.row_factory = sqlite3.Row
         with self._conn:
             self._conn.executescript(

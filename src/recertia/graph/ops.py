@@ -11,11 +11,12 @@ each one either no-ops (already applied) or runs exactly once (not yet applied) 
 from __future__ import annotations
 
 import json
-import sqlite3
 import threading
 import time
 from pathlib import Path
 from typing import Callable, TypeVar
+
+from recertia.persistence.db import open_db
 
 T = TypeVar("T")
 
@@ -43,7 +44,7 @@ class OperationLedger:
         self._lock = threading.Lock()
         self._pending_timeout_s = pending_timeout_s
         self._pending_poll_s = pending_poll_s
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._conn = open_db(self._db_path)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute(
             """

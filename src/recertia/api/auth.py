@@ -19,6 +19,7 @@ from typing import Callable
 from fastapi import Header, HTTPException, Request
 
 from recertia.errors import SecretUnavailable
+from recertia.persistence.db import open_db
 from recertia.ports.identity import Principal, tenant_id
 
 _ALLOWED_SCOPES = frozenset({"runs", "blobs", "metrics", "admin", "exec", "promote", "jobs"})
@@ -150,7 +151,7 @@ class ApiKeyStore:
             raise SecretUnavailable(f"could not restrict API key database: {exc}") from exc
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.path)
+        return open_db(self.path)
 
     @staticmethod
     def _now() -> str:
