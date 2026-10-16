@@ -411,6 +411,13 @@ def create_app(
     blobs_by_tenant: dict[str, FilesystemBlobStore] = {}
     # Keyed by (tenant_id, run_id) so tenants cannot collide on run_id.
     runs: dict[tuple[str, str], RunRecord] = {}
+    from recertia.app.runs import RunService
+
+    run_service = RunService(
+        quota_store,
+        runs,
+        lambda tenant_id, run_id: _load_from_checkpoints(root, tenant_id, run_id),
+    )
     run_slots = threading.Semaphore(_max_in_flight_runs())
     app = FastAPI(title="Recertia", version="0.1.0")
 
@@ -445,6 +452,7 @@ def create_app(
         require_scope=require_scope,
         validate_run_id=_validate_run_id,
         workspace_registry=workspace_registry,
+        run_service=run_service,
     )
     register_console_routes(app, console_ctx)
     register_remaining_routes(app, console_ctx)
@@ -531,7 +539,7 @@ def create_app(
         # ----- async path (console C2) -----
         if body.mode == "async":
             try:
-                quota_store.admit(principal.tenant_id)
+                run_service.admit(principal.tenant_id)
             except QuotaExceeded as exc:
                 return _quota_error(exc, run_id=run_id)
             placeholder = RunRecord(
@@ -603,12 +611,12 @@ def create_app(
         )
 
         try:
-            quota_store.admit(principal.tenant_id)
+            run_service.admit(principal.tenant_id)
         except QuotaExceeded as exc:
             return _quota_error(exc, run_id=run_id)
 
         if not run_slots.acquire(blocking=False):
-            quota_store.release_inflight(principal.tenant_id)
+            run_service.release(principal.tenant_id)
             return v1_error(
                 429,
                 code="worker_busy",
@@ -661,9 +669,9 @@ def create_app(
             bundle.close()
             run_slots.release()
             if succeeded:
-                quota_store.complete(principal.tenant_id, cost_usd=cost_usd)
+                run_service.complete(principal.tenant_id, cost_usd=cost_usd)
             else:
-                quota_store.release_inflight(principal.tenant_id)
+                run_service.release(principal.tenant_id)
 
         rec = _record_from_state(
             run_id=run_id,
@@ -694,13 +702,9 @@ def create_app(
     @app.get("/v1/runs/{run_id}", response_model=RunRecord)
     def get_run(run_id: str, principal: Principal = Depends(require_scope("runs", key_store))) -> RunRecord:
         run_id = _validate_run_id(run_id)
-        run_key = (principal.tenant_id, run_id)
-        if run_key in runs:
-            return runs[run_key]
-        loaded = _load_from_checkpoints(root, principal.tenant_id, run_id)
+        loaded = run_service.get(principal.tenant_id, run_id)
         if loaded is None:
             raise HTTPException(status_code=404, detail="run not found")
-        runs[run_key] = loaded
         return loaded
 
     @app.post("/v1/runs/{run_id}/resume", response_model=None)
@@ -723,11 +727,11 @@ def create_app(
         if not workdir.exists():
             raise HTTPException(status_code=404, detail="run workdir not found")
         try:
-            quota_store.admit(principal.tenant_id)
+            run_service.admit(principal.tenant_id)
         except QuotaExceeded as exc:
             return _quota_error(exc, run_id=run_id)
         if not run_slots.acquire(blocking=False):
-            quota_store.release_inflight(principal.tenant_id)
+            run_service.release(principal.tenant_id)
             return v1_error(
                 429,
                 code="worker_busy",
@@ -763,7 +767,7 @@ def create_app(
             run_slots.release()
             # Resume admits a concurrency slot only. Daily spend stays on create's
             # successful complete(); releasing here avoids charging the day twice.
-            quota_store.release_inflight(principal.tenant_id)
+            run_service.release(principal.tenant_id)
 
         existing = runs.get(run_key)
         rec = _record_from_state(

@@ -137,7 +137,9 @@ def jobs_run(
         skills_root=skills_root,
     )
     budget = JobBudget(max_proposals=max_proposals, max_tokens=max_tokens)
-    name = job.strip().lower()
+    from recertia.app.jobs import canonical_job
+
+    name = canonical_job(job) or ""
     traj_store = TrajectoryStore(runs_root / "trajectories")
 
     def _run(job_name: str, fn, *, budget=budget):

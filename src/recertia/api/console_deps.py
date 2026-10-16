@@ -38,6 +38,7 @@ class ConsoleContext:
         require_scope: Any,
         validate_run_id: Any,
         workspace_registry: Any = None,
+        run_service: Any = None,
     ) -> None:
         self.root = root
         self.skills_root = skills_root
@@ -56,6 +57,7 @@ class ConsoleContext:
         self.require_scope = require_scope
         self.validate_run_id = validate_run_id
         self.workspace_registry = workspace_registry
+        self.run_service = run_service
         self.sessions = SessionStore()
         self.proposals = ProposalStore(root / "proposals.sqlite")
         self.programs = ProgramStore(root / "programs.sqlite")
@@ -98,10 +100,16 @@ class ConsoleContext:
         self.runs[(tenant_id, run_id)] = rec.model_copy(
             update={"cost_usd": cost, "mode": "async"}
         )
-        self.quota_store.complete(tenant_id, cost_usd=cost)
+        if self.run_service is not None:
+            self.run_service.complete(tenant_id, cost_usd=cost)
+        else:
+            self.quota_store.complete(tenant_id, cost_usd=cost)
 
     def _on_async_failed(self, tenant_id: str, run_id: str, *, cancelled: bool = False) -> None:
-        self.quota_store.release_inflight(tenant_id)
+        if self.run_service is not None:
+            self.run_service.release(tenant_id)
+        else:
+            self.quota_store.release_inflight(tenant_id)
         existing = self.runs.get((tenant_id, run_id))
         if existing is None:
             return

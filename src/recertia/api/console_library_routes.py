@@ -146,49 +146,14 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
-        orch = GraphOrchestrator(ctx.tenant_runs_root(tenant_id))
-        try:
-            ids = orch.checkpoints.list_run_ids()
-        finally:
-            orch.close()
-        # Also include in-memory runs for this tenant.
-        mem_ids = [rid for (tid, rid) in ctx.runs if tid == tenant_id]
-        all_ids = sorted(set(ids) | set(mem_ids))
-        if cursor:
-            all_ids = [i for i in all_ids if i > cursor]
-        items: list[dict[str, Any]] = []
-        for run_id in all_ids:
-            if len(items) >= limit:
-                break
-            rec = ctx.runs.get((tenant_id, run_id)) or ctx.load_from_checkpoints(
-                ctx.root, tenant_id, run_id
-            )
-            if rec is None:
-                continue
-            if task_class and rec.task_class != task_class:
-                continue
-            if terminal and (rec.terminal or "") != terminal:
-                continue
-            # PC-1: never leak other tenants — record carries tenant_id
-            if rec.tenant_id != tenant_id:
-                continue
-            items.append(
-                {
-                    "run_id": rec.run_id,
-                    "task_class": rec.task_class,
-                    "terminal": rec.terminal,
-                    "status": rec.status,
-                    "attempt_no": rec.attempt_no,
-                    "created_at": rec.created_at.isoformat()
-                    if hasattr(rec.created_at, "isoformat")
-                    else rec.created_at,
-                    "cost_usd": getattr(rec, "cost_usd", None),
-                    "arm": rec.arm,
-                    "tenant_id": rec.tenant_id,
-                }
-            )
-        next_cursor = items[-1]["run_id"] if items and len(items) == limit else None
-        return {"items": items, "next_cursor": next_cursor}
+        return ctx.run_service.list(
+            tenant_id,
+            runs_root=ctx.tenant_runs_root(tenant_id),
+            limit=limit,
+            cursor=cursor,
+            task_class=task_class,
+            terminal=terminal,
+        )
 
     @app.get("/v1/runs/{run_id}/transcript")
     def run_transcript(
@@ -620,7 +585,9 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         _require_library_write(request, principal, scope="jobs", min_role="reviewer")
-        name = job.strip().lower()
+        from recertia.app.jobs import canonical_job
+
+        name = canonical_job(job) or ""
         from recertia.memory.episodic import EpisodicStore
         from recertia.memory.procedural.lineage import LineageServices
         from recertia.policy_load import load_policy
