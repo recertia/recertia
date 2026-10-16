@@ -188,6 +188,7 @@ Copyright (c) 2026 Robert Schmidt. See [`NOTICE`](NOTICE).
 | [`docs/architecture/container-sandbox.md`](docs/architecture/container-sandbox.md) | Docker/Podman setup and hardening |
 | [`docs/specifications/goal-objects.md`](docs/specifications/goal-objects.md) | Goal as primary input |
 | [`docs/adr/`](docs/adr/) | Architecture decision records |
+| [`docs/plans/remediation/README.md`](docs/plans/remediation/README.md) | Multi-tenant remediation plan ([ADR-0021](docs/adr/0021-deployment-model.md)); specifications only |
 | [`contracts/`](contracts) | Normative Pydantic models |
 | [`docs/references.md`](docs/references.md) | Literature grounding |
 | [`docs/assumptions.md`](docs/assumptions.md) | Empirical claims still under test |
