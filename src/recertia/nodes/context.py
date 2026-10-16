@@ -30,7 +30,16 @@ T = TypeVar("T")
 class OperationRunner(Protocol):
     """The sole idempotency capability exposed to nodes."""
 
-    def run_once(self, run_id: str, attempt_no: int, node: str, op_seq: int, fn: Callable[[], T]) -> T: ...
+    def run_once(
+        self,
+        run_id: str,
+        attempt_no: int,
+        node: str,
+        op_seq: int,
+        fn: Callable[[], T],
+        *,
+        fencing_token: int | None = None,
+    ) -> T: ...
 
 
 class WorkspaceCapability(Protocol):
@@ -175,6 +184,14 @@ class NodeContext:
     patch_templates: Any = None
     # API ceiling applied after compile_goal. None keeps the contract maximum.
     max_criterion_timeout_s: int | None = None
+    fencing_token: int | None = None
 
     def op_once(self, op_seq: int, fn: Callable[[], T]) -> T:
-        return self.ops.run_once(self.run_id, self.attempt_no, self.node, op_seq, fn)
+        return self.ops.run_once(
+            self.run_id,
+            self.attempt_no,
+            self.node,
+            op_seq,
+            fn,
+            fencing_token=self.fencing_token,
+        )

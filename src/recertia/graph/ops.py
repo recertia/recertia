@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Callable, TypeVar
 
+from recertia.graph.store import _ensure_column
 from recertia.persistence.db import open_db
 
 T = TypeVar("T")
@@ -59,6 +60,7 @@ class OperationLedger:
             """
         )
         self._conn.commit()
+        _ensure_column(self._conn, "operations", "fencing_token", "INTEGER")
 
     def close(self) -> None:
         self._conn.close()
@@ -92,7 +94,16 @@ class OperationLedger:
             )
             self._conn.commit()
 
-    def run_once(self, run_id: str, attempt_no: int, node: str, op_seq: int, fn: Callable[[], T]) -> T:
+    def run_once(
+        self,
+        run_id: str,
+        attempt_no: int,
+        node: str,
+        op_seq: int,
+        fn: Callable[[], T],
+        *,
+        fencing_token: int | None = None,
+    ) -> T:
         """Execute ``fn`` only if ``(run_id, attempt_no, node, op_seq)`` has not already run.
 
         ``fn``'s return value MUST be JSON-serialisable — it is the durable record that lets a
@@ -195,8 +206,9 @@ class OperationLedger:
 
         with self._lock:
             self._conn.execute(
-                "UPDATE operations SET result_json=? WHERE run_id=? AND attempt_no=? AND node=? AND op_seq=?",
-                (json.dumps(result), run_id, attempt_no, node, op_seq),
+                "UPDATE operations SET result_json=?, fencing_token=? "
+                "WHERE run_id=? AND attempt_no=? AND node=? AND op_seq=?",
+                (json.dumps(result), fencing_token, run_id, attempt_no, node, op_seq),
             )
             self._conn.commit()
         return result

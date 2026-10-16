@@ -37,6 +37,7 @@ from recertia.api.remaining_routes import register_remaining_routes
 from recertia.bootstrap import build_default_orchestrator, resolve_task_class
 from recertia.config import ModelConfig
 from recertia.graph.engine import GraphOrchestrator, RunIdExistsError
+from recertia.graph.lease import RunBusy
 from recertia.graph.store import CheckpointStore
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.paths import HostRootError, looks_absolute, resolve_under_host_root
@@ -656,6 +657,8 @@ def create_app(
             succeeded = True
         except RunIdExistsError as exc:
             raise HTTPException(status_code=409, detail="run_id already exists") from exc
+        except RunBusy as exc:
+            raise HTTPException(status_code=409, detail="run_busy") from exc
         except Exception as exc:
             get_telemetry().emit(
                 "run.finished",
@@ -756,6 +759,8 @@ def create_app(
             )
             bundle.orchestrator.max_criterion_timeout_s = _api_max_criterion_timeout_s()
             state = bundle.orchestrator.resume(run_id, workdir=workdir)
+        except RunBusy as exc:
+            raise HTTPException(status_code=409, detail="run_busy") from exc
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:

@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,6 +24,7 @@ from contracts.graph import legal_routes
 from contracts.run import RouteEntry, RunManifest, RunState, Task, WorkspaceSnapshot
 from contracts.trajectory import TrajectoryEvent
 from recertia.graph.hooks import Hop, HopHook, StateHop, default_hop_hooks, default_state_hops
+from recertia.graph.lease import RunLease
 from recertia.graph.persistence import RunPersistence, open_run_persistence
 from recertia.memory.procedural.capability import CandidateSkillStoreAdapter
 from recertia.nodes import NODE_FUNCS, NodeContext, NodeOutcome
@@ -114,6 +116,8 @@ class GraphOrchestrator:
         self.state_hops = list(state_hops) if state_hops is not None else default_state_hops()
         self.capability_warn = capability_warn
         self.tenant_id = "local"
+        self._fencing_token: int | None = None
+        self._lease: RunLease | None = None
         self._last_hop_ended: float | None = None
         self._offload_handles: dict[str, OffloadHandle] = {}
 
@@ -201,6 +205,7 @@ class GraphOrchestrator:
             facts=self.facts,
             reviewer=self.reviewer,
             one_off_log=self.one_off_log,
+            fencing_token=self._fencing_token,
             deterministic_guide=bool(
                 self.policy is not None and self.policy.improvement.deterministic_guide
             ),
@@ -253,6 +258,21 @@ class GraphOrchestrator:
         )
 
 
+    @contextmanager
+    def _hold_lease(self, run_id: str):
+        """Acquire the run flock for start/resume and release it on the way out."""
+
+        safe = run_id.replace("/", "_").replace("..", "_")
+        lease = RunLease(self.runs_root / "locks" / f"{safe}.lock")
+        self._fencing_token = lease.acquire()
+        self._lease = lease
+        try:
+            yield
+        finally:
+            self._lease = None
+            self._fencing_token = None
+            lease.release()
+
     def start(
         self,
         run_id: str,
@@ -278,21 +298,22 @@ class GraphOrchestrator:
                 f"run_id {run_id!r} already has checkpoints; resume it instead of starting again"
             )
 
-        state = RunState(
-            run_id=run_id,
-            task=task,
-            criteria=criteria,
-            budget=budget or Budget(),
-            arm=arm,
-            manifest=manifest or RunManifest(),
-        )
-        from recertia.telemetry import emit_in_run, telemetry_run
-
-        with telemetry_run(tenant_id=self.tenant_id, run_id=run_id):
-            emit_in_run("run.started", task_class=task.task_class, arm=arm)
-            return self._execute(
-                state, "intake", workdir=Path(workdir), script=script, max_steps=max_steps
+        with self._hold_lease(run_id):
+            state = RunState(
+                run_id=run_id,
+                task=task,
+                criteria=criteria,
+                budget=budget or Budget(),
+                arm=arm,
+                manifest=manifest or RunManifest(),
             )
+            from recertia.telemetry import emit_in_run, telemetry_run
+
+            with telemetry_run(tenant_id=self.tenant_id, run_id=run_id):
+                emit_in_run("run.started", task_class=task.task_class, arm=arm)
+                return self._execute(
+                    state, "intake", workdir=Path(workdir), script=script, max_steps=max_steps
+                )
 
     def resume(
         self,
@@ -304,21 +325,22 @@ class GraphOrchestrator:
     ) -> RunState:
         """Resume from the last checkpoint. A no-op if the run already reached ``finalize``."""
 
-        latest = self.checkpoints.latest(run_id)
-        if latest is None:
-            raise ValueError(f"no checkpoint found for run {run_id!r}")
-        seq, _, next_node, state = latest
-        if next_node is None:
-            return state
-        self._maybe_restore_idle(run_id, Path(workdir))
-        return self._execute(
-            state,
-            next_node,
-            workdir=Path(workdir),
-            script=script,
-            max_steps=max_steps,
-            next_seq=seq + 1,
-        )
+        with self._hold_lease(run_id):
+            latest = self.checkpoints.latest(run_id)
+            if latest is None:
+                raise ValueError(f"no checkpoint found for run {run_id!r}")
+            seq, _, next_node, state = latest
+            if next_node is None:
+                return state
+            self._maybe_restore_idle(run_id, Path(workdir))
+            return self._execute(
+                state,
+                next_node,
+                workdir=Path(workdir),
+                script=script,
+                max_steps=max_steps,
+                next_seq=seq + 1,
+            )
 
     def _execute(
         self,
@@ -336,6 +358,8 @@ class GraphOrchestrator:
         steps_taken = 0
 
         while True:
+            if self._lease is not None:
+                self._lease.heartbeat()
             steps_taken += 1
             if steps_taken > MAX_GRAPH_STEPS:
                 raise RoutingError(
@@ -394,7 +418,14 @@ class GraphOrchestrator:
                     route=outcome.route,
                     note=outcome.note,
                 )
-                self.checkpoints.save(state.run_id, next_seq, node_name, None, new_state)
+                self.checkpoints.save(
+                    state.run_id,
+                    next_seq,
+                    node_name,
+                    None,
+                    new_state,
+                    fencing_token=self._fencing_token,
+                )
                 self._record_eval_observation(new_state)
                 from recertia.telemetry import emit_in_run, telemetry_run
 
@@ -433,7 +464,14 @@ class GraphOrchestrator:
                 note=outcome.note,
                 extra_events=extra_events,
             )
-            self.checkpoints.save(state.run_id, next_seq, node_name, chosen.target, new_state)
+            self.checkpoints.save(
+                state.run_id,
+                next_seq,
+                node_name,
+                chosen.target,
+                new_state,
+                fencing_token=self._fencing_token,
+            )
             next_seq += 1
             state = new_state
             node_name = chosen.target

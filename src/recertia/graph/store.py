@@ -42,17 +42,28 @@ class CheckpointStore:
             """
         )
         self._conn.commit()
+        _ensure_column(self._conn, "checkpoints", "fencing_token", "INTEGER")
 
     def close(self) -> None:
         self._conn.close()
 
-    def save(self, run_id: str, seq: int, node: str, next_node: str | None, state: RunState) -> None:
+    def save(
+        self,
+        run_id: str,
+        seq: int,
+        node: str,
+        next_node: str | None,
+        state: RunState,
+        *,
+        fencing_token: int | None = None,
+    ) -> None:
         with self._lock:
             try:
                 self._conn.execute(
-                    "INSERT INTO checkpoints (run_id, seq, node, next_node, state_json, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, datetime('now'))",
-                    (run_id, seq, node, next_node, state.model_dump_json()),
+                    "INSERT INTO checkpoints ("
+                    "run_id, seq, node, next_node, state_json, created_at, fencing_token"
+                    ") VALUES (?, ?, ?, ?, ?, datetime('now'), ?)",
+                    (run_id, seq, node, next_node, state.model_dump_json(), fencing_token),
                 )
                 self._conn.commit()
             except sqlite3.IntegrityError as exc:
@@ -100,3 +111,10 @@ class CheckpointStore:
                 "SELECT DISTINCT run_id FROM checkpoints ORDER BY run_id"
             ).fetchall()
         return [r[0] for r in rows]
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        conn.commit()
