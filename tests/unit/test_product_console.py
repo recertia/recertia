@@ -235,9 +235,9 @@ def test_pc4_sse_after_cursor_skips_seen_events(tmp_path: Path) -> None:
     client, app = _client(tmp_path)
     headers = _issue(app, tenant_id="t1")
     events = app.state.console_ctx.events
-    e1 = events.append("run-sse", "run.queued", {"n": 1})
-    e2 = events.append("run-sse", "run.started", {"n": 2})
-    e3 = events.append("run-sse", "run.finished", {"n": 3, "terminal": "solved"})
+    e1 = events.append("t1", "run-sse", "run.queued", {"n": 1})
+    e2 = events.append("t1", "run-sse", "run.started", {"n": 2})
+    e3 = events.append("t1", "run-sse", "run.finished", {"n": 3, "terminal": "solved"})
 
     from datetime import datetime, timezone
 

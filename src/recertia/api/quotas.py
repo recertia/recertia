@@ -59,6 +59,18 @@ class QuotaStore:
     def close(self) -> None:
         self._conn.close()
 
+    def reset_inflight(self) -> None:
+        """Zero leaked in-flight gauges. Nothing is running at process start.
+
+        A crash between ``admit`` and ``release``/``complete`` used to leave
+        ``inflight.count`` high and 429 the tenant until the counter was edited
+        by hand. Queued work does not survive this process, so the honest count
+        at startup is zero.
+        """
+
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE inflight SET count = 0")
+
     def _day(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 

@@ -6,6 +6,7 @@ Legacy pure-``request`` path still works via the critic.
 
 from __future__ import annotations
 
+from contracts.criteria import clamp_criterion_timeouts
 from contracts.goal import compile_goal
 from contracts.run import RunState
 from recertia.nodes._util import criteria_hash, now
@@ -38,6 +39,11 @@ def intake(state: RunState, ctx: NodeContext) -> NodeOutcome:
         request_text = state.task.request or ""
         criteria = propose_criteria(request_text, workdir=ctx.workdir)
         note = f"critic proposed {len(criteria)} criterion(ies) from request"
+
+    if ctx.max_criterion_timeout_s is not None:
+        criteria = clamp_criterion_timeouts(
+            criteria, ceiling_s=ctx.max_criterion_timeout_s
+        )
 
     manifest = state.manifest.model_copy(update={"criteria_hash": criteria_hash(criteria)})
     new_state = state.model_copy(

@@ -20,7 +20,6 @@ the legacy fallback.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import uuid
 from dataclasses import dataclass, field
@@ -186,9 +185,6 @@ def run_golden_for_skill(
     )
     request = task_spec.get("request") or (goal.context if goal else None)
     orch = GraphOrchestrator(runs_root / "golden-runs")
-    previous_backend = os.environ.get("RECERTIA_EXECUTION_BACKEND")
-    if previous_backend is None:
-        os.environ["RECERTIA_EXECUTION_BACKEND"] = "local"
     try:
         state = orch.start(
             run_id,
@@ -209,8 +205,6 @@ def run_golden_for_skill(
         )
     finally:
         orch.close()
-        if previous_backend is None:
-            os.environ.pop("RECERTIA_EXECUTION_BACKEND", None)
         if workdir.exists():
             shutil.rmtree(workdir, ignore_errors=True)
 
@@ -333,9 +327,6 @@ def run_goal_fixture(
         runs_root / "golden-runs",
         policy=_policy_for_mea_fixture(goal, task_spec),
     )
-    previous_backend = os.environ.get("RECERTIA_EXECUTION_BACKEND")
-    if previous_backend is None:
-        os.environ["RECERTIA_EXECUTION_BACKEND"] = "local"
     try:
         state = orch.start(
             run_id,
@@ -357,8 +348,6 @@ def run_goal_fixture(
         )
     finally:
         orch.close()
-        if previous_backend is None:
-            os.environ.pop("RECERTIA_EXECUTION_BACKEND", None)
         if workdir.exists():
             shutil.rmtree(workdir, ignore_errors=True)
 

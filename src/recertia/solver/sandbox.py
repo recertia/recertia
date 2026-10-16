@@ -15,7 +15,7 @@ class SandboxLimits:
     max_cpu_seconds: int = 60
     max_address_space_mb: int = 512
     scrub_env: bool = True
-    allowed_env_keys: tuple[str, ...] = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
+    allowed_env_keys: tuple[str, ...] = ("PATH", "LANG", "LC_ALL", "TMPDIR")
     allow_network: bool = False  # informational for container backends
 
     @classmethod
@@ -34,7 +34,7 @@ class SandboxLimits:
             max_address_space_mb=int(getattr(policy, "max_address_space_mb", 512)),
             scrub_env=bool(getattr(policy, "scrub_env", True)),
             allowed_env_keys=tuple(
-                getattr(policy, "allowed_env_keys", ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR"))
+                getattr(policy, "allowed_env_keys", ("PATH", "LANG", "LC_ALL", "TMPDIR"))
             ),
             allow_network=bool(getattr(policy, "allow_network", False)),
         )

@@ -64,7 +64,7 @@ class ConsoleContext:
         self._program_idempotency: dict[str, str] = {}
         from recertia.workers.run_worker import AsyncRunWorker
 
-        self.events = RunEventLog(root / "run_events")
+        self.events = RunEventLog(root)
         self.worker = AsyncRunWorker(
             events=self.events,
             on_complete=self._on_async_complete,

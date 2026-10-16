@@ -19,7 +19,7 @@ class SandboxPolicy:
     max_cpu_seconds: int = 60
     max_address_space_mb: int = 512
     scrub_env: bool = True
-    allowed_env_keys: tuple[str, ...] = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
+    allowed_env_keys: tuple[str, ...] = ("PATH", "LANG", "LC_ALL", "TMPDIR")
     # Production commands run only in Docker or Podman; no host-process fallback.
     backend: str = "container"
     image: str | None = "python:3.12-slim"

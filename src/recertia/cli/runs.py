@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-import os
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -20,7 +20,7 @@ from recertia.config import load_model_config
 from recertia.graph.engine import GraphOrchestrator
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.ledger import HashChainLedger, LedgerVerificationError
-from recertia.solver.container import ensure_execution_ready
+from recertia.solver.container import ensure_execution_ready, execution_backend_override
 from recertia.solver.factory import ModelConfigError
 from recertia.solver.sandbox import SandboxError
 
@@ -33,11 +33,14 @@ def _load_spec(spec_path: Path) -> dict:
     return json.loads(spec_path.read_text())
 
 
-def _prepare_execution(*, local_exec: bool) -> None:
-    """Apply ``--local-exec`` then fail fast if the configured backend cannot run."""
+def _prepare_execution() -> None:
+    """Fail fast if the configured backend cannot run.
 
-    if local_exec:
-        os.environ["RECERTIA_EXECUTION_BACKEND"] = "local"
+    ``--local-exec`` is a context override applied by the caller. It does not
+    write ``RECERTIA_EXECUTION_BACKEND``. A missing container runtime fails
+    closed unless that override or an already-configured local backend is set.
+    """
+
     try:
         ensure_execution_ready()
     except SandboxError as exc:
@@ -89,7 +92,7 @@ def run_cmd(
     local_exec: bool = typer.Option(
         False,
         "--local-exec",
-        help="Set RECERTIA_EXECUTION_BACKEND=local for this process (dev; no Docker).",
+        help="Local executor for this invocation (dev; no Docker). Does not change process env.",
     ),
     ablation: bool = typer.Option(
         False, "--ablation", help="Assign control arm via T3 ablation sampler (outside nodes)."
@@ -111,8 +114,42 @@ def run_cmd(
         typer.echo("Provide --goal or --spec", err=True)
         raise typer.Exit(code=2)
 
-    _prepare_execution(local_exec=local_exec)
+    scope = execution_backend_override("local") if local_exec else nullcontext()
+    with scope:
+        _prepare_execution()
+        _execute_run(
+            spec=spec,
+            goal=goal,
+            runs_root=runs_root,
+            run_id=run_id,
+            workdir=workdir,
+            workspace_id=workspace_id,
+            tenant=tenant,
+            skills_root=skills_root,
+            facts_root=facts_root,
+            index=index,
+            ablation=ablation,
+            model=model,
+            verifier=verifier,
+        )
 
+
+def _execute_run(
+    *,
+    spec: Optional[Path],
+    goal: Optional[Path],
+    runs_root: Path,
+    run_id: Optional[str],
+    workdir: Optional[Path],
+    workspace_id: Optional[str],
+    tenant: str,
+    skills_root: Path,
+    facts_root: Path,
+    index: Path,
+    ablation: bool,
+    model: Optional[str],
+    verifier: Optional[str],
+) -> None:
     try:
         model_config = load_model_config(model=model, verifier=verifier)
     except ValueError as exc:
@@ -242,13 +279,31 @@ def resume_cmd(
     local_exec: bool = typer.Option(
         False,
         "--local-exec",
-        help="Set RECERTIA_EXECUTION_BACKEND=local for this process (dev; no Docker).",
+        help="Local executor for this invocation (dev; no Docker). Does not change process env.",
     ),
 ) -> None:
     """Resume a run from its last checkpoint. Safe to call after a killed process."""
 
-    _prepare_execution(local_exec=local_exec)
+    scope = execution_backend_override("local") if local_exec else nullcontext()
+    with scope:
+        _prepare_execution()
+        _execute_resume(
+            run_id=run_id,
+            runs_root=runs_root,
+            spec=spec,
+            skills_root=skills_root,
+            facts_root=facts_root,
+        )
 
+
+def _execute_resume(
+    *,
+    run_id: str,
+    runs_root: Path,
+    spec: Optional[Path],
+    skills_root: Path,
+    facts_root: Path,
+) -> None:
     workdir = runs_root / "workspaces" / run_id
     script = None
     if spec is not None:

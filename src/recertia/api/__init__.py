@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from datetime import datetime, timezone
@@ -34,7 +35,8 @@ from recertia.api.quotas import QuotaExceeded, QuotaStore
 from recertia.api.remaining_routes import register_remaining_routes
 from recertia.bootstrap import build_default_orchestrator, resolve_task_class
 from recertia.config import ModelConfig
-from recertia.graph.engine import GraphOrchestrator
+from recertia.graph.engine import GraphOrchestrator, RunIdExistsError
+from recertia.graph.store import CheckpointStore
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.paths import HostRootError, looks_absolute, resolve_under_host_root
 from recertia.solver.container import configured_backend, ensure_api_execution_ready
@@ -42,6 +44,8 @@ from recertia.solver.sandbox import SandboxError
 from recertia.store.blobs import FilesystemBlobStore, normalize_blob_digest
 from recertia.telemetry import get_telemetry, render_dashboard
 from recertia.workspaces.registry import WorkspaceRegistry
+
+_log = logging.getLogger("recertia.api")
 
 DEFAULT_ROOT = Path(".recertia")
 _MAX_BLOB_BYTES = int(os.environ.get("RECERTIA_MAX_BLOB_BYTES", str(16 * 1024 * 1024)))
@@ -54,6 +58,19 @@ def _validate_run_id(run_id: str) -> str:
         return validate_run_id(run_id)
     except InvalidIdError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _tenant_has_checkpoints(root: Path, tenant_id: str, run_id: str) -> bool:
+    """True when durable checkpoints already exist for this tenant's run id."""
+
+    db = root / "runs" / tenant_id / "checkpoints.db"
+    if not db.is_file():
+        return False
+    store = CheckpointStore(db)
+    try:
+        return store.latest_seq(run_id) is not None
+    finally:
+        store.close()
 
 
 def _clamp_criteria_for_api(criteria: list[TaskCriterion]) -> list[TaskCriterion]:
@@ -312,6 +329,8 @@ def create_app(
     facts_root = Path(facts_root) if facts_root is not None else Path("facts")
     key_store = ApiKeyStore(root / "api_keys.sqlite")
     quota_store = QuotaStore(root / "quotas.sqlite")
+    # A previous process may have crashed after admit. Nothing is in flight now.
+    quota_store.reset_inflight()
     workspace_registry = WorkspaceRegistry(root / "workspaces_registry.sqlite")
     blobs_by_tenant: dict[str, FilesystemBlobStore] = {}
     # Keyed by (tenant_id, run_id) so tenants cannot collide on run_id.
@@ -359,7 +378,7 @@ def create_app(
             return FileResponse(console_dir / "index.html")
 
     @app.get("/health")
-    def health() -> dict[str, str]:
+    async def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.post("/v1/runs", response_model=None)
@@ -381,7 +400,7 @@ def create_app(
 
         run_id = _validate_run_id(body.run_id or f"run-{uuid4().hex[:12]}")
         run_key = (principal.tenant_id, run_id)
-        if run_key in runs:
+        if run_key in runs or _tenant_has_checkpoints(root, principal.tenant_id, run_id):
             raise HTTPException(status_code=409, detail="run_id already exists")
 
         workdir, wd_meta = _resolve_create_workdir(
@@ -450,6 +469,7 @@ def create_app(
                     runs_root=root / "runs" / principal.tenant_id,
                     index_path=root / "runs" / principal.tenant_id / "skill_index.db",
                     model_config=model_config,
+                    max_criterion_timeout_s=_API_MAX_CRITERION_TIMEOUT_S,
                 )
             )
             from fastapi.responses import JSONResponse
@@ -507,6 +527,7 @@ def create_app(
             approve_default_tools=approve_tools,
             model_config=model_config,
         )
+        bundle.orchestrator.max_criterion_timeout_s = _API_MAX_CRITERION_TIMEOUT_S
         cost_usd = 0.0
         succeeded = False
         try:
@@ -522,14 +543,21 @@ def create_app(
             )
             cost_usd = float(state.spent.cost_usd or 0.0)
             succeeded = True
-        except Exception:
+        except RunIdExistsError as exc:
+            raise HTTPException(status_code=409, detail="run_id already exists") from exc
+        except Exception as exc:
             get_telemetry().emit(
                 "run.finished",
                 tenant_id=principal.tenant_id,
                 run_id=run_id,
                 terminal="error",
             )
-            raise HTTPException(status_code=500, detail="internal server error") from None
+            _log.exception(
+                "create_run failed tenant_id=%s run_id=%s",
+                principal.tenant_id,
+                run_id,
+            )
+            raise HTTPException(status_code=500, detail="internal server error") from exc
         finally:
             bundle.close()
             run_slots.release()
@@ -595,7 +623,12 @@ def create_app(
             workdir = _canonical_run_workdir(root, principal.tenant_id, run_id)
         if not workdir.exists():
             raise HTTPException(status_code=404, detail="run workdir not found")
+        try:
+            quota_store.admit(principal.tenant_id)
+        except QuotaExceeded as exc:
+            return _quota_error(exc, run_id=run_id)
         if not run_slots.acquire(blocking=False):
+            quota_store.release_inflight(principal.tenant_id)
             return v1_error(
                 429,
                 code="worker_busy",
@@ -603,24 +636,35 @@ def create_app(
                 run_id=run_id,
                 retryable=True,
             )
-        bundle = build_default_orchestrator(
-            root / "runs" / principal.tenant_id,
-            skills_root=skills_root,
-            facts_root=facts_root,
-            index_path=root / "runs" / principal.tenant_id / "skill_index.db",
-            approve_default_tools=(
-                _principal_may_exec(principal) or configured_backend() == "container"
-            ),
-        )
+        bundle = None
         try:
+            bundle = build_default_orchestrator(
+                root / "runs" / principal.tenant_id,
+                skills_root=skills_root,
+                facts_root=facts_root,
+                index_path=root / "runs" / principal.tenant_id / "skill_index.db",
+                approve_default_tools=(
+                    _principal_may_exec(principal) or configured_backend() == "container"
+                ),
+            )
+            bundle.orchestrator.max_criterion_timeout_s = _API_MAX_CRITERION_TIMEOUT_S
             state = bundle.orchestrator.resume(run_id, workdir=workdir)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except Exception:
-            raise HTTPException(status_code=500, detail="internal server error") from None
+        except Exception as exc:
+            _log.exception(
+                "resume_run failed tenant_id=%s run_id=%s",
+                principal.tenant_id,
+                run_id,
+            )
+            raise HTTPException(status_code=500, detail="internal server error") from exc
         finally:
-            bundle.close()
+            if bundle is not None:
+                bundle.close()
             run_slots.release()
+            # Resume admits a concurrency slot only. Daily spend stays on create's
+            # successful complete(); releasing here avoids charging the day twice.
+            quota_store.release_inflight(principal.tenant_id)
 
         existing = runs.get(run_key)
         rec = _record_from_state(

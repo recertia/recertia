@@ -54,6 +54,10 @@ class RoutingError(RuntimeError):
     """A node chose an illegal route, or produced an ambiguous one it should have resolved."""
 
 
+class RunIdExistsError(RuntimeError):
+    """``start`` refused because this ``run_id`` already has durable checkpoints."""
+
+
 class GraphOrchestrator:
     def __init__(
         self,
@@ -74,6 +78,7 @@ class GraphOrchestrator:
         one_off_log: Path | None = None,
         policy: "Policy | None" = None,
         on_finalize: Callable[["RunState"], None] | None = None,
+        max_criterion_timeout_s: int | None = None,
     ) -> None:
         self.runs_root = Path(runs_root)
         self.runs_root.mkdir(parents=True, exist_ok=True)
@@ -96,6 +101,7 @@ class GraphOrchestrator:
         self.one_off_log = one_off_log
         self.policy = policy
         self.on_finalize = on_finalize
+        self.max_criterion_timeout_s = max_criterion_timeout_s
         self.trajectories = TrajectoryStore(self.runs_root / "trajectories")
         self._trajectory_emitter = TrajectoryEmitter()
         self.audited_states = AuditedStateStore(self.runs_root / "audited_states")
@@ -191,6 +197,7 @@ class GraphOrchestrator:
             deterministic_guide=bool(
                 self.policy is not None and self.policy.improvement.deterministic_guide
             ),
+            max_criterion_timeout_s=self.max_criterion_timeout_s,
         )
 
     def _choose_route(self, node_name: str, outcome: NodeOutcome):
@@ -244,6 +251,11 @@ class GraphOrchestrator:
         import the T3 ablation module (ADR-0005). ``manifest`` pins model/library snapshot
         identity for measurement (M4).
         """
+
+        if self.checkpoints.latest_seq(run_id) is not None:
+            raise RunIdExistsError(
+                f"run_id {run_id!r} already has checkpoints; resume it instead of starting again"
+            )
 
         state = RunState(
             run_id=run_id,

@@ -14,6 +14,10 @@ from pathlib import Path
 from contracts.run import RunState
 
 
+class CheckpointConflict(RuntimeError):
+    """A checkpoint ``(run_id, seq)`` was inserted twice. Sequences are write-once."""
+
+
 class CheckpointStore:
     """SQLite-backed: one row per ``(run_id, seq)``, monotonically increasing per run."""
 
@@ -43,12 +47,18 @@ class CheckpointStore:
 
     def save(self, run_id: str, seq: int, node: str, next_node: str | None, state: RunState) -> None:
         with self._lock:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO checkpoints (run_id, seq, node, next_node, state_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?, datetime('now'))",
-                (run_id, seq, node, next_node, state.model_dump_json()),
-            )
-            self._conn.commit()
+            try:
+                self._conn.execute(
+                    "INSERT INTO checkpoints (run_id, seq, node, next_node, state_json, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, datetime('now'))",
+                    (run_id, seq, node, next_node, state.model_dump_json()),
+                )
+                self._conn.commit()
+            except sqlite3.IntegrityError as exc:
+                self._conn.rollback()
+                raise CheckpointConflict(
+                    f"checkpoint ({run_id!r}, seq={seq}) already exists"
+                ) from exc
 
     def latest(self, run_id: str) -> tuple[int, str, str | None, RunState] | None:
         """Returns ``(seq, node, next_node, state)`` for the most recent checkpoint, or ``None``."""
