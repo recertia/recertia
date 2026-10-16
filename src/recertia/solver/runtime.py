@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import contextvars
+import inspect
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from contracts.resources import ResourceClaim
+from recertia.ports.execution import CommandOrigin
 from recertia.solver.claims import ClaimScheduler
 from recertia.solver.registry import ToolRegistry, ToolResult
 from recertia.solver.sandbox import SandboxLimits
 
 if TYPE_CHECKING:
+    from recertia.ports.execution import CommandExecutor
     from recertia.solver.model import ModelClient
     from recertia.solver.result_cache import ToolResultCache
 
@@ -35,6 +38,37 @@ class StepInvokeContext:
 
     intent: str = ""
     params: dict = field(default_factory=dict)
+
+
+@dataclass
+class HandlerContext:
+    """Explicit invoke context. ContextVar shims stay for unmigrated handlers."""
+
+    workdir: Path
+    executor: "CommandExecutor | None" = None
+    limits: SandboxLimits | None = None
+    model: "ModelClient | None" = None
+    step: StepInvokeContext | None = None
+    run_id: str | None = None
+    owner_id: str | None = None
+    origin: CommandOrigin = "tool"
+
+
+def _accepts_handler_context(handler: Callable[..., object]) -> bool:
+    """True when the handler's second parameter is annotated as HandlerContext."""
+
+    try:
+        params = list(inspect.signature(handler).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    if len(params) < 2:
+        return False
+    ann = params[1].annotation
+    if ann is HandlerContext:
+        return True
+    name = getattr(ann, "__name__", None)
+    text = name if isinstance(name, str) else str(ann)
+    return "HandlerContext" in text
 
 
 def active_sandbox_limits() -> SandboxLimits:
@@ -151,7 +185,18 @@ class ToolRuntime:
                 emit_in_run("cache.hit", kind="tool", tool=tool_name)
                 return cached
             handler = self._registry.handler(tool_name)
-            result = handler(inputs, workdir)
+            if _accepts_handler_context(handler):
+                result = handler(
+                    inputs,
+                    HandlerContext(
+                        workdir=workdir,
+                        limits=self.sandbox_limits,
+                        model=self.model,
+                        step=step_context or StepInvokeContext(),
+                    ),
+                )
+            else:
+                result = handler(inputs, workdir)
             result.duration_s = time.monotonic() - started
             result.claimed = claims
             if not result.ok:

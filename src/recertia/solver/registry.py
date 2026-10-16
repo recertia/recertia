@@ -10,7 +10,6 @@ from __future__ import annotations
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Callable, Literal
 
 from contracts.resources import ResourceClaim
@@ -44,7 +43,8 @@ class ToolResult:
     claimed: list[ResourceClaim] = field(default_factory=list)
 
 
-Handler = Callable[[dict, Path], ToolResult]
+# Path for unmigrated handlers; HandlerContext when the second parameter says so.
+Handler = Callable[..., ToolResult]
 
 _GREP_MAX_FILE_BYTES = 2 * 1024 * 1024
 """Files larger than this are skipped by the in-process grep tool (vendored bundles, blobs)."""
