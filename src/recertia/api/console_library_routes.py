@@ -31,17 +31,11 @@ from recertia.jobs.enablement import attach_enablement
 from recertia.jobs.workers import (
     correction_miner_from_reviewer_edits,
     curator_active_set_and_dedup,
-    load_one_off_reasons,
     load_reviewer_edits,
     mine_from_repo_hints,
-    practice_from_fail_clusters,
-    practice_from_one_offs,
-    propose_compress,
     propose_hex_search,
     propose_parallelise,
     propose_serialise,
-    recertify_with_revokes,
-    schedule_shadow_evaluations,
 )
 from recertia.ledger import HashChainLedger
 from recertia.memory.procedural.active_set import recompute_active_set
@@ -590,10 +584,9 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         _require_library_write(request, principal, scope="jobs", min_role="reviewer")
-        from recertia.app.jobs import canonical_job
+        from recertia.app.jobs import JobDispatch, canonical_job, run_named_job
 
         name = canonical_job(job) or ""
-        from recertia.memory.episodic import EpisodicStore
         from recertia.memory.procedural.lineage import LineageServices
         from recertia.policy_load import load_policy
 
@@ -634,56 +627,24 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
                     ),
                     budget=budget,
                 )
-            elif name == "practice":
-                explicit = list(body.one_off) if body.one_off else None
-                episodic = EpisodicStore(runs_root / "episodic")
-                eligible = (
-                    episodic.clusters.eligible()
-                    if policy.improvement.fail_cluster_curriculum and not explicit
-                    else []
+            elif name in {"practice", "recertify", "shadow", "compress"}:
+                dispatched = run_named_job(
+                    name,
+                    JobDispatch(
+                        store=store,
+                        runner=runner,
+                        budget=budget,
+                        policy=policy,
+                        runs_root=runs_root,
+                        lineage=lineage,
+                        dry_run=body.dry_run,
+                        one_off=list(body.one_off) if body.one_off else None,
+                        tool_upgraded=body.tool_upgraded,
+                    ),
                 )
-                if eligible:
-                    curriculum = None if body.dry_run else runs_root / "practice-curriculum"
-                    result = runner.run(
-                        "fail_cluster_author",
-                        lambda: practice_from_fail_clusters(
-                            eligible, curriculum_dir=curriculum
-                        ),
-                        budget=budget,
-                    )
-                else:
-                    reasons = explicit if explicit else load_one_off_reasons(
-                        runs_root / "one_off_log.jsonl"
-                    )
-                    if not reasons:
-                        reasons = ["unsolved one-off cluster"]
-                    curriculum = None if body.dry_run else runs_root / "practice-curriculum"
-                    result = runner.run(
-                        "practice",
-                        lambda: practice_from_one_offs(reasons, curriculum_dir=curriculum),
-                        budget=budget,
-                    )
-            elif name == "recertify":
-                eval_store = EvalStore(runs_root / "evals.db")
-                try:
-                    result = runner.run(
-                        "recertify",
-                        lambda: recertify_with_revokes(
-                            store,
-                            lineage_index=lineage.index,
-                            revoke_queue=lineage.queue,
-                            max_writes=runner.quota.max_status_writes_per_tick,
-                            tool_upgraded=body.tool_upgraded,
-                            eval_store=eval_store,
-                        ),
-                        budget=budget,
-                    )
-                finally:
-                    eval_store.close()
-            elif name == "shadow":
-                result = runner.run(
-                    "shadow", lambda: schedule_shadow_evaluations(store), budget=budget
-                )
+                if dispatched is None:
+                    raise HTTPException(status_code=404, detail=f"unknown job {job}")
+                result = dispatched
             elif name in {"parallelise", "parallelize"}:
                 if not body.skill_id:
                     raise HTTPException(status_code=400, detail="skill_id required")
@@ -717,8 +678,6 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
                 )
             elif name in {"hex", "practice_hex"}:
                 result = runner.run("practice_hex", propose_hex_search, budget=budget)
-            elif name == "compress":
-                result = runner.run("compress", propose_compress, budget=budget)
             else:
                 raise HTTPException(status_code=404, detail=f"unknown job {job}")
         except HTTPException:
