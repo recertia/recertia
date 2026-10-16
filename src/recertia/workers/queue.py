@@ -7,6 +7,7 @@ Sync ``POST /v1/runs`` still executes on the request thread. This queue is what
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -74,6 +75,7 @@ class RunQueue:
         self._conn.isolation_level = None
         self._conn.row_factory = sqlite3.Row
         apply_migrations(self._conn, _MIGRATIONS)
+        _ensure_cancel_column(self._conn)
 
     def close(self) -> None:
         self._conn.close()
@@ -222,6 +224,91 @@ class RunQueue:
                 "UPDATE maintenance SET mode=?, since=? WHERE id=1",
                 (mode, _now()),
             )
+
+    def request_cancel(self, tenant: str, run_id: str, *, kind: str = "run") -> None:
+        ident = str(tenant_id(tenant))
+        with self._lock:
+            self._conn.execute(
+                """
+                UPDATE run_queue SET cancel_requested=1
+                WHERE tenant_id=? AND run_id=? AND kind=?
+                  AND status IN ('queued', 'claimed', 'running')
+                """,
+                (ident, run_id, kind),
+            )
+
+    def cancel_requested(self, tenant: str, run_id: str, *, kind: str = "run") -> bool:
+        ident = str(tenant_id(tenant))
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT cancel_requested FROM run_queue
+                WHERE tenant_id=? AND run_id=? AND kind=?
+                """,
+                (ident, run_id, kind),
+            ).fetchone()
+        if row is None or row[0] is None:
+            return False
+        return bool(row[0])
+
+    def outstanding(self) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT COUNT(*) FROM run_queue
+                WHERE status IN ('queued', 'claimed', 'running')
+                """
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def reconcile_orphans(self) -> int:
+        """Requeue or fail claims whose worker process is gone.
+
+        A live pid keeps its claim. A missing worker row, or a pid that does not
+        exist, is an expired lease: one more attempt goes back to ``queued``,
+        and an exhausted attempt becomes ``dead``.
+        """
+
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT q.tenant_id, q.run_id, q.kind, q.attempt, q.max_attempts, w.pid
+                FROM run_queue q
+                LEFT JOIN workers w ON w.worker_id = q.claimed_by
+                WHERE q.status IN ('claimed', 'running')
+                """
+            ).fetchall()
+            changed = 0
+            stamp = _now()
+            for row in rows:
+                if _pid_alive(row["pid"]):
+                    continue
+                attempt = int(row["attempt"])
+                max_attempts = int(row["max_attempts"])
+                key = (row["tenant_id"], row["run_id"], row["kind"])
+                if attempt + 1 >= max_attempts:
+                    self._conn.execute(
+                        """
+                        UPDATE run_queue
+                        SET status='dead', error_code='lease_expired', finished_at=?
+                        WHERE tenant_id=? AND run_id=? AND kind=?
+                          AND status IN ('claimed', 'running')
+                        """,
+                        (stamp, *key),
+                    )
+                else:
+                    self._conn.execute(
+                        """
+                        UPDATE run_queue
+                        SET status='queued', attempt=?, claimed_by=NULL, not_before=?,
+                            heartbeat_at=NULL
+                        WHERE tenant_id=? AND run_id=? AND kind=?
+                          AND status IN ('claimed', 'running')
+                        """,
+                        (attempt + 1, stamp, *key),
+                    )
+                changed += 1
+            return changed
 
     def register_worker(self, worker_id: str, *, capacity: int, hostname: str, pid: int) -> None:
         stamp = _now()
@@ -390,6 +477,28 @@ class RunQueue:
 
 def open_run_queue(root: Path | str) -> RunQueue:
     return RunQueue(RuntimeLayout(Path(root)).control_db)
+
+
+def _ensure_cancel_column(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(run_queue)")}
+    if "cancel_requested" not in cols:
+        conn.execute(
+            "ALTER TABLE run_queue ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0"
+        )
+
+
+def _pid_alive(pid: object) -> bool:
+    if isinstance(pid, bool) or not isinstance(pid, int | str):
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
 
 
 def _object_dict(raw: object) -> dict[str, Any]:

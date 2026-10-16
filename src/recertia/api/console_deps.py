@@ -69,14 +69,20 @@ class ConsoleContext:
         self.programs = ProgramStore(root / "programs.sqlite")
         self.job_runs = JobRunStore(root / "job_runs.sqlite")
         self._program_idempotency: dict[str, str] = {}
+        from recertia.workers.embedded import EmbeddedQueueWorker
+        from recertia.workers.queue import open_run_queue
         from recertia.workers.run_worker import AsyncRunWorker
 
         self.events = RunEventLog(root)
+        self.queue = open_run_queue(root)
+        self.queue.reconcile_orphans()
         self.worker = AsyncRunWorker(
             events=self.events,
             on_complete=self._on_async_complete,
             on_failed=self._on_async_failed,
         )
+        self.worker.attach_queue(self.queue)
+        self.embedded = EmbeddedQueueWorker(self.worker, self.queue)
         self._cancel_flags: set[str] = set()
 
     def tenant_skills_root(self, tenant_id: str) -> Path:

@@ -559,30 +559,45 @@ def create_app(
                 workspace_id=body.workspace_id,
                 workdir=str(workdir),
             )
-            from recertia.workers.run_worker import AsyncRunRequest
-
             runs[run_key] = placeholder
-            console_ctx.worker.submit(
-                AsyncRunRequest(
-                    run_id=run_id,
-                    tenant_id=principal.tenant_id,
-                    goal=body.goal,
-                    request=request,
-                    task_class=body.task_class,
-                    criteria=criteria,
-                    budget=budget,
-                    workdir=workdir,
-                    script=body.script,
-                    arm=body.arm,
-                    approve_tools=approve_tools,
-                    skills_root=console_ctx.tenant_skills_root(principal.tenant_id),
-                    facts_root=facts_root,
-                    runs_root=root / "runs" / principal.tenant_id,
-                    index_path=root / "runs" / principal.tenant_id / "skill_index.db",
-                    model_config=model_config,
-                    max_criterion_timeout_s=_api_max_criterion_timeout_s(),
-                )
+            from recertia.workers.queue import QueueItem
+            from recertia.workers.run_worker import AsyncRunRequest, dump_async_request
+
+            queued = AsyncRunRequest(
+                run_id=run_id,
+                tenant_id=principal.tenant_id,
+                goal=body.goal,
+                request=request,
+                task_class=body.task_class,
+                criteria=criteria,
+                budget=budget,
+                workdir=workdir,
+                script=body.script,
+                arm=body.arm,
+                approve_tools=approve_tools,
+                skills_root=console_ctx.tenant_skills_root(principal.tenant_id),
+                facts_root=facts_root,
+                runs_root=root / "runs" / principal.tenant_id,
+                index_path=root / "runs" / principal.tenant_id / "skill_index.db",
+                model_config=model_config,
+                max_criterion_timeout_s=_api_max_criterion_timeout_s(),
             )
+            console_ctx.events.append(
+                principal.tenant_id, run_id, "run.queued", {"mode": "async"}
+            )
+            try:
+                console_ctx.queue.enqueue(
+                    QueueItem(
+                        tenant_id=principal.tenant_id,
+                        run_id=run_id,
+                        kind="run",
+                        payload=dump_async_request(queued),
+                    )
+                )
+            except Exception:
+                run_service.release(principal.tenant_id)
+                raise
+            console_ctx.embedded.ensure_started()
             from fastapi.responses import JSONResponse
 
             return JSONResponse(

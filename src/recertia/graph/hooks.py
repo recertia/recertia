@@ -34,6 +34,31 @@ class HopHook(Protocol):
     ) -> None: ...
 
 
+class RunCancelled(RuntimeError):
+    """The queue asked this run to stop at a hop boundary."""
+
+
+class CancelHopHook:
+    """Raise ``RunCancelled`` when the caller-supplied flag is set."""
+
+    def __init__(self, cancelled: Any) -> None:
+        self._cancelled = cancelled
+
+    def before(self, hop: Hop) -> None:
+        if self._cancelled():
+            raise RunCancelled(hop.run_id)
+
+    def after(
+        self,
+        hop: Hop,
+        outcome: NodeOutcome,
+        *,
+        hop_ms: float,
+        idle_gap_ms: float,
+    ) -> None:
+        del hop, outcome, hop_ms, idle_gap_ms
+
+
 class StateHop(Protocol):
     """A post-node adjustment that may replace run state. Failures propagate."""
 

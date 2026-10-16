@@ -10,8 +10,9 @@ from contracts.budget import Budget
 from contracts.common import Arm
 from contracts.criteria import TaskCriterion
 from contracts.run import Task
+from recertia.graph.hooks import CancelHopHook, RunCancelled
 from recertia.ports.identity import Principal
-from recertia.workers.queue import Claim, open_run_queue
+from recertia.workers.queue import Claim, RunQueue, open_run_queue
 
 
 def _arm(value: object) -> Arm:
@@ -45,7 +46,7 @@ def worker_id() -> str:
     return f"{_hostname()}-{os.getpid()}"
 
 
-def execute_claim(root: Path, claim: Claim) -> None:
+def execute_claim(root: Path, claim: Claim, *, queue: RunQueue | None = None) -> None:
     """Run one queued item to a graph return. The queue row is updated by the caller."""
 
     if claim.kind != "run":
@@ -96,6 +97,11 @@ def execute_claim(root: Path, claim: Claim) -> None:
         principal=principal,
         surface="worker",
     )
+    if queue is not None:
+        bundle.orchestrator.hooks = [
+            CancelHopHook(lambda: queue.cancel_requested(claim.tenant_id, claim.run_id)),
+            *bundle.orchestrator.hooks,
+        ]
     try:
         bundle.orchestrator.start(
             claim.run_id,
@@ -124,6 +130,7 @@ def run_once(root: Path, *, worker: str, capacity: int = 1) -> int:
     queue = open_run_queue(root)
     claim: Claim | None = None
     try:
+        queue.reconcile_orphans()
         queue.register_worker(
             worker, capacity=capacity, hostname=_hostname(), pid=os.getpid()
         )
@@ -134,7 +141,10 @@ def run_once(root: Path, *, worker: str, capacity: int = 1) -> int:
         queue.heartbeat_claim(claim)
         queue.mark_running(claim)
         try:
-            execute_claim(root, claim)
+            execute_claim(root, claim, queue=queue)
+        except RunCancelled:
+            queue.finish(claim, status="cancelled")
+            return 1
         except Exception:
             queue.finish(claim, status="failed", error_code="run_failed")
             raise

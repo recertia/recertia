@@ -23,7 +23,14 @@ from contracts.criteria import TaskCriterion
 from contracts.graph import legal_routes
 from contracts.run import RouteEntry, RunManifest, RunState, Task, WorkspaceSnapshot
 from contracts.trajectory import TrajectoryEvent
-from recertia.graph.hooks import Hop, HopHook, StateHop, default_hop_hooks, default_state_hops
+from recertia.graph.hooks import (
+    Hop,
+    HopHook,
+    RunCancelled,
+    StateHop,
+    default_hop_hooks,
+    default_state_hops,
+)
 from recertia.graph.lease import RunLease
 from recertia.graph.persistence import RunPersistence, open_run_persistence
 from recertia.memory.procedural.capability import CandidateSkillStoreAdapter
@@ -216,6 +223,8 @@ class GraphOrchestrator:
         for hook in self.hooks:
             try:
                 hook.before(hop)
+            except RunCancelled:
+                raise
             except Exception:
                 _log.warning("hop hook before failed for %s", hop.node, exc_info=True)
 

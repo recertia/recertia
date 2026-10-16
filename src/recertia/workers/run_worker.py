@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -43,6 +43,75 @@ class AsyncRunRequest:
     index_path: Path
     model_config: ModelConfig | None = None
     max_criterion_timeout_s: int | None = None
+    cancel_check: Callable[[], bool] | None = None
+
+
+def dump_async_request(req: AsyncRunRequest) -> dict[str, Any]:
+    """JSON payload stored on ``run_queue``. The cancel callback is not persisted."""
+
+    return {
+        "run_id": req.run_id,
+        "tenant_id": req.tenant_id,
+        "goal": req.goal.model_dump(mode="json") if req.goal is not None else None,
+        "request": req.request,
+        "task_class": req.task_class,
+        "criteria": [item.model_dump(mode="json") for item in req.criteria],
+        "budget": req.budget.model_dump(mode="json"),
+        "workdir": str(req.workdir),
+        "script": req.script,
+        "arm": req.arm,
+        "approve_tools": req.approve_tools,
+        "skills_root": str(req.skills_root),
+        "facts_root": str(req.facts_root),
+        "runs_root": str(req.runs_root),
+        "index_path": str(req.index_path),
+        "model_config": asdict(req.model_config) if req.model_config is not None else None,
+        "max_criterion_timeout_s": req.max_criterion_timeout_s,
+    }
+
+
+def load_async_request(payload: dict[str, Any]) -> AsyncRunRequest:
+    from contracts.goal import Goal
+
+    goal_raw = payload.get("goal")
+    budget_raw = payload.get("budget")
+    model_raw = payload.get("model_config")
+    criteria_raw = payload.get("criteria") or []
+    script_raw = payload.get("script")
+    script: list[str] | None
+    if isinstance(script_raw, list) and all(isinstance(part, str) for part in script_raw):
+        script = list(script_raw)
+    else:
+        script = None
+    raw_arm = payload.get("arm")
+    chosen: Arm = "treatment"
+    if raw_arm == "control":
+        chosen = "control"
+    elif raw_arm == "shadow":
+        chosen = "shadow"
+    elif raw_arm == "practice":
+        chosen = "practice"
+    return AsyncRunRequest(
+        run_id=str(payload.get("run_id") or ""),
+        tenant_id=str(payload.get("tenant_id") or ""),
+        goal=Goal.model_validate(goal_raw) if isinstance(goal_raw, dict) else None,
+        request=payload.get("request") if isinstance(payload.get("request"), str) else None,
+        task_class=payload.get("task_class") if isinstance(payload.get("task_class"), str) else None,
+        criteria=[TaskCriterion.model_validate(item) for item in criteria_raw],
+        budget=Budget.model_validate(budget_raw) if isinstance(budget_raw, dict) else Budget(),
+        workdir=Path(str(payload.get("workdir") or ".")),
+        script=script,
+        arm=chosen,
+        approve_tools=bool(payload.get("approve_tools")),
+        skills_root=Path(str(payload.get("skills_root") or "skills")),
+        facts_root=Path(str(payload.get("facts_root") or "facts")),
+        runs_root=Path(str(payload.get("runs_root") or ".recertia/runs")),
+        index_path=Path(str(payload.get("index_path") or ".recertia/skill_index.db")),
+        model_config=ModelConfig(**model_raw) if isinstance(model_raw, dict) else None,
+        max_criterion_timeout_s=payload.get("max_criterion_timeout_s")
+        if isinstance(payload.get("max_criterion_timeout_s"), int)
+        else None,
+    )
 
 
 class AsyncRunWorker:
@@ -61,6 +130,12 @@ class AsyncRunWorker:
         self._cancel: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
         self._futures: dict[tuple[str, str], Future[Any]] = {}
+        self._queue: Any = None
+
+    def attach_queue(self, queue: Any) -> None:
+        """Forward cancel onto the durable queue. The pool remains the shim."""
+
+        self._queue = queue
 
     def shutdown(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
@@ -68,6 +143,9 @@ class AsyncRunWorker:
     def request_cancel(self, tenant_id: str, run_id: str) -> None:
         with self._lock:
             self._cancel.add((tenant_id, run_id))
+        queue = self._queue
+        if queue is not None:
+            queue.request_cancel(tenant_id, run_id)
 
     def is_cancelled(self, tenant_id: str, run_id: str) -> bool:
         with self._lock:
@@ -83,17 +161,17 @@ class AsyncRunWorker:
         if self.on_failed is not None:
             self.on_failed(req.tenant_id, req.run_id, cancelled=cancelled)
 
-    def _run(self, req: AsyncRunRequest) -> None:
+    def _run(self, req: AsyncRunRequest) -> str:
         self.events.append(
             req.tenant_id,
             req.run_id,
             "run.started",
             {"task_class": req.task_class or "repo-chore", "mode": "async"},
         )
-        if self.is_cancelled(req.tenant_id, req.run_id):
+        if self.is_cancelled(req.tenant_id, req.run_id) or self._cancel_flag(req):
             self.events.append(req.tenant_id, req.run_id, "run.cancelled", {"by": "operator"})
             self._fail(req, cancelled=True)
-            return
+            return "cancelled"
         task_class = resolve_task_class(
             explicit=req.task_class,
             goal_task_class=req.goal.task_class if req.goal else None,
@@ -131,22 +209,38 @@ class AsyncRunWorker:
             model_config=req.model_config,
         )
         bundle.orchestrator.max_criterion_timeout_s = req.max_criterion_timeout_s
+        if req.cancel_check is not None:
+            from recertia.graph.hooks import CancelHopHook
+
+            bundle.orchestrator.hooks = [
+                CancelHopHook(req.cancel_check),
+                *bundle.orchestrator.hooks,
+            ]
         try:
-            # Cooperative cancel is checked via cancel set; full mid-node cancel lands later.
-            if self.is_cancelled(req.tenant_id, req.run_id):
+            if self.is_cancelled(req.tenant_id, req.run_id) or self._cancel_flag(req):
                 self.events.append(req.tenant_id, req.run_id, "run.cancelled", {"by": "operator"})
                 self._fail(req, cancelled=True)
-                return
-            state = bundle.orchestrator.start(
-                req.run_id,
-                task,
-                req.criteria,
-                budget=req.budget,
-                workdir=req.workdir,
-                script=req.script,
-                arm=req.arm,
-                manifest=bundle.run_manifest(),
-            )
+                return "cancelled"
+            from recertia.graph.engine import RunIdExistsError
+            from recertia.graph.hooks import RunCancelled
+
+            try:
+                state = bundle.orchestrator.start(
+                    req.run_id,
+                    task,
+                    req.criteria,
+                    budget=req.budget,
+                    workdir=req.workdir,
+                    script=req.script,
+                    arm=req.arm,
+                    manifest=bundle.run_manifest(),
+                )
+            except RunCancelled:
+                raise
+            except RunIdExistsError:
+                state = bundle.orchestrator.resume(
+                    req.run_id, workdir=req.workdir, script=req.script
+                )
             self.events.append(
                 req.tenant_id,
                 req.run_id,
@@ -159,6 +253,11 @@ class AsyncRunWorker:
             )
             if self.on_complete is not None:
                 self.on_complete(req.tenant_id, req.run_id, state)
+            return "succeeded"
+        except RunCancelled:
+            self.events.append(req.tenant_id, req.run_id, "run.cancelled", {"by": "operator"})
+            self._fail(req, cancelled=True)
+            return "cancelled"
         except Exception as exc:  # noqa: BLE001
             self.events.append(
                 req.tenant_id,
@@ -173,8 +272,14 @@ class AsyncRunWorker:
                 {"terminal": "error", "cost_usd": 0.0, "attempt_no": 0},
             )
             self._fail(req, cancelled=False)
+            return "failed"
         finally:
             bundle.close()
+
+    def _cancel_flag(self, req: AsyncRunRequest) -> bool:
+        if req.cancel_check is None:
+            return False
+        return bool(req.cancel_check())
 
 
 def serve() -> None:
