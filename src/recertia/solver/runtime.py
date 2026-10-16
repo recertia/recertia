@@ -40,7 +40,7 @@ class StepInvokeContext:
 def active_sandbox_limits() -> SandboxLimits:
     """Limits for the in-flight ``ToolRuntime.invoke`` (handlers may read this)."""
 
-    return _ACTIVE_SANDBOX_LIMITS.get() or SandboxLimits.from_policy()
+    return _ACTIVE_SANDBOX_LIMITS.get() or SandboxLimits()
 
 
 def active_model() -> "ModelClient | None":
@@ -87,10 +87,13 @@ class ToolRuntime:
         self.approval_gate = approval_gate
         self.model = model
         self.result_cache = result_cache
+        to_limits = getattr(sandbox_policy, "to_limits", None) if sandbox_policy is not None else None
         if sandbox_limits is not None:
             self.sandbox_limits = sandbox_limits
+        elif callable(to_limits):
+            self.sandbox_limits = to_limits()
         else:
-            self.sandbox_limits = SandboxLimits.from_policy(sandbox_policy)
+            self.sandbox_limits = SandboxLimits()
 
     @property
     def invocations(self) -> Sequence[ToolResult]:

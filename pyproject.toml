@@ -129,9 +129,6 @@ forbidden_modules = [
     "recertia.evals.interventions",
     "recertia.evals.faithfulness",
 ]
-ignore_imports = [
-    "recertia.solver.sandbox -> recertia.governance.sandbox",
-]
 
 [[tool.importlinter.contracts]]
 name = "no-replay"

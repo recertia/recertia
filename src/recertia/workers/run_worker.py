@@ -1,4 +1,8 @@
-"""In-process async run worker (console C2)."""
+"""In-process async run worker (console C2).
+
+``serve`` is the process entry composition root. It loads ``Settings`` and
+refuses an unsafe ``multi_node`` configuration before any run is claimed.
+"""
 
 from __future__ import annotations
 
@@ -158,3 +162,17 @@ class AsyncRunWorker:
             self._fail(req, cancelled=False)
         finally:
             bundle.close()
+
+
+def serve() -> None:
+    """Worker composition root. Validates deployment, then returns (in-process pool)."""
+
+    from recertia.errors import RecertiaError
+    from recertia.settings import load_settings
+
+    settings = load_settings()
+    try:
+        settings.validate_deployment(role="worker")
+    except RecertiaError:
+        raise
+    return None

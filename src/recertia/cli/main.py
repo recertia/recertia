@@ -46,6 +46,25 @@ from recertia.cli.trajectory_cmd import register_trajectory_commands
 from recertia.cli.workspaces import register_workspaces_commands
 
 app = typer.Typer(help="Recertia: a self-improving agent system.")
+
+
+@app.callback()
+def _load_process_settings(ctx: typer.Context) -> None:
+    """Composition root: load Settings once and bind the local operator principal."""
+
+    from recertia.errors import RecertiaError
+    from recertia.ports.identity import Principal
+    from recertia.settings import load_settings
+
+    try:
+        settings = load_settings()
+        settings.validate_deployment(role="cli")
+    except RecertiaError as exc:
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    ctx.obj = {"settings": settings, "principal": Principal.local_operator()}
+
+
 register_run_commands(app)
 register_skills_commands(app)
 register_keys_commands(app)

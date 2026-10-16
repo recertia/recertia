@@ -322,7 +322,12 @@ def create_app(
     root: Path | None = None,
     skills_root: Path | None = None,
     facts_root: Path | None = None,
+    settings: object | None = None,
 ) -> FastAPI:
+    from recertia.settings import Settings, load_settings
+
+    loaded = settings if isinstance(settings, Settings) else load_settings()
+    loaded.validate_deployment(role="api")
     root = root or DEFAULT_ROOT
     root.mkdir(parents=True, exist_ok=True)
     skills_root = Path(skills_root) if skills_root is not None else Path("skills")

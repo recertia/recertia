@@ -28,7 +28,6 @@ def test_container_refuses_network(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 def test_sandbox_limits_default_no_network() -> None:
     assert SandboxLimits().allow_network is False
-    assert SandboxLimits.from_policy(None).allow_network is False
 
 
 def test_container_spec_default_network_none() -> None:

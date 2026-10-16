@@ -18,18 +18,12 @@ from typing import Callable
 
 from fastapi import Header, HTTPException
 
-_TENANT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+from recertia.ports.identity import Principal, tenant_id
+
 _ALLOWED_SCOPES = frozenset({"runs", "blobs", "metrics", "admin", "exec", "promote", "jobs"})
 
 # New secrets: rec_<key_id>.<token> — enables O(1) lookup by key_id.
 _STRUCTURED_SECRET_RE = re.compile(r"^rec_(key_[0-9a-f]+)\.([A-Za-z0-9_-]+)$")
-
-
-@dataclass(frozen=True)
-class Principal:
-    key_id: str
-    tenant_id: str
-    scopes: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -40,13 +34,8 @@ class IssuedApiKey:
     scopes: frozenset[str]
 
 
-def validate_tenant_id(tenant_id: str) -> str:
-    if not _TENANT_ID_RE.fullmatch(tenant_id):
-        raise ValueError(
-            "tenant_id must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ "
-            "(no path separators or traversal)"
-        )
-    return tenant_id
+def validate_tenant_id(value: str) -> str:
+    return str(tenant_id(value))
 
 
 def validate_scopes(scopes: set[str] | frozenset[str]) -> frozenset[str]:
@@ -199,7 +188,7 @@ class ApiKeyStore:
             )
             return None
         self._audit(conn, "authenticated", key_id=key_id, actor=key_id, detail="success")
-        return Principal(key_id=key_id, tenant_id=tenant_id, scopes=scope_set)
+        return Principal.from_api_key(key_id=key_id, tenant_id=tenant_id, scopes=scope_set)
 
     def authenticate(self, secret: str | None) -> Principal | None:
         if not secret:
