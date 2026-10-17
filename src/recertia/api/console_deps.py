@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
-from recertia.api.console_auth import ConsoleUser, SessionStore
+from recertia.api.console_auth import ConsoleUser, SessionStore, console_session
 from recertia.api.events import RunEventLog
 from recertia.api.jobs_store import JobRunStore
 from recertia.api.quotas import QuotaStore
@@ -140,10 +140,7 @@ class RouteState:
         self.require_metrics = ctx.require_scope("metrics", ctx.key_store)
 
     def optional_console_user(self, request: Request) -> ConsoleUser | None:
-        token = request.headers.get("X-Recertia-Session") or request.cookies.get(
-            "recertia_session"
-        )
-        return self.ctx.sessions.parse(token)
+        return console_session(self.ctx.sessions, request)
 
     def resolve_tenant(
         self,

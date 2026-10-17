@@ -26,9 +26,10 @@ def test_local_operator_is_platform_admin() -> None:
     assert principal.key_id.startswith("cli:")
 
 
-def test_resolve_principal_rejects_key_and_session_together(tmp_path) -> None:
+def test_resolve_principal_rejects_key_and_session_together(tmp_path, monkeypatch) -> None:
     from recertia.api.auth import ApiKeyStore
 
+    monkeypatch.setenv("RECERTIA_CONSOLE_AUTH", "dev")
     store = ApiKeyStore(tmp_path / "keys.sqlite")
     issued = store.issue(tenant_id="t1", scopes={"runs"}, actor="test")
     request = SimpleNamespace(
@@ -37,6 +38,25 @@ def test_resolve_principal_rejects_key_and_session_together(tmp_path) -> None:
     )
     with pytest.raises(Forbidden):
         resolve_principal(request, issued.secret, keys=store)  # type: ignore[arg-type]
+
+
+def test_auth_off_ignores_a_session_cookie(tmp_path, monkeypatch) -> None:
+    from recertia.api.auth import ApiKeyStore
+
+    monkeypatch.setenv("RECERTIA_CONSOLE_AUTH", "off")
+    store = ApiKeyStore(tmp_path / "keys.sqlite")
+    issued = store.issue(tenant_id="t1", scopes={"runs"}, actor="test")
+    request = SimpleNamespace(
+        cookies={"recertia_session": "cookie"},
+        headers={"x-recertia-session": "header"},
+    )
+    principal = resolve_principal(
+        request,  # type: ignore[arg-type]
+        issued.secret,
+        keys=store,
+        session_user=SimpleNamespace(user_id="ada"),
+    )
+    assert principal.kind == "api_key"
 
 
 def test_resolve_principal_returns_ports_principal(tmp_path) -> None:

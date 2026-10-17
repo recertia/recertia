@@ -26,6 +26,18 @@ from recertia.api.console_routes import (
 )
 
 
+def _reject_foreign_origin(request: Request) -> None:
+    """Cookie POSTs with an Origin must match the Host. A missing Origin is allowed."""
+
+    origin = request.headers.get("origin")
+    if not origin:
+        return
+    host = request.headers.get("host") or ""
+    allowed = {f"http://{host}", f"https://{host}"}
+    if origin.rstrip("/") not in allowed:
+        raise HTTPException(status_code=403, detail="origin rejected")
+
+
 def register_session_routes(app: FastAPI, rs: RouteState) -> None:
     ctx = rs.ctx
     require_runs = rs.require_runs
@@ -52,7 +64,8 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
         }
 
     @app.post("/v1/auth/dev-login")
-    def dev_login(body: DevLogin, response: Response) -> dict[str, Any]:
+    def dev_login(body: DevLogin, request: Request, response: Response) -> dict[str, Any]:
+        _reject_foreign_origin(request)
         if not dev_login_enabled():
             raise HTTPException(status_code=404, detail="dev login disabled")
         requested = frozenset(body.roles) or frozenset({"operator"})
@@ -78,12 +91,14 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
         return {"ok": True, "user": _public_user(user)}
 
     @app.post("/v1/auth/logout")
-    def logout(response: Response) -> dict[str, str]:
+    def logout(request: Request, response: Response) -> dict[str, str]:
+        _reject_foreign_origin(request)
         response.delete_cookie("recertia_session", path="/")
         return {"status": "ok"}
 
     @app.post("/v1/auth/switch-tenant")
     def switch_tenant(body: TenantSwitch, request: Request, response: Response) -> dict[str, Any]:
+        _reject_foreign_origin(request)
         user = _optional_console_user(request)
         if user is None:
             raise HTTPException(status_code=401, detail="console authentication required")

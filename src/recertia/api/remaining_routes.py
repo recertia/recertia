@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Header, Request
 from pydantic import BaseModel, Field, ValidationError
 
+from recertia.api.console_auth import console_session
 from recertia.api.console_routes import ConsoleContext
 from recertia.api.errors import V1HTTPError
 from recertia.evals.golden import run_eval_suite
@@ -89,10 +90,7 @@ def _tenant(
     request: Request,
     x_recertia_tenant: str | None,
 ) -> str:
-    token = request.headers.get("X-Recertia-Session") or request.cookies.get(
-        "recertia_session"
-    )
-    user = ctx.sessions.parse(token)
+    user = console_session(ctx.sessions, request)
     if x_recertia_tenant:
         if user is not None:
             if x_recertia_tenant not in user.tenants:
@@ -216,10 +214,7 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
-        token = request.headers.get("X-Recertia-Session") or request.cookies.get(
-            "recertia_session"
-        )
-        user = ctx.sessions.parse(token)
+        user = console_session(ctx.sessions, request)
         actor = user.user_id if user else ledger_actor(principal)
         rec = ProposalRecord(
             proposal_id=uuid4().hex[:12],
@@ -269,10 +264,7 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
             raise V1HTTPError(
                 400, code="invalid_decision", message="approve|reject|request_changes"
             )
-        token = request.headers.get("X-Recertia-Session") or request.cookies.get(
-            "recertia_session"
-        )
-        user = ctx.sessions.parse(token)
+        user = console_session(ctx.sessions, request)
         actor = user.user_id if user else ledger_actor(principal)
         rec = ctx.proposals.get(decision_id, tenant_id=tenant_id)
         if rec is None:

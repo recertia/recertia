@@ -66,7 +66,7 @@ class SessionCookieKwargs(TypedDict):
 def session_cookie_kwargs() -> SessionCookieKwargs:
     return {
         "httponly": True,
-        "samesite": "lax",
+        "samesite": "strict",
         "secure": cookie_secure(),
         "path": "/",
     }
@@ -335,6 +335,15 @@ def oidc_exchange_code(
     )
 
 
+def console_session(sessions: SessionStore, request: Request) -> ConsoleUser | None:
+    """Parse a browser session. Auth mode ``off`` ignores cookies and headers."""
+
+    if auth_mode() == "off":
+        return None
+    token = request.headers.get("X-Recertia-Session") or request.cookies.get("recertia_session")
+    return sessions.parse(token)
+
+
 def require_console_user(
     request: Request,
     sessions: SessionStore,
@@ -343,8 +352,8 @@ def require_console_user(
     x_recertia_session: str | None = Header(default=None, alias="X-Recertia-Session"),
     x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
 ) -> ConsoleUser:
-    token = x_recertia_session or request.cookies.get("recertia_session")
-    user = sessions.parse(token)
+    del x_recertia_session
+    user = console_session(sessions, request)
     if user is None:
         raise HTTPException(status_code=401, detail="console authentication required")
     if not user.may(min_role):

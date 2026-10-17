@@ -36,8 +36,15 @@ def resolve_principal(
 ) -> Principal:
     """API key or console session. Both presented is ``Forbidden`` (no merge)."""
 
-    cookie = request.cookies.get("recertia_session") if request is not None else None
-    header_session = request.headers.get("x-recertia-session") if request is not None else None
+    from recertia.api.console_auth import auth_mode
+
+    sessions_on = auth_mode() != "off"
+    cookie = request.cookies.get("recertia_session") if request is not None and sessions_on else None
+    header_session = (
+        request.headers.get("x-recertia-session") if request is not None and sessions_on else None
+    )
+    if not sessions_on:
+        session_user = None
     has_session = bool(cookie or header_session or session_user is not None)
     has_key = bool(x_api_key)
     if has_key and has_session:
