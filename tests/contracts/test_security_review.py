@@ -134,9 +134,11 @@ def test_ast_controls_flag_missing_umask_and_origin(tmp_path: Path) -> None:
     results = {item.id: item.ok for item in check_ast_controls(tmp_path)}
     assert results["api-umask-077"] is False
     assert results["cookie-post-origin-check"] is False
+    assert results["oidc-authorize-nonce"] is False
     live = {item.id: item.ok for item in check_ast_controls(REPO_ROOT)}
     assert live["api-umask-077"] is True
     assert live["cookie-post-origin-check"] is True
+    assert live["oidc-authorize-nonce"] is True
 
 
 def test_subprocess_list_form_is_clean(tmp_path: Path) -> None:

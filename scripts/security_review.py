@@ -598,6 +598,22 @@ def _cookie_posts_check_origin(root: Path) -> bool:
     return found == set(_COOKIE_POSTS)
 
 
+def _oidc_authorize_sends_nonce(root: Path) -> bool:
+    path = root / "src" / "recertia" / "api" / "console_auth.py"
+    if not path.is_file():
+        return False
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name != "oidc_authorize_url":
+            continue
+        constants = {item.value for item in ast.walk(node) if isinstance(item, ast.Constant)}
+        return "nonce" in constants
+    return False
+
+
 def _policy_decision_point_referenced(root: Path) -> bool:
     defined = False
     used = False
@@ -656,6 +672,12 @@ def check_ast_controls(root: Path) -> list[ControlResult]:
             _cookie_posts_check_origin(root),
             "src/recertia/api/console_session_routes.py",
             "dev-login, logout, and switch-tenant must reject a foreign Origin",
+        ),
+        (
+            "oidc-authorize-nonce",
+            _oidc_authorize_sends_nonce(root),
+            "src/recertia/api/console_auth.py",
+            "OIDC authorize URL must include a nonce",
         ),
     )
     return [
