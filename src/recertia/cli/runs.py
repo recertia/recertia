@@ -389,6 +389,37 @@ def ledger_verify(
     typer.echo(f"ledger OK: {report.entries} entries verified{anchor}")
 
 
+@ledger_app.command("rekey")
+def ledger_rekey(
+    runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
+    tenant: Optional[str] = typer.Option(None, "--tenant"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Count unsigned and signed lines. Does not rewrite the ledger.",
+    ),
+) -> None:
+    """Report unsigned vs signed lines. Historical lines are not rewritten."""
+
+    if not dry_run:
+        typer.echo("pass --dry-run; rekey does not rewrite historical lines", err=True)
+        raise typer.Exit(code=2)
+    from recertia.ledger.signer import SIG_FIELD
+
+    ledger = HashChainLedger(_ledger_path(runs_root, tenant))
+    try:
+        rows = ledger.entries()
+    except LedgerVerificationError as exc:
+        typer.echo(f"LEDGER INVALID: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    except LedgerUnavailable as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    unsigned = sum(1 for entry in rows if entry.evidence.get(SIG_FIELD) is None)
+    signed = len(rows) - unsigned
+    typer.echo(f"unsigned={unsigned} signed={signed}")
+
+
 @ledger_app.command("repair")
 def ledger_repair(
     ctx: typer.Context,

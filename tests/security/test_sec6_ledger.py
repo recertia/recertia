@@ -40,6 +40,34 @@ def test_check_anchor_is_a_skip(tmp_path: Path) -> None:
     assert "anchor check skipped" in result.output
 
 
+def test_ledger_rekey_dry_run_counts_signatures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from recertia.cli.main import app
+
+    path = tmp_path / "ledger.jsonl"
+    ledger = HashChainLedger(path)
+    ledger.append(actor="a", action="write", target="legacy", at=datetime.now(timezone.utc))
+    monkeypatch.setenv("RECERTIA_LEDGER_HMAC_KEY", "test-ledger-key")
+    ledger.append(actor="a", action="write", target="cutover", at=datetime.now(timezone.utc))
+    before = path.read_bytes()
+    runner = CliRunner()
+
+    refused = runner.invoke(app, ["ledger", "rekey", "--runs-root", str(tmp_path)])
+    assert refused.exit_code == 2
+    assert "dry-run" in refused.output
+    assert path.read_bytes() == before
+
+    counted = runner.invoke(
+        app, ["ledger", "rekey", "--runs-root", str(tmp_path), "--dry-run"]
+    )
+    assert counted.exit_code == 0, counted.output
+    assert "unsigned=1 signed=1" in counted.output
+    assert path.read_bytes() == before
+
+
 def test_ledger_actor_is_the_principal_subject() -> None:
     from recertia.ports.identity import Principal, ledger_actor
 
