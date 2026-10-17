@@ -178,6 +178,17 @@ def test_runs_create_requires_runs_scope() -> None:
         pdp.require(metrics, "runs.create", resource)
 
 
+def test_runs_read_requires_runs_scope() -> None:
+    pdp = _pdp()
+    resource = Resource(tenant_id="t1")
+    pdp.require(_runs_only(), "runs.read", resource)
+    metrics = Principal.from_api_key(
+        key_id="metrics", tenant_id="t1", scopes=frozenset({"metrics"})
+    )
+    with pytest.raises(Forbidden):
+        pdp.require(metrics, "runs.read", resource)
+
+
 def test_runs_script_requires_exec_or_admin() -> None:
     pdp = _pdp()
     resource = Resource(tenant_id="t1")

@@ -10,10 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **SEC-7 PDP.require** — `PolicyDecisionPoint.decide` / `require` implement the
-  action table (`runs.create`, `runs.script`, `runs.cancel` other-tenant → 404,
-  `workspace.register` / `skill.promote_seed` as `platform_admin`). First consumer
-  is `POST /v1/runs` script/create. `eval.run` still accepts `metrics` or `evals`
-  until a distinct evals key scope is issued.
+  action table (`runs.create`, `runs.read`, `runs.script`, `runs.cancel`
+  other-tenant → 404, `workspace.register` / `skill.promote_seed` as
+  `platform_admin`). `RunService.create` / `resume` / `get` are the first
+  consumers. `eval.run` still accepts `metrics` or `evals` until a distinct
+  evals key scope is issued.
 - **Store Receipts P1** — `{runs_root}/receipts.jsonl` dual-write next to the
   ledger, `recertia receipt show/verify/close` (advisory verify; missing genesis
   exits 0). Tabletop-from-tar and `backup --receipts` defaults unchanged.
@@ -56,6 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ARCH-5 PR-5.1 run admission** — `POST /v1/runs`, `GET /v1/runs/{id}`, and
+  resume call `RunService.create` / `get` / `resume`. Quota admit and
+  `pdp.require` (`runs.create`, `runs.script`, `runs.resume`, `runs.read`) live
+  in the service. HTTP handlers map errors; they do not call
+  `orchestrator.start` or `quota.admit`.
 - **Nightly lowest-deps floors** — raise direct floors so `pip install -e ".[dev]" -c lowest-direct.txt` can run the suite: `pydantic>=2.11,<3` (schema output), `typer>=0.13` (click 8.3+ secondary flags), `jsonschema>=4.0.1` (4.0.0 is yanked). Do not loosen the nightly lowest-deps job (#72).
 - **Remaining-work inventory** — fold RW-SR, RW-RC, and RW-REM (ADR-0021 Phase 0–1 shipped, Phases 2–5 remaining) into [`docs/architecture/remaining-work.md`](docs/architecture/remaining-work.md) §2/§15. Architecture index no longer calls the remediation plan "specifications only".
 

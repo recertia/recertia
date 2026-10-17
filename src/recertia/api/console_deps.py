@@ -129,6 +129,60 @@ class ConsoleContext:
             update={"status": terminal, "terminal": terminal, "mode": "async"}
         )
 
+    def model_config_for_run(self, model: str | None) -> Any:
+        from recertia.api import _model_config_for_run
+
+        return _model_config_for_run(model)
+
+    def tenant_has_checkpoints(self, tenant_id: str, run_id: str) -> bool:
+        from recertia.api import _tenant_has_checkpoints
+
+        return _tenant_has_checkpoints(self.root, tenant_id, run_id)
+
+    def max_criterion_timeout_s(self) -> int:
+        from recertia.api import _api_max_criterion_timeout_s
+
+        return _api_max_criterion_timeout_s()
+
+    def load_persisted_workdir(self, tenant_id: str, run_id: str) -> Path | None:
+        from recertia.api import _load_persisted_workdir
+
+        return _load_persisted_workdir(
+            self.root, tenant_id, run_id, registry=self.workspace_registry
+        )
+
+    def resolve_task_class(
+        self, *, explicit: str | None, goal_task_class: str | None
+    ) -> str:
+        from recertia.bootstrap import resolve_task_class
+
+        return resolve_task_class(explicit=explicit, goal_task_class=goal_task_class)
+
+    def orchestrator_factory(self) -> Any:
+        """Resolve at call time so tests can patch ``recertia.api.build_default_orchestrator``."""
+
+        import recertia.api as api_mod
+
+        return api_mod.build_default_orchestrator
+
+    def queued_run_record(self, **kwargs: Any) -> Any:
+        from recertia.api.runs_models import RunRecord
+
+        return RunRecord(**kwargs)
+
+    def enqueue_async_run(self, **kwargs: Any) -> None:
+        from recertia.workers.queue import QueueItem
+        from recertia.workers.run_worker import AsyncRunRequest, dump_async_request
+
+        queued = AsyncRunRequest(**kwargs)
+        self.queue.enqueue(
+            QueueItem(
+                tenant_id=queued.tenant_id,
+                run_id=queued.run_id,
+                kind="run",
+                payload=dump_async_request(queued),
+            )
+        )
 
 
 class RouteState:

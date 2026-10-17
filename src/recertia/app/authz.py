@@ -220,7 +220,7 @@ class PolicyDecisionPoint:
         """Allow or deny ``action`` without raising. Unknown actions are denied."""
 
         res = resource if resource is not None else Resource()
-        if action == "runs.create":
+        if action in {"runs.create", "runs.read"}:
             if not principal.has_scope("runs"):
                 return Decision(allow=False, status=403, reason="missing scope: runs")
             if not _tenant_matches(principal, res):
