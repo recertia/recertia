@@ -32,6 +32,9 @@ jobs:
       - name: Install
         run: pip install -e ".[dev]"
 
+      - name: Pin ruff
+        run: pip install ruff==0.17.1
+
       - name: Ruff version
         run: ruff --version
 
