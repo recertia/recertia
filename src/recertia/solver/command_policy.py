@@ -140,6 +140,16 @@ def assert_command_allowed(command: str, *, allow_redirects: bool = False) -> st
     )
 
 
+def compile_local_argv(command: str) -> list[str]:
+    """Local executor argv. The process is started with ``shell=False``."""
+
+    import sys
+
+    if sys.platform == "win32":
+        return ["cmd.exe", "/c", command]
+    return ["/bin/sh", "-c", command]
+
+
 def wrap_untrusted(label: str, content: str, *, max_chars: int = 4000) -> str:
     """Delimit untrusted fetched/tool content so models treat it as data."""
 

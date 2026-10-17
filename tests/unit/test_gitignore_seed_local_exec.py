@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from recertia.memory.procedural.seeds import SEED_SKILLS
+from recertia.solver import container
 from recertia.solver.container import _local_run
 from recertia.solver.sandbox import SandboxLimits
 
@@ -43,3 +45,20 @@ def test_add_gitignore_cert_command_passes_via_local_run(tmp_path: Path) -> None
     (work / ".gitignore").write_text(".venv/\n*.pyc\n", encoding="utf-8")
     proc = _local_run(cert, workdir=work, limits=SandboxLimits(), timeout_s=30)
     assert proc.returncode == 0, proc.stderr
+
+
+def test_local_run_uses_argv_not_shell(tmp_path: Path, monkeypatch) -> None:
+    seen: dict[str, object] = {}
+    real = subprocess.Popen
+
+    def spy(*args, **kwargs):
+        seen["argv"] = args[0]
+        seen["shell"] = kwargs.get("shell")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(container.subprocess, "Popen", spy)
+    proc = _local_run("echo hi", workdir=tmp_path, limits=SandboxLimits(), timeout_s=10)
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == "hi"
+    assert seen["shell"] is False
+    assert seen["argv"] == ["/bin/sh", "-c", "echo hi"]

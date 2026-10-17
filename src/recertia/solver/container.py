@@ -463,12 +463,12 @@ def _local_run(
         env.setdefault("PATH", "/usr/bin:/bin")
         env.setdefault("TMPDIR", str(workdir))
 
+    from recertia.solver.command_policy import compile_local_argv
+
+    argv = compile_local_argv(command)
     kwargs: dict = {
-        "shell": True,  # recertia-security-ok: local executor; gated by LocalExecutionCapability
         "cwd": workdir,
-        "capture_output": True,
         "text": True,
-        "timeout": timeout_s,
         "env": env,
     }
     # preexec_fn + resource.setrlimit are Unix-only (not available on Windows).
@@ -476,6 +476,10 @@ def _local_run(
         import resource
 
         def limit_process() -> None:
+            # Hide this process's /proc details from other uids. A path-aware
+            # seccomp filter cannot see the open() pathname, so dumpable is
+            # the mitigation that stays on for every local child.
+            _set_dumpable()
             # The platform has setrlimit (non-Windows). A failure must not run
             # the command unlimited — fail closed in the child before exec.
             try:
@@ -490,16 +494,16 @@ def _local_run(
         kwargs["preexec_fn"] = limit_process
 
     # Own session/process group: on timeout kill the whole tree, not just /bin/sh.
-    del kwargs["timeout"], kwargs["capture_output"]
     try:
         # preexec_fn exceptions are not reconstructed as SandboxError (vfork
         # reports a builtin SubprocessError). A failed setrlimit must still
         # surface as a closed sandbox, not as a started command.
         proc_cm = subprocess.Popen(
-            command,
+            argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,
+            shell=False,
             **kwargs,
         )
     except subprocess.SubprocessError as exc:
@@ -511,4 +515,18 @@ def _local_run(
             _kill_tree(proc)
             proc.communicate()
             raise
-    return subprocess.CompletedProcess(command, proc.returncode, out, err)
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
+def _set_dumpable() -> None:
+    """``PR_SET_DUMPABLE=0`` so other uids cannot read this child's /proc."""
+
+    if sys.platform == "win32":
+        return
+    import ctypes
+
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.prctl(4, 0, 0, 0, 0)
+    except (OSError, AttributeError):
+        return

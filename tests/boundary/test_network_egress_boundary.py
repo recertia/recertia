@@ -50,11 +50,8 @@ def test_allowlist_has_no_stale_entries() -> None:
         assert (REPO / rel).exists(), f"stale allowlist entry: {rel}"
 
 
-# shell=True is allowed only at reviewed sites. Keyed by file; the count pins how many.
-SHELL_TRUE_ALLOWED = {
-    # local executor, gated by LocalExecutionCapability (marked recertia-security-ok)
-    "src/recertia/solver/container.py": 1,
-}
+# shell=True is allowed only at reviewed sites. The local executor uses argv.
+SHELL_TRUE_ALLOWED: dict[str, int] = {}
 
 
 def _is_true(node: ast.AST) -> bool:
