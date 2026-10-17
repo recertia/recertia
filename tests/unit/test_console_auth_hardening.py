@@ -43,6 +43,7 @@ def test_oidc_state_must_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     url = start.json()["authorize_url"]
     assert "code_challenge=" in url
     assert "code_challenge_method=S256" in url
+    assert "nonce=" in url
     bad = client.get("/v1/auth/oidc/callback", params={"code": "x", "state": "forged"})
     assert bad.status_code == 400
     assert "state" in error_text(bad)
@@ -57,14 +58,45 @@ def test_oidc_pkce_challenge_is_s256(monkeypatch: pytest.MonkeyPatch) -> None:
         redirect_uri="https://app.example/cb",
         state="st",
         code_challenge=challenge,
+        nonce="n-1",
     )
     assert challenge in url
+    assert "nonce=n-1" in url
     store = SessionStore(secret="k" * 32)
-    state, ver = store.begin_oidc(redirect_uri="https://app.example/cb")
+    state, ver, nonce = store.begin_oidc(redirect_uri="https://app.example/cb")
     taken = store.take_oidc(state)
     assert taken is not None
     assert taken.verifier == ver
+    assert taken.nonce == nonce
     assert store.take_oidc(state) is None
+
+
+def test_oidc_id_token_checks_nonce_and_jti() -> None:
+    import base64
+    import json
+
+    from fastapi import HTTPException
+
+    from recertia.api.console_auth import _check_id_token
+
+    def token(payload: dict[str, str]) -> str:
+        body = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+        return f"h.{body}.s"
+
+    store = SessionStore(secret="k" * 32)
+    nonce = "nonce-value"
+    _check_id_token(token({"nonce": nonce, "jti": "j1"}), nonce=nonce, sessions=store)
+    with pytest.raises(HTTPException) as duplicate:
+        _check_id_token(token({"nonce": nonce, "jti": "j1"}), nonce=nonce, sessions=store)
+    assert "duplicate" in str(duplicate.value.detail)
+    with pytest.raises(HTTPException) as mismatched:
+        _check_id_token(
+            token({"nonce": "other-nonce", "jti": "j2"}), nonce=nonce, sessions=store
+        )
+    assert "nonce" in str(mismatched.value.detail)
+    with pytest.raises(HTTPException) as missing:
+        _check_id_token(token({"nonce": nonce}), nonce=nonce, sessions=store)
+    assert "jti" in str(missing.value.detail)
 
 
 def test_oidc_roles_never_default_to_admin(monkeypatch: pytest.MonkeyPatch) -> None:

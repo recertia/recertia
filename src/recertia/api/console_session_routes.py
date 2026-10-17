@@ -241,12 +241,13 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
         if auth_mode() != "oidc" or not oidc_configured():
             raise HTTPException(status_code=404, detail="oidc not configured")
         redirect = str(request.url_for("oidc_callback"))
-        state, verifier = ctx.sessions.begin_oidc(redirect_uri=redirect)
+        state, verifier, nonce = ctx.sessions.begin_oidc(redirect_uri=redirect)
         return {
             "authorize_url": oidc_authorize_url(
                 redirect_uri=redirect,
                 state=state,
                 code_challenge=pkce_challenge(verifier),
+                nonce=nonce,
             ),
             "state": state,
         }
@@ -261,7 +262,11 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
         if pending is None:
             raise HTTPException(status_code=400, detail="invalid or expired oidc state")
         user = oidc_exchange_code(
-            code=code, redirect_uri=pending.redirect_uri, code_verifier=pending.verifier
+            code=code,
+            redirect_uri=pending.redirect_uri,
+            code_verifier=pending.verifier,
+            nonce=pending.nonce,
+            sessions=ctx.sessions,
         )
         token = ctx.sessions.issue(user)
         _set_session_cookies(response, ctx.sessions, token)

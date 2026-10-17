@@ -13,6 +13,7 @@ import hmac
 import json
 import os
 import secrets
+import sqlite3
 import time
 import urllib.error
 import urllib.parse
@@ -127,6 +128,7 @@ class OidcPending:
     verifier: str
     redirect_uri: str
     created_at: float
+    nonce: str
 
 
 def _checked_tenants(
@@ -159,19 +161,23 @@ class SessionStore:
         self._hmac_key = resolve_session_secret(secret)
         self._oidc: dict[str, OidcPending] = {}
         self._oidc_lock = Lock()
+        self._jti: set[str] = set()
         self._rows: dict[str, str] = {}
         self._conn = None
         if path is not None:
             from recertia.persistence.db import open_db
 
             self._conn = open_db(path)
-            self._conn.execute(
+            self._conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS console_sessions (
                     session_id TEXT PRIMARY KEY,
                     payload TEXT NOT NULL,
                     expires_at TEXT NOT NULL
-                )
+                );
+                CREATE TABLE IF NOT EXISTS oidc_jti (
+                    jti TEXT PRIMARY KEY
+                );
                 """
             )
             self._conn.commit()
@@ -317,13 +323,31 @@ class SessionStore:
             active_tenant=tenant_id,
         )
 
-    def begin_oidc(self, *, redirect_uri: str) -> tuple[str, str]:
+    def begin_oidc(self, *, redirect_uri: str) -> tuple[str, str, str]:
         state = secrets.token_urlsafe(24)
         verifier = secrets.token_urlsafe(48)
+        nonce = secrets.token_urlsafe(24)
         with self._oidc_lock:
             self._purge_oidc_locked()
-            self._oidc[state] = OidcPending(verifier, redirect_uri, time.time())
-        return state, verifier
+            self._oidc[state] = OidcPending(verifier, redirect_uri, time.time(), nonce)
+        return state, verifier, nonce
+
+    def claim_jti(self, jti: str) -> None:
+        """Remember an OIDC ``jti``. A second claim is rejected."""
+
+        if not jti or any(ch.isspace() for ch in jti):
+            raise ValueError("oidc jti missing")
+        with self._oidc_lock:
+            if self._conn is not None:
+                try:
+                    self._conn.execute("INSERT INTO oidc_jti (jti) VALUES (?)", (jti,))
+                    self._conn.commit()
+                except sqlite3.IntegrityError as exc:
+                    raise ValueError("duplicate oidc jti") from exc
+                return
+            if jti in self._jti:
+                raise ValueError("duplicate oidc jti")
+            self._jti.add(jti)
 
     def take_oidc(self, state: str) -> OidcPending | None:
         with self._oidc_lock:
@@ -346,7 +370,7 @@ def oidc_configured() -> bool:
 
 
 def oidc_authorize_url(
-    *, redirect_uri: str, state: str, code_challenge: str
+    *, redirect_uri: str, state: str, code_challenge: str, nonce: str
 ) -> str:
     issuer = os.environ["RECERTIA_OIDC_ISSUER"].rstrip("/")
     client_id = os.environ["RECERTIA_OIDC_CLIENT_ID"]
@@ -358,6 +382,7 @@ def oidc_authorize_url(
             "redirect_uri": redirect_uri,
             "scope": scope,
             "state": state,
+            "nonce": nonce,
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
         }
@@ -382,8 +407,48 @@ def _map_oidc_roles(profile: dict) -> frozenset[str]:
     return frozenset(roles) or frozenset({"operator"})
 
 
+def _id_token_payload(token: str) -> dict[str, Any]:
+    """Decode a JWT payload. Signature verification needs a JWKS client we do not ship."""
+
+    parts = token.split(".")
+    if len(parts) != 3 or not parts[1]:
+        raise HTTPException(status_code=400, detail="oidc id_token malformed")
+    padded = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        payload = json.loads(raw.decode("utf-8"))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="oidc id_token malformed") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="oidc id_token malformed")
+    return payload
+
+
+def _check_id_token(token: str, *, nonce: str, sessions: SessionStore) -> None:
+    payload = _id_token_payload(token)
+    got = payload.get("nonce")
+    if (
+        not isinstance(got, str)
+        or len(got) != len(nonce)
+        or not hmac.compare_digest(got, nonce)
+    ):
+        raise HTTPException(status_code=400, detail="oidc nonce rejected")
+    jti = payload.get("jti")
+    if not isinstance(jti, str):
+        raise HTTPException(status_code=400, detail="oidc jti missing")
+    try:
+        sessions.claim_jti(jti)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def oidc_exchange_code(
-    *, code: str, redirect_uri: str, code_verifier: str
+    *,
+    code: str,
+    redirect_uri: str,
+    code_verifier: str,
+    nonce: str,
+    sessions: SessionStore,
 ) -> ConsoleUser:
     """Exchange auth code for tokens and map to ConsoleUser (generic OIDC + PKCE)."""
 
@@ -410,6 +475,10 @@ def oidc_exchange_code(
         access = tok_payload.get("access_token")
         if not access:
             raise HTTPException(status_code=502, detail="oidc token missing access_token")
+        id_token = tok_payload.get("id_token")
+        if not isinstance(id_token, str) or not id_token:
+            raise HTTPException(status_code=502, detail="oidc token missing id_token")
+        _check_id_token(id_token, nonce=nonce, sessions=sessions)
         info_req = urllib.request.Request(
             userinfo_url,
             headers={"authorization": f"Bearer {access}"},
