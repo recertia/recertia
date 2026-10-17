@@ -51,6 +51,33 @@ def test_backup_round_trip_and_refuses_escape(tmp_path: Path) -> None:
     assert not (tmp_path / "escaped.txt").exists()
 
 
+def test_online_sqlite_backup_includes_committed_wal(tmp_path: Path) -> None:
+    from recertia.persistence.db import open_db
+
+    root = tmp_path / "recertia"
+    root.mkdir()
+    db_path = root / "checkpoints.db"
+    live = open_db(db_path)
+    live.execute("CREATE TABLE hops (id INTEGER PRIMARY KEY, note TEXT)")
+    live.execute("INSERT INTO hops (note) VALUES ('committed')")
+    live.commit()
+    archive = tmp_path / "backups" / "recertia.tar.gz"
+    backup_tree(root, archive)
+    live.execute("INSERT INTO hops (note) VALUES ('after')")
+    live.commit()
+    live.close()
+
+    dest = tmp_path / "restored"
+    restore_tree(archive, dest)
+    restored = open_db(dest / "checkpoints.db")
+    try:
+        notes = [row[0] for row in restored.execute("SELECT note FROM hops ORDER BY id")]
+    finally:
+        restored.close()
+    assert notes == ["committed"]
+    assert not (dest / "checkpoints.db-wal").exists()
+
+
 def test_backup_cli(tmp_path: Path) -> None:
     root = tmp_path / ".recertia"
     root.mkdir()
