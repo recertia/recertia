@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from contracts.policy import Policy
-from recertia.errors import ExecutionUnavailable
+from recertia.errors import ExecutionUnavailable, Forbidden
 from recertia.ports.execution import CommandOrigin, ExecutionBackend, Surface
 from recertia.ports.identity import Principal
 from recertia.settings import Settings
@@ -199,6 +199,24 @@ def _principal_may_exec(principal: Principal | None) -> bool:
     if principal is None:
         return False
     return "exec" in principal.scopes or "admin" in principal.scopes
+
+
+def assert_run_executable(
+    principal: Principal,
+    *,
+    script: bool,
+    settings: Settings | None = None,
+) -> None:
+    """SEC-2 / D2: raw ``script`` needs ``exec`` or ``admin``; commands stay on ``runs``.
+
+    ``settings`` is accepted so routes and services can share one call site.
+    Multi-node refusal of the local backend is owned by
+    ``Settings.validate_deployment``; this gate does not re-check that pair.
+    """
+
+    del settings  # reserved; validate_deployment owns multi_node + local
+    if script and not principal.has_scope("exec"):
+        raise Forbidden("script requires the 'exec' scope (or admin)")
 
 
 def _external_computer_allowed(policy: Policy) -> bool:
