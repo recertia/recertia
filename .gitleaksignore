@@ -3,3 +3,6 @@
 a5e947a9c8ac9d9233f87ba14cc72fbb69f427c5:tests/contracts/test_security_review.py:github-pat:88
 a5e947a9c8ac9d9233f87ba14cc72fbb69f427c5:tests/unit/memory/test_hygiene.py:github-pat:67
 a5e947a9c8ac9d9233f87ba14cc72fbb69f427c5:tests/unit/memory/test_hygiene.py:private-key:65
+# PBKDF2 rehash fixture. The current test uses a low-entropy stand-in; this
+# fingerprint covers the historical line in that commit only.
+efa88bf3d2b941a601ab921a116615199a6a45d9:tests/security/test_sec9_api_keys.py:generic-api-key:29

@@ -26,16 +26,17 @@ def test_issued_key_stored_as_hmac_not_plaintext(tmp_path: Path) -> None:
 def test_lazy_rehash_from_pbkdf2(tmp_path: Path) -> None:
     path = tmp_path / "keys.sqlite"
     store = ApiKeyStore(path)
-    secret = "rec_key_aabbccddeeff0011.tok"
+    # Repeated characters stay under the generic-api-key entropy floor.
+    legacy = "rec_key_aaaaaaaaaaaaaaaa.example"
     salt = b"0123456789abcdef"
-    digest = ApiKeyStore._hash(secret, salt)
+    digest = ApiKeyStore._hash(legacy, salt)
     with sqlite3.connect(path) as conn:
         conn.execute(
             """INSERT INTO api_keys(
                    key_id, tenant_id, scopes, salt, key_hash, created_at, hash_alg, pepper_id
                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                "key_aabbccddeeff0011",
+                "key_aaaaaaaaaaaaaaaa",
                 "alpha",
                 "runs",
                 salt,
@@ -45,13 +46,13 @@ def test_lazy_rehash_from_pbkdf2(tmp_path: Path) -> None:
                 "legacy",
             ),
         )
-    assert store.authenticate(secret) is not None
+    assert store.authenticate(legacy) is not None
     with sqlite3.connect(path) as conn:
         alg = conn.execute(
-            "SELECT hash_alg FROM api_keys WHERE key_id='key_aabbccddeeff0011'"
+            "SELECT hash_alg FROM api_keys WHERE key_id='key_aaaaaaaaaaaaaaaa'"
         ).fetchone()[0]
     assert alg == "hmac-sha256"
-    assert store.authenticate(secret) is not None
+    assert store.authenticate(legacy) is not None
 
 
 def test_limiter_keys_on_ip_and_key_id(tmp_path: Path) -> None:
