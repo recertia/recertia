@@ -59,7 +59,7 @@ def test_unix_socket_allowed() -> None:
 
 
 def test_unmocked_provider_call_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("recertia.solver.model.time.sleep", lambda _s: None)
+    monkeypatch.setattr("recertia.solver.model._sleep", lambda _s: None)
     with pytest.raises(ProviderError, match="blocked in tests"):
         OpenAIModelClient(api_key="k", model_id="m", max_retries=0).complete("hi")
 

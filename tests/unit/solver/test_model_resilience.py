@@ -32,7 +32,7 @@ def test_400_not_retried() -> None:
 
 def test_429_honours_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
     slept: list[float] = []
-    monkeypatch.setattr("recertia.solver.model.time.sleep", slept.append)
+    monkeypatch.setattr("recertia.solver.model._sleep", slept.append)
     script = Script(http_error(429, b"slow", {"Retry-After": "2"}), ok(GOOD))
     client = OpenAIModelClient(api_key="k", model_id="m-429")
     with patch("urllib.request.urlopen", side_effect=script):
