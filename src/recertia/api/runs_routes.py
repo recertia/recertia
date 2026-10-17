@@ -274,8 +274,10 @@ def register_run_routes(app: FastAPI, ctx: ConsoleContext) -> None:
                     run_service.release(principal.tenant_id)
                     raise
                 ctx.embedded.ensure_started()
-                # TODO(REL-3): worker must re-acquire WorkspaceLock for the workdir
-                # for the lease lifetime; this handler only holds it through enqueue.
+                # Release before wait/202 so an embedded worker can later take the
+                # same workdir lock. TODO(REL-3): worker re-acquires for the lease.
+                ws_handle.release()
+                ws_handle = None
                 if wait_s is not None:
                     finished = ctx.queue.wait(principal.tenant_id, run_id, timeout_s=wait_s)
                     if finished is not None:
@@ -400,7 +402,8 @@ def register_run_routes(app: FastAPI, ctx: ConsoleContext) -> None:
             )
             return rec
         finally:
-            ws_handle.release()
+            if ws_handle is not None:
+                ws_handle.release()
 
     @router.get("/v1/runs/{run_id}", response_model=RunRecord)
     def get_run(run_id: str, principal: Principal = Depends(require_runs)) -> RunRecord:

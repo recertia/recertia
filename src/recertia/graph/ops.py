@@ -132,6 +132,7 @@ class OperationLedger:
         """
 
         key: OpKey = (run_id, attempt_no, node, op_seq)
+        wait_deadline = time.monotonic() + max(30.0, float(self._pending_timeout_s) * 6.0)
         while True:
             claimed = False
             wait_for: threading.Event | None = None
@@ -188,6 +189,15 @@ class OperationLedger:
 
             if claimed:
                 break
+            if time.monotonic() >= wait_deadline:
+                # Safety valve: a waiter must not spin forever if a live claim
+                # record is stale. Drop the claim and reclaim on the next pass.
+                with self._lock:
+                    stale = self._live_claims.pop(key, None)
+                    if stale is not None:
+                        stale.done.set()
+                wait_deadline = time.monotonic() + max(30.0, float(self._pending_timeout_s) * 6.0)
+                continue
             if wait_for is not None:
                 wait_for.wait(timeout=self._pending_poll_s)
             else:
