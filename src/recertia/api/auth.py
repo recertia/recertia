@@ -490,7 +490,7 @@ def require_key(
     principal = store.authenticate(x_api_key, client_ip=client_ip)
     if principal is None:
         raise HTTPException(status_code=401, detail="invalid API key")
-    if required_scope not in principal.scopes and "admin" not in principal.scopes:
+    if not principal.has_scope(required_scope):
         raise HTTPException(status_code=403, detail=f"missing scope: {required_scope}")
     return principal
 

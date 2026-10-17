@@ -125,10 +125,10 @@ Land a phase when every item in it is done and the items it depends on (section 
 | ARCH-4 | The import cycle among `graph`, `nodes`, and `solver` is gone, so services can import the engine without pulling the API. |
 | ARCH-6 | `HopHook` and `RunPersistence`. The engine commits through the hook instead of opening stores itself. |
 | ARCH-5 | Application services and the router split. HTTP handlers call `RunService` and siblings. |
-| SEC-7 | `PolicyDecisionPoint` in `app/authz.py`, including the T2 reviewer rule from hotfix 0.5. |
+| SEC-7 | `PolicyDecisionPoint` in `app/authz.py`, including the T2 reviewer rule from hotfix 0.5. `require`/`decide` implement the action table. |
 | SEC-2 | D2 gate on the port: `runs` commands on container (and local only in `single_node` with the break-glass); `exec` only for raw `script`. |
 | SEC-5 | `CommandRequest.origin` (`goal`, `script`, `operator`). |
-| SEC-8 | `platform_admin` is not tenant `admin`. `host_root`, per-tenant skill libraries, and the `evals` scope follow that split. Who may change an admission cap is this split; enforcement is REL-11. |
+| SEC-8 | `platform_admin` is not tenant `admin`. `require_key` uses `Principal.has_scope`. `host_root`, per-tenant skill libraries, and the `evals` scope follow that split. Who may change an admission cap is this split; enforcement is REL-11. |
 | SEC-10 | OIDC session cookie is signed, CSRF is checked, tenant membership is the directory's set, dev-login is off unless the development flags are set, and `multi_node` has no unsigned fallback. |
 | SEC-3 | Tenant-keyed events and cancel, on the binding path. Migration of legacy `root/run_events`. |
 | REL-3 | One owner per run: leases, fencing tokens, workdir exclusivity, durable `run_id` uniqueness, scratch resume replays the recorded model call. |
