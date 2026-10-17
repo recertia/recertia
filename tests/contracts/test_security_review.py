@@ -104,6 +104,21 @@ def test_recertia_controls_fail_when_hardening_removed(tmp_path: Path) -> None:
     assert not report.ok()
 
 
+def test_ast_controls_flag_an_execution_backend_write(tmp_path: Path) -> None:
+    pkg = tmp_path / "src" / "recertia"
+    pkg.mkdir(parents=True)
+    (pkg / "bad.py").write_text(
+        'import os\nos.environ["RECERTIA_EXECUTION_BACKEND"] = "local"\n',
+        encoding="utf-8",
+    )
+    from scripts.security_review import check_ast_controls
+
+    results = {item.id: item.ok for item in check_ast_controls(tmp_path)}
+    assert results["no-execution-backend-env-write"] is False
+    assert results["run-event-log-tenant-path"] is False
+    assert results["policy-decision-point-referenced"] is False
+
+
 def test_subprocess_list_form_is_clean(tmp_path: Path) -> None:
     (tmp_path / "ok.py").write_text(
         "import subprocess\nsubprocess.run(['git', 'status'], check=False)\n",
