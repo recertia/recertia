@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 
 from recertia.api import create_app
 from recertia.api.console_auth import session_cookie_kwargs
+from recertia.errors import ConfigError
+from recertia.settings import load_settings
 
 
 def test_cookie_v2_keeps_roles_off_the_wire() -> None:
@@ -95,3 +97,60 @@ def test_auth_off_does_not_honor_a_session_header(
         headers={"X-API-Key": issued.secret, "X-Recertia-Session": "forged"},
     )
     assert resp.status_code == 200
+
+
+def _multi_node_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Mirror test_sec8_privilege multi_node startup prerequisites."""
+
+    monkeypatch.setenv("RECERTIA_DEPLOYMENT_MODE", "multi_node")
+    monkeypatch.setenv("RECERTIA_EXECUTION_BACKEND", "container")
+    monkeypatch.setenv("RECERTIA_DB_BACKEND", "postgres")
+    monkeypatch.setenv("RECERTIA_DATABASE_URL", "postgres://db")
+    monkeypatch.setenv("RECERTIA_BLOB_STORE", "s3")
+    monkeypatch.setenv("RECERTIA_CONSOLE_SESSION_SECRET", "x" * 32)
+    monkeypatch.setenv("RECERTIA_API_KEY_PEPPER", "pepper")
+    monkeypatch.setenv("RECERTIA_TENANT_SKILLS", "1")
+    monkeypatch.setenv("RECERTIA_WORKSPACE_ROOTS", str(tmp_path))
+
+
+def test_multi_node_refuses_console_auth_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _multi_node_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("RECERTIA_CONSOLE_AUTH", "off")
+    with pytest.raises(ConfigError, match="RECERTIA_CONSOLE_AUTH=off"):
+        load_settings().validate_deployment(role="api")
+
+
+def test_multi_node_refuses_dev_login(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _multi_node_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("RECERTIA_CONSOLE_AUTH", "oidc")
+    monkeypatch.setenv("RECERTIA_CONSOLE_DEV_LOGIN", "1")
+    with pytest.raises(ConfigError, match="dev-login"):
+        load_settings().validate_deployment(role="api")
+
+
+def test_multi_node_accepts_oidc_with_session_secret(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _multi_node_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("RECERTIA_CONSOLE_AUTH", "oidc")
+    monkeypatch.delenv("RECERTIA_CONSOLE_DEV_LOGIN", raising=False)
+    load_settings().validate_deployment(role="api")
+
+
+def test_multi_node_refuses_dev_login_and_auth_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SEC-10c F22: combined refusal named in sec-specs.md."""
+
+    _multi_node_env(monkeypatch, tmp_path)
+    monkeypatch.delenv("RECERTIA_CONSOLE_AUTH", raising=False)  # defaults to off
+    with pytest.raises(ConfigError, match="RECERTIA_CONSOLE_AUTH=off"):
+        load_settings().validate_deployment(role="api")
+    monkeypatch.setenv("RECERTIA_CONSOLE_AUTH", "oidc")
+    monkeypatch.setenv("RECERTIA_CONSOLE_DEV_LOGIN", "1")
+    with pytest.raises(ConfigError, match="dev-login"):
+        load_settings().validate_deployment(role="api")

@@ -332,8 +332,8 @@ class Settings:
     def validate_deployment(self, *, role: ProcessRole) -> None:
         """Refuse an unsafe ``multi_node`` process.
 
-        ``multi_node`` refuses sqlite and the local execution backend.
-        ``single_node`` has no extra rules.
+        ``multi_node`` refuses sqlite, the local execution backend, console
+        auth ``off``, and console dev-login. ``single_node`` has no extra rules.
         """
 
         del role  # reserved for REL-10 role-specific checks
@@ -361,6 +361,21 @@ class Settings:
             raise ConfigError("multi_node requires RECERTIA_WORKSPACE_ROOTS")
         if not self.api_key_pepper:
             raise ConfigError("multi_node requires RECERTIA_API_KEY_PEPPER")
+        # SEC-10c: refuse unsigned/dev console fallbacks so multi_node never
+        # reaches resolve_session_secret's process-random path (console_auth.py).
+        if self.console_auth == "off":
+            raise ConfigError(
+                "multi_node refuses RECERTIA_CONSOLE_AUTH=off (require oidc)"
+            )
+        if self.console_dev_login:
+            raise ConfigError(
+                "multi_node refuses RECERTIA_CONSOLE_DEV_LOGIN (dev-login)"
+            )
+        if self.console_auth != "oidc":
+            raise ConfigError(
+                "multi_node requires RECERTIA_CONSOLE_AUTH=oidc "
+                f"(got {self.console_auth!r})"
+            )
         for check in _DEPLOYMENT_CHECKS:
             check(self)
 
