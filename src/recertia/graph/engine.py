@@ -31,7 +31,7 @@ from recertia.graph.hooks import (
     default_hop_hooks,
     default_state_hops,
 )
-from recertia.graph.lease import RunLease
+from recertia.graph.lease import RunLease, WorkspaceLock
 from recertia.graph.persistence import RunPersistence, open_run_persistence
 from recertia.graph.store import EvalOutboxWrite
 from recertia.memory.procedural.capability import CandidateSkillStoreAdapter
@@ -283,16 +283,22 @@ class GraphOrchestrator:
 
 
     @contextmanager
-    def _hold_lease(self, run_id: str):
-        """Acquire the run flock for start/resume and release it on the way out."""
+    def _hold_lease(self, run_id: str, workdir: Path | None = None):
+        """Acquire the run flock and, when a workdir is given, that directory too."""
 
         safe = run_id.replace("/", "_").replace("..", "_")
         lease = RunLease(self.runs_root / "locks" / f"{safe}.lock")
         self._fencing_token = lease.acquire()
         self._lease = lease
+        workspace: WorkspaceLock | None = None
         try:
+            if workdir is not None:
+                workspace = WorkspaceLock(self.runs_root, workdir, holder=run_id)
+                workspace.acquire()
             yield
         finally:
+            if workspace is not None:
+                workspace.release()
             self._lease = None
             self._fencing_token = None
             lease.release()
@@ -322,7 +328,7 @@ class GraphOrchestrator:
                 f"run_id {run_id!r} already has checkpoints; resume it instead of starting again"
             )
 
-        with self._hold_lease(run_id):
+        with self._hold_lease(run_id, Path(workdir)):
             state = RunState(
                 run_id=run_id,
                 task=task,
@@ -349,7 +355,7 @@ class GraphOrchestrator:
     ) -> RunState:
         """Resume from the last checkpoint. A no-op if the run already reached ``finalize``."""
 
-        with self._hold_lease(run_id):
+        with self._hold_lease(run_id, Path(workdir)):
             latest = self.checkpoints.latest(run_id)
             if latest is None:
                 raise ValueError(f"no checkpoint found for run {run_id!r}")

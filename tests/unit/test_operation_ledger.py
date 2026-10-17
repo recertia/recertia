@@ -136,3 +136,49 @@ def test_concurrent_waiters_block_until_result_not_pending(tmp_path: Path) -> No
     assert not errors
     assert calls == ["holder"]
     assert results == [{"value": 42}, {"value": 42}]
+
+
+def test_live_owner_pending_not_reclaimed_after_legacy_timeout(tmp_path: Path) -> None:
+    """A live owner's pending op is not stolen after the old 5s window."""
+
+    db_path = tmp_path / "ops.db"
+    ops = OperationLedger(db_path, pending_timeout_s=0.05, pending_poll_s=0.01)
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+
+    def hold() -> dict[str, str]:
+        calls.append("A")
+        started.set()
+        assert release.wait(timeout=2.0)
+        return {"cmd": "A"}
+
+    def stolen() -> dict[str, str]:
+        calls.append("B")
+        return {"cmd": "B"}
+
+    holder = threading.Thread(
+        target=lambda: ops.run_once("run-1", 1, "solve", 0, hold)
+    )
+    holder.start()
+    assert started.wait(timeout=2.0)
+
+    thief_result: list[object] = []
+
+    def steal() -> None:
+        other = OperationLedger(db_path, pending_timeout_s=0.05, pending_poll_s=0.01)
+        try:
+            thief_result.append(other.run_once("run-1", 1, "solve", 0, stolen))
+        finally:
+            other.close()
+
+    thief = threading.Thread(target=steal)
+    thief.start()
+    time.sleep(0.25)
+    assert calls == ["A"]
+    release.set()
+    holder.join(timeout=2.0)
+    thief.join(timeout=2.0)
+    assert calls == ["A"]
+    assert thief_result == [{"cmd": "A"}]
+    ops.close()

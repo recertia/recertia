@@ -20,7 +20,7 @@ from recertia.api.quotas import QuotaExceeded
 from recertia.api.runs_models import RunCreate, RunRecord
 from recertia.bootstrap import resolve_task_class
 from recertia.graph.engine import RunIdExistsError
-from recertia.graph.lease import RunBusy
+from recertia.graph.lease import RunBusy, WorkspaceBusy
 from recertia.solver.container import ensure_api_execution_ready
 from recertia.solver.sandbox import SandboxError
 from recertia.telemetry import get_telemetry
@@ -274,6 +274,8 @@ def register_run_routes(app: FastAPI, ctx: ConsoleContext) -> None:
             raise HTTPException(status_code=409, detail="run_id already exists") from exc
         except RunBusy as exc:
             raise HTTPException(status_code=409, detail="run_busy") from exc
+        except WorkspaceBusy as exc:
+            raise HTTPException(status_code=409, detail="workspace_busy") from exc
         except Exception as exc:
             get_telemetry().emit(
                 "run.finished",
@@ -373,6 +375,8 @@ def register_run_routes(app: FastAPI, ctx: ConsoleContext) -> None:
             state = bundle.orchestrator.resume(run_id, workdir=workdir)
         except RunBusy as exc:
             raise HTTPException(status_code=409, detail="run_busy") from exc
+        except WorkspaceBusy as exc:
+            raise HTTPException(status_code=409, detail="workspace_busy") from exc
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
