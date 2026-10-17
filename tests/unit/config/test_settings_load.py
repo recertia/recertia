@@ -8,6 +8,11 @@ from recertia.errors import ConfigError, ExecutionUnavailable
 from recertia.settings import load_settings
 
 
+def test_api_default_async_stays_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RECERTIA_API_DEFAULT_ASYNC", raising=False)
+    assert load_settings().api_default_async is False
+
+
 def test_bool_flags_accept_1_true_yes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RECERTIA_API_ALLOW_LOCAL_EXEC", "yes")
     monkeypatch.setenv("RECERTIA_API_DEFAULT_ASYNC", "true")
