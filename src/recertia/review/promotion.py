@@ -25,6 +25,18 @@ from recertia.memory.procedural.store import SkillStore
 from recertia.review.gate import discover_golden, discover_version_golden
 
 
+class PromotionWriter:
+    """The only promotion path that persists ``lifecycle=approved``."""
+
+    def __init__(self, store: SkillStore) -> None:
+        self._store = store
+
+    def write(self, status: SkillStatus) -> Path:
+        if status.lifecycle != "approved":
+            raise PromotionError(f"PromotionWriter refuses lifecycle={status.lifecycle!r}")
+        return self._store._write_status_unchecked(status)
+
+
 class PromotionError(Exception):
     """Golden gate failed, or the skill is not yet eligible for approval."""
 
@@ -138,7 +150,7 @@ def promote_to_approved(
         raise PromotionError(
             f"promotion aborted: lifecycle moved to {current.lifecycle!r} during golden gate"
         )
-    store._write_status_unchecked(approved)
+    PromotionWriter(store).write(approved)
     return approved
 
 
