@@ -149,6 +149,12 @@ class LocalExecutor:
         self.capability = capability
 
     def run(self, request: CommandRequest) -> CommandResult:
+        # SEC-5: model/skill shell must not reach the local backend even if a
+        # caller bypasses shell_handler / enforce_model_shell.
+        if request.origin in ("model", "skill"):
+            raise SandboxError(
+                "model-origin shell is refused unless the execution backend is container"
+            )
         limits = request.limits or SandboxLimits(
             max_cpu_seconds=self.config.max_cpu_seconds,
             max_address_space_mb=self.config.max_address_space_mb,
