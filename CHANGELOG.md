@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SEC-5 model-origin on local** — `LocalExecutor` refuses `CommandRequest.origin`
+  `model`/`skill` (defense in depth if a caller bypasses `shell_handler`).
+  `agent_subtask` stamps `origin="model"` on the request it executes.
 - **Windows `rss_bytes`** — `import resource` is POSIX-only. Catch `ImportError`
   so hop telemetry on native Windows returns `0` instead of aborting the graph
   (`ModuleNotFoundError: No module named 'resource'`).
