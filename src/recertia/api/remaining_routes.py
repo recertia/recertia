@@ -13,8 +13,7 @@ from recertia.api.console_auth import console_session
 from recertia.api.console_routes import ConsoleContext
 from recertia.api.errors import V1HTTPError
 from recertia.api.pagination import keyset_page
-from recertia.evals.golden import run_eval_suite
-from recertia.evals.store import EvalStore
+from recertia.app.evals import EvalService
 from recertia.ledger import HashChainLedger
 from recertia.memory.affordance import AffordanceStore
 from recertia.memory.episodic import EpisodicStore
@@ -170,36 +169,15 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
         skills_root = ctx.tenant_skills_root(tenant_id)
         runs_root = ctx.tenant_runs_root(tenant_id)
-        eval_db = runs_root / "evals.db"
-        from recertia.review.gate import default_golden_factory
-
-        store = EvalStore(eval_db)
-        try:
-            report = run_eval_suite(
-                task_class=body.task_class,
-                golden_root=_safe_golden_root(body.golden_root),
-                skills_root=skills_root,
-                runs_root=runs_root / "eval-runs",
-                eval_store=store,
-                snapshot_id=body.snapshot or "eval-api",
-                golden_dir=_safe_golden_dir(body.golden_dir),
-                factory=default_golden_factory(),
-            )
-        finally:
-            store.close()
-        return {
-            "all_passed": report.all_passed,
-            "results": [
-                {
-                    "skill_id": r.skill_id,
-                    "passed": r.passed,
-                    "terminal": r.terminal,
-                    "run_id": r.run_id,
-                    "detail": r.detail,
-                }
-                for r in report.results
-            ],
-        }
+        return EvalService().run_suite(
+            task_class=body.task_class,
+            golden_root=_safe_golden_root(body.golden_root),
+            skills_root=skills_root,
+            runs_root=runs_root / "eval-runs",
+            eval_db=runs_root / "evals.db",
+            snapshot_id=body.snapshot or "eval-api",
+            golden_dir=_safe_golden_dir(body.golden_dir),
+        )
 
     @app.get("/v1/policy")
     def get_policy(principal=Depends(require_runs)) -> dict[str, Any]:
