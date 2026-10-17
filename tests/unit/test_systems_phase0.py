@@ -7,7 +7,7 @@ from pathlib import Path
 
 from contracts.policy import IsolationSettings, Policy, StateManagement
 from contracts.trajectory import TrajectoryEvent
-from recertia.ops.systems import (
+from recertia.observability.systems import (
     canonical_tool_key,
     component_class,
     redundancy_rate,
@@ -304,7 +304,7 @@ def test_operator_brief_lists_stuck_from_checkpoints(tmp_path: Path) -> None:
 
 def test_hop_finished_attrs_are_the_engine_gauge_owner() -> None:
     from recertia.nodes import NODE_FUNCS
-    from recertia.ops.systems import hop_finished_attrs
+    from recertia.observability.systems import hop_finished_attrs
 
     attrs = hop_finished_attrs(
         "intake", hop_ms=1.25, workdir=None, idle_gap_ms=0.5, tokens=3
@@ -338,7 +338,7 @@ def test_systems_brief_cli_prints_not_established() -> None:
     from typer.testing import CliRunner
 
     from recertia.cli.main import app
-    from recertia.ops.systems import NOT_ESTABLISHED
+    from recertia.observability.systems import NOT_ESTABLISHED
 
     result = CliRunner().invoke(app, ["systems", "--brief"])
     assert result.exit_code == 0, result.output

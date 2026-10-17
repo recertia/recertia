@@ -159,7 +159,7 @@ class ToolRuntime:
         step_token = _ACTIVE_STEP_CONTEXT.set(step_context or StepInvokeContext())
         snapshot_hash = ""
         try:
-            from recertia.ops.systems import canonical_tool_key, snapshot_stat_hash
+            from recertia.observability.systems import canonical_tool_key, snapshot_stat_hash
             from recertia.telemetry import emit_in_run
 
             snapshot_hash = snapshot_stat_hash(workdir)
