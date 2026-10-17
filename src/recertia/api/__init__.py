@@ -19,17 +19,30 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from starlette.exceptions import HTTPException as StarletteHTTPException
-
 from contracts.criteria import TaskCriterion
-from recertia.api.auth import ApiKeyStore, Principal, require_scope, validate_tenant_id
-from recertia.api.console_routes import ConsoleContext, register_console_routes
-from recertia.api.errors import V1HTTPError, envelope_http_exception, v1_error
+
+# FastAPI is an optional extra. Importing this package (which ``api.events`` and
+# ``api.auth`` do on the way to the core CLI) must succeed without it.
+try:
+    from fastapi import Depends, FastAPI, HTTPException
+    from fastapi.responses import FileResponse, JSONResponse
+    from fastapi.staticfiles import StaticFiles
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+except ImportError:  # pragma: no cover - bare wheel has no [api] extra
+    Depends = None  # type: ignore[assignment,misc]
+    FastAPI = None  # type: ignore[assignment,misc]
+    HTTPException = None  # type: ignore[assignment,misc]
+    FileResponse = None  # type: ignore[assignment,misc]
+    JSONResponse = None  # type: ignore[assignment,misc]
+    StaticFiles = None  # type: ignore[assignment,misc]
+    StarletteHTTPException = None  # type: ignore[assignment,misc]
+else:
+    from recertia.api.auth import ApiKeyStore, Principal, require_scope, validate_tenant_id
+    from recertia.api.console_routes import ConsoleContext, register_console_routes
+    from recertia.api.errors import V1HTTPError, envelope_http_exception, v1_error
+    from recertia.api.remaining_routes import register_remaining_routes
+
 from recertia.api.quotas import QuotaExceeded, QuotaStore
-from recertia.api.remaining_routes import register_remaining_routes
 from recertia.api.runs_models import RunCreate as RunCreate
 from recertia.api.runs_models import RunRecord
 from recertia.bootstrap import build_default_orchestrator as build_default_orchestrator

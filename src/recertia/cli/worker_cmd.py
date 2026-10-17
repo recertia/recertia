@@ -7,8 +7,6 @@ from pathlib import Path
 
 import typer
 
-from recertia.workers.serve import run_once, worker_id
-
 
 def register_worker_commands(app: typer.Typer) -> None:
     app.command("worker")(worker_cmd)
@@ -23,6 +21,7 @@ def worker_cmd(
 
     from recertia.errors import RecertiaError
     from recertia.settings import load_settings
+    from recertia.workers.serve import worker_id
 
     try:
         load_settings().validate_deployment(role="worker")
@@ -40,6 +39,8 @@ def worker_cmd(
 
 
 def _run_once(root: Path, ident: str, capacity: int) -> int:
+    from recertia.workers.serve import run_once
+
     try:
         ran = run_once(root, worker=ident, capacity=capacity)
     except Exception as exc:

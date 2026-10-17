@@ -14,9 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Callable
-
-from fastapi import Header, HTTPException, Request
+from typing import Any, Callable
 
 from recertia.errors import SecretUnavailable
 from recertia.persistence.db import open_db
@@ -470,13 +468,25 @@ class ApiKeyStore:
         ]
 
 
+def _optional_api_key_header() -> Any:
+    """Header extractor when FastAPI is installed; a plain default otherwise."""
+
+    try:
+        from fastapi import Header
+    except ImportError:
+        return None
+    return Header(default=None, alias="X-API-Key")
+
+
 def require_key(
     required_scope: str,
     store: ApiKeyStore,
-    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    x_api_key: str | None = _optional_api_key_header(),
     *,
     client_ip: str = "unknown",
 ) -> Principal:
+    from fastapi import HTTPException
+
     principal = store.authenticate(x_api_key, client_ip=client_ip)
     if principal is None:
         raise HTTPException(status_code=401, detail="invalid API key")
@@ -487,6 +497,11 @@ def require_key(
 
 def require_scope(scope: str, store: ApiKeyStore) -> Callable[..., Principal]:
     """FastAPI dependency factory preserving the header parameter signature."""
+
+    from fastapi import Header, Request
+
+    # Nested annotations resolve against this module, not the enclosing function.
+    globals()["Request"] = Request
 
     def dependency(
         request: Request,
