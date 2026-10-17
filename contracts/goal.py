@@ -10,11 +10,16 @@ See docs/specifications (criteria integrity) and the technical plan for Variant 
 
 from __future__ import annotations
 
+import shlex
+from pathlib import PurePosixPath
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from contracts.criteria import TaskCriterion
+
+# Shell metacharacters. A goal path is a relative filename, not a shell snippet.
+_SHELL_META = frozenset(";|&$`<>(){}!\\'\"*?[]~")
 
 DesiredKind = Literal[
     "file_exists",
@@ -133,6 +138,28 @@ class Goal(BaseModel):
         return self
 
 
+def _quoted_relative_path(path: str, *, what: str) -> str:
+    """Reject absolute, ``..``, and shell metacharacters, then ``shlex.quote``.
+
+    ``shlex.quote`` of a safe token is the token itself, so ``test -f name``
+    stays stable. Unsafe paths fail compilation instead of becoming a command.
+    """
+
+    if not path or path != path.strip():
+        raise ValueError(f"{what} path is empty or padded with whitespace")
+    if any(ch in _SHELL_META or ch.isspace() or ord(ch) < 32 for ch in path):
+        raise ValueError(f"{what} path contains shell metacharacters: {path!r}")
+    if path.startswith("/") or PurePosixPath(path).is_absolute():
+        raise ValueError(f"{what} path must be relative to the workdir: {path!r}")
+    # Windows drive-letter forms are absolute even when the host is POSIX.
+    if len(path) >= 2 and path[1] == ":" and path[0].isalpha():
+        raise ValueError(f"{what} path must be relative to the workdir: {path!r}")
+    parts = PurePosixPath(path).parts
+    if ".." in parts:
+        raise ValueError(f"{what} path must not contain '..': {path!r}")
+    return shlex.quote(path)
+
+
 def compile_goal(
     goal: Goal,
     *,
@@ -162,10 +189,11 @@ def _desired_to_criterion(
     source: Literal["caller", "task_class_template", "critic"],
 ) -> TaskCriterion:
     if d.kind == "file_exists":
+        quoted = _quoted_relative_path(d.path or "", what=f"DesiredState {d.id!r}")
         return TaskCriterion(
             id=d.id,
             kind="command",
-            run=f"test -f {d.path}",
+            run=f"test -f {quoted}",
             expect_exit=0,
             weight=d.weight,
             timeout_s=d.timeout_s,
@@ -173,13 +201,14 @@ def _desired_to_criterion(
             preregistered=True,
         )
     if d.kind == "file_contains":
-        # Escape single quotes for shell safety in the generated check.
-        pat = (d.pattern or "").replace("'", "'\\''")
-        path = d.path or ""
+        quoted = _quoted_relative_path(d.path or "", what=f"DesiredState {d.id!r}")
+        pattern = d.pattern or ""
+        if "\n" in pattern or "\r" in pattern or "\x00" in pattern:
+            raise ValueError(f"DesiredState {d.id!r} pattern contains a newline or NUL")
         return TaskCriterion(
             id=d.id,
             kind="command",
-            run=f"grep -qE '{pat}' {path}",
+            run=f"grep -qE {shlex.quote(pattern)} {quoted}",
             expect_exit=0,
             weight=d.weight,
             timeout_s=d.timeout_s,
@@ -275,7 +304,10 @@ def _constraint_to_criterion(
         # Pre-image hashes are taken at intake; the check is a placeholder command that
         # the runtime can replace with a real snapshot diff. For the contract layer we
         # emit a command criterion that fails if any listed path is missing (conservative).
-        checks = " && ".join(f"test -e {p}" for p in paths) if paths else "true"
+        quoted_paths = [
+            _quoted_relative_path(p, what=f"Constraint {c.id!r}") for p in paths
+        ]
+        checks = " && ".join(f"test -e {p}" for p in quoted_paths) if quoted_paths else "true"
         return TaskCriterion(
             id=c.id,
             kind="command",

@@ -173,6 +173,8 @@ class NodeContext:
     one_off_log: Path | None = None
     deterministic_guide: bool = False
     patch_templates: Any = None
+    # API ceiling applied after compile_goal. None keeps the contract maximum.
+    max_criterion_timeout_s: int | None = None
 
     def op_once(self, op_seq: int, fn: Callable[[], T]) -> T:
         return self.ops.run_once(self.run_id, self.attempt_no, self.node, op_seq, fn)

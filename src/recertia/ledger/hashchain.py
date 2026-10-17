@@ -11,9 +11,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import sys
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 from contracts.ledger import LedgerAction, LedgerEntry
 
@@ -35,12 +44,47 @@ def compute_entry_hash(entry: LedgerEntry) -> str:
     return hashlib.sha256(_canonical_bytes(entry)).hexdigest()
 
 
+@contextmanager
+def _cross_process_lock(path: Path) -> Iterator[None]:
+    """Exclusive ``flock`` beside ``path`` (same pattern as the skill version lock).
+
+    Held across tip-read, append, and fsync so two processes cannot fork the chain.
+    The in-process ``threading.Lock`` is taken by the caller first.
+    """
+
+    lock_path = path.with_name(path.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if sys.platform == "win32":
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+                os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if sys.platform == "win32":
+                try:
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            else:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 class HashChainLedger:
     """One ledger, backed by one append-only JSONL file.
 
-    Thread-safe within a process via a lock; safe across process restarts because every
-    ``append`` is a single atomic line write and ``verify`` recomputes the whole chain from
-    disk rather than trusting in-memory state.
+    Thread-safe within a process via a lock, and cross-process safe via ``flock`` held
+    across tip-read, append, and fsync. ``verify`` recomputes the whole chain from disk
+    rather than trusting in-memory state. The hash is still SHA-256 of the canonical
+    payload.
 
     ``append`` needs only the current tip ``(seq, entry_hash)``, so both are cached after
     the first scan. The cache is validated against the file's ``(size, mtime_ns)`` before
@@ -103,7 +147,7 @@ class HashChainLedger:
     ) -> LedgerEntry:
         """Append one entry. Returns the entry as written, with ``seq`` and hashes filled in."""
 
-        with self._lock:
+        with self._lock, _cross_process_lock(self._path):
             seq, prev_hash = self._tip_unlocked()
             draft = LedgerEntry(
                 seq=seq,
@@ -116,8 +160,11 @@ class HashChainLedger:
                 at=at or datetime.now(timezone.utc),
             )
             entry = draft.model_copy(update={"entry_hash": compute_entry_hash(draft)})
+            line = entry.model_dump_json() + "\n"
             with self._path.open("a", encoding="utf-8") as f:
-                f.write(entry.model_dump_json() + "\n")
+                f.write(line)
+                f.flush()
+                os.fsync(f.fileno())
             self._tip = (seq + 1, entry.entry_hash)
             self._stat = self._file_stat()
             return entry

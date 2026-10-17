@@ -24,6 +24,8 @@ from urllib.parse import urlencode
 
 from fastapi import Header, HTTPException, Request
 
+from recertia.api.auth import validate_tenant_id
+
 Role = Literal["operator", "reviewer", "admin"]
 _VALID_ROLES = frozenset({"operator", "reviewer", "admin"})
 _OIDC_TTL_S = 600
@@ -114,6 +116,24 @@ class OidcPending:
     created_at: float
 
 
+def _checked_tenants(
+    tenants: tuple[str, ...], active: str | None
+) -> tuple[tuple[str, ...], str]:
+    """Validate every tenant id and require ``active`` to be a member.
+
+    ``active is None`` selects the first tenant. A present active id that is
+    not in the set is rejected (it is not silently rewritten).
+    """
+
+    if not tenants:
+        raise ValueError("session requires a tenant")
+    checked = tuple(validate_tenant_id(str(tenant)) for tenant in tenants)
+    chosen = checked[0] if active is None else validate_tenant_id(str(active))
+    if chosen not in checked:
+        raise ValueError("active_tenant is not a member of the session tenants")
+    return checked, chosen
+
+
 def pkce_challenge(verifier: str) -> str:
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
@@ -128,12 +148,13 @@ class SessionStore:
         self._oidc_lock = Lock()
 
     def issue(self, user: ConsoleUser, *, ttl_s: int = 86400) -> str:
+        tenants, active = _checked_tenants(tuple(user.tenants), user.active_tenant)
         payload = {
             "user_id": user.user_id,
             "display_name": user.display_name,
             "roles": sorted(user.roles),
-            "tenants": list(user.tenants),
-            "active_tenant": user.active_tenant,
+            "tenants": list(tenants),
+            "active_tenant": active,
             "exp": int(time.time()) + ttl_s,
         }
         body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
@@ -153,12 +174,16 @@ class SessionStore:
             return None
         if int(payload.get("exp", 0)) < int(time.time()):
             return None
-        tenants = tuple(payload.get("tenants") or [])
-        if not tenants:
+        raw_tenants = tuple(str(item) for item in (payload.get("tenants") or []))
+        if not raw_tenants:
             return None
-        active = payload.get("active_tenant") or tenants[0]
-        if active not in tenants:
-            active = tenants[0]
+        active_raw = payload.get("active_tenant")
+        try:
+            tenants, active = _checked_tenants(
+                raw_tenants, None if active_raw is None else str(active_raw)
+            )
+        except ValueError:
+            return None
         roles = frozenset(payload.get("roles") or [])
         if not roles & _VALID_ROLES:
             return None
@@ -167,10 +192,11 @@ class SessionStore:
             display_name=str(payload.get("display_name") or payload["user_id"]),
             roles=roles,
             tenants=tenants,
-            active_tenant=str(active),
+            active_tenant=active,
         )
 
     def switch_tenant(self, user: ConsoleUser, tenant_id: str) -> ConsoleUser:
+        tenant_id = validate_tenant_id(tenant_id)
         if tenant_id not in user.tenants:
             raise ValueError("tenant not in membership")
         return ConsoleUser(
@@ -293,15 +319,19 @@ def oidc_exchange_code(
         "RECERTIA_OIDC_DEFAULT_TENANTS", "default"
     )
     if isinstance(tenants_raw, str):
-        tenants = tuple(t.strip() for t in tenants_raw.split(",") if t.strip())
+        claimed = tuple(t.strip() for t in tenants_raw.split(",") if t.strip())
     else:
-        tenants = tuple(str(t) for t in tenants_raw)
+        claimed = tuple(str(t) for t in tenants_raw)
+    try:
+        tenants, active = _checked_tenants(claimed or ("default",), None)
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="oidc tenant id rejected") from exc
     return ConsoleUser(
         user_id=user_id,
         display_name=str(profile.get("name") or profile.get("email") or user_id),
         roles=roles,
-        tenants=tenants or ("default",),
-        active_tenant=(tenants or ("default",))[0],
+        tenants=tenants,
+        active_tenant=active,
     )
 
 

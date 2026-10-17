@@ -67,9 +67,12 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
             display_name=body.display_name,
             roles=requested,
             tenants=tenants,
-            active_tenant=active if active in tenants else tenants[0],
+            active_tenant=active,
         )
-        token = ctx.sessions.issue(user)
+        try:
+            token = ctx.sessions.issue(user)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         response.set_cookie("recertia_session", token, **session_cookie_kwargs())
         return {"ok": True, "user": _public_user(user)}
 

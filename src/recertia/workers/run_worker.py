@@ -38,6 +38,7 @@ class AsyncRunRequest:
     runs_root: Path
     index_path: Path
     model_config: ModelConfig | None = None
+    max_criterion_timeout_s: int | None = None
 
 
 class AsyncRunWorker:
@@ -53,26 +54,26 @@ class AsyncRunWorker:
         self.on_complete = on_complete
         self.on_failed = on_failed
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="recertia-run")
-        self._cancel: set[str] = set()
+        self._cancel: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
-        self._futures: dict[str, Future[Any]] = {}
+        self._futures: dict[tuple[str, str], Future[Any]] = {}
 
     def shutdown(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
 
-    def request_cancel(self, run_id: str) -> None:
+    def request_cancel(self, tenant_id: str, run_id: str) -> None:
         with self._lock:
-            self._cancel.add(run_id)
+            self._cancel.add((tenant_id, run_id))
 
-    def is_cancelled(self, run_id: str) -> bool:
+    def is_cancelled(self, tenant_id: str, run_id: str) -> bool:
         with self._lock:
-            return run_id in self._cancel
+            return (tenant_id, run_id) in self._cancel
 
     def submit(self, req: AsyncRunRequest) -> None:
-        self.events.append(req.run_id, "run.queued", {"mode": "async"})
+        self.events.append(req.tenant_id, req.run_id, "run.queued", {"mode": "async"})
         fut = self._pool.submit(self._run, req)
         with self._lock:
-            self._futures[req.run_id] = fut
+            self._futures[(req.tenant_id, req.run_id)] = fut
 
     def _fail(self, req: AsyncRunRequest, *, cancelled: bool = False) -> None:
         if self.on_failed is not None:
@@ -80,12 +81,13 @@ class AsyncRunWorker:
 
     def _run(self, req: AsyncRunRequest) -> None:
         self.events.append(
+            req.tenant_id,
             req.run_id,
             "run.started",
             {"task_class": req.task_class or "repo-chore", "mode": "async"},
         )
-        if self.is_cancelled(req.run_id):
-            self.events.append(req.run_id, "run.cancelled", {"by": "operator"})
+        if self.is_cancelled(req.tenant_id, req.run_id):
+            self.events.append(req.tenant_id, req.run_id, "run.cancelled", {"by": "operator"})
             self._fail(req, cancelled=True)
             return
         task_class = resolve_task_class(
@@ -111,10 +113,11 @@ class AsyncRunWorker:
             approve_default_tools=req.approve_tools or configured_backend() == "container",
             model_config=req.model_config,
         )
+        bundle.orchestrator.max_criterion_timeout_s = req.max_criterion_timeout_s
         try:
             # Cooperative cancel is checked via cancel set; full mid-node cancel lands later.
-            if self.is_cancelled(req.run_id):
-                self.events.append(req.run_id, "run.cancelled", {"by": "operator"})
+            if self.is_cancelled(req.tenant_id, req.run_id):
+                self.events.append(req.tenant_id, req.run_id, "run.cancelled", {"by": "operator"})
                 self._fail(req, cancelled=True)
                 return
             state = bundle.orchestrator.start(
@@ -128,6 +131,7 @@ class AsyncRunWorker:
                 manifest=bundle.run_manifest(),
             )
             self.events.append(
+                req.tenant_id,
                 req.run_id,
                 "run.finished",
                 {
@@ -140,11 +144,13 @@ class AsyncRunWorker:
                 self.on_complete(req.tenant_id, req.run_id, state)
         except Exception as exc:  # noqa: BLE001
             self.events.append(
+                req.tenant_id,
                 req.run_id,
                 "error",
                 {"code": "run_failed", "message": str(exc)[:500], "retryable": False},
             )
             self.events.append(
+                req.tenant_id,
                 req.run_id,
                 "run.finished",
                 {"terminal": "error", "cost_usd": 0.0, "attempt_no": 0},

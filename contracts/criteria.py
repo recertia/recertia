@@ -185,6 +185,20 @@ class TaskCriterion(_CriterionFields):
     preregistered: bool = True
 
 
+def clamp_criterion_timeouts(
+    criteria: list[TaskCriterion], *, ceiling_s: int
+) -> list[TaskCriterion]:
+    """Cap each criterion's ``timeout_s`` at ``ceiling_s`` (API ceiling after compile)."""
+
+    clamped: list[TaskCriterion] = []
+    for criterion in criteria:
+        if criterion.timeout_s > ceiling_s:
+            clamped.append(criterion.model_copy(update={"timeout_s": ceiling_s}))
+        else:
+            clamped.append(criterion)
+    return clamped
+
+
 class SkillCertificationCriterion(_CriterionFields):
     """Authored at ``distill`` time; validated on independent certification runs.
 

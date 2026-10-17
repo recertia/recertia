@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 from pathlib import Path
 
 from contracts.criteria import TaskCriterion
@@ -52,7 +53,10 @@ def _freeze_script(expected: dict[str, str]) -> str:
         "bad=[r for r,h in exp.items() if dig(r)!=h]\n"
         "sys.exit(1 if bad else 0)\n"
     )
-    return "python -c " + repr(code)
+    # shlex.quote keeps real newlines inside single quotes. Python repr encodes
+    # them as backslash-n, which sh does not turn back into newlines, so
+    # ``python -c`` then sees invalid source.
+    return "python -c " + shlex.quote(code)
 
 
 def _paths(constraint: Constraint) -> list[str]:

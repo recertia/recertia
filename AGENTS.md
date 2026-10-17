@@ -38,7 +38,9 @@ files under a gitignored `.recertia/` dir; no external database is required for 
 - Lint + types: `ruff check contracts/ src/ scripts/ tests/ conftest.py` and
   `mypy contracts/ src/recertia/`. Main CI fails closed on mypy (see #8).
 - Default T2 policy is `policy/default.json` (`RECERTIA_POLICY_PATH` overrides). Do not
-  write weekly `JobQuota` spend back into that file — spend is `.recertia/job_quota.json`.
+  write weekly `JobQuota` spend back into that file — spend is
+  `{runs_root}/jobs/job_quota.json` (CLI default `.recertia/jobs/job_quota.json`;
+  the API writes `.recertia/runs/<tenant>/jobs/job_quota.json`).
 - Console auth defaults **off**. Dev login needs `RECERTIA_CONSOLE_AUTH=dev` and
   `RECERTIA_CONSOLE_DEV_LOGIN=1`. OIDC requires `RECERTIA_CONSOLE_SESSION_SECRET`.
 - Drift/hygiene checks (part of CI): the `--check` scripts under `scripts/`

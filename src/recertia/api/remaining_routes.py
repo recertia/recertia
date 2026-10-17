@@ -18,6 +18,7 @@ from recertia.memory.affordance import AffordanceStore
 from recertia.memory.episodic import EpisodicStore
 from recertia.memory.query import federated_query
 from recertia.memory.semantic import FactStore
+from recertia.paths import PathEscapeError, contained_path, looks_absolute
 from recertia.policy_load import load_policy
 from recertia.proposals.store import ProposalRecord
 from recertia.trajectory.import_store import ImportRejected, ingest_trajectory
@@ -50,6 +51,35 @@ class MemoryQueryBody(BaseModel):
     workdir: str | None = None
     limit: int = Field(default=8, ge=1, le=50)
     env: dict[str, str] | None = None
+
+
+def _confine_memory_workdir(runs_root: Path, requested: str | None) -> Path:
+    """Keep a memory-query workdir under the tenant runs root.
+
+    Absolute paths and ``..`` escapes are rejected before any directory is
+    created, so a caller cannot mkdir an arbitrary host path.
+    """
+
+    base = (runs_root / "memory-query").resolve()
+    if requested is None or not requested.strip():
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+    if looks_absolute(requested) or "\x00" in requested:
+        raise V1HTTPError(
+            400,
+            code="invalid_workdir",
+            message="workdir must be a relative path under the tenant workspace",
+        )
+    try:
+        candidate = contained_path(base, requested)
+    except PathEscapeError as exc:
+        raise V1HTTPError(
+            400,
+            code="invalid_workdir",
+            message="workdir escapes the tenant workspace",
+        ) from exc
+    candidate.mkdir(parents=True, exist_ok=True)
+    return candidate
 
 
 def _tenant(
@@ -243,6 +273,15 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         rec = ctx.proposals.get(decision_id, tenant_id=tenant_id)
         if rec is None:
             raise V1HTTPError(404, code="not_found", message="review not found")
+        if rec.kind in {"correction"} or rec.payload.get("tier") == "T2":
+            if user is not None and not user.may("reviewer"):
+                raise V1HTTPError(403, code="forbidden", message="T2 requires reviewer")
+            if user is None and "admin" not in principal.scopes:
+                raise V1HTTPError(
+                    403,
+                    code="forbidden",
+                    message="T2 requires admin key or reviewer",
+                )
         try:
             updated = ctx.proposals.decide(
                 decision_id,
@@ -385,8 +424,7 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
     ) -> dict[str, Any]:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
         runs_root = ctx.tenant_runs_root(tenant_id)
-        workdir = Path(body.workdir) if body.workdir else runs_root / "memory-query"
-        workdir.mkdir(parents=True, exist_ok=True)
+        workdir = _confine_memory_workdir(runs_root, body.workdir)
         return federated_query(
             body.query,
             skills_root=ctx.tenant_skills_root(tenant_id),

@@ -8,7 +8,10 @@ produces ``tool``, which does not damage skill trust.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -72,6 +75,25 @@ class ResourceAffordance:
         return float(s[min(len(s) - 1, int(len(s) * 0.95))])
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` via a same-directory temp file, fsync, then replace."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 class AffordanceStore:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
@@ -81,10 +103,21 @@ class AffordanceStore:
         self.resources: dict[tuple[str, str], ResourceAffordance] = {}
         self._load()
 
+    def _quarantine(self) -> None:
+        dest = self.path.with_name(f"{self.path.name}.corrupt-{time.time_ns()}")
+        os.replace(self.path, dest)
+
     def _load(self) -> None:
         if not self.path.exists():
             return
-        data = json.loads(self.path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            self._quarantine()
+            return
+        if not isinstance(data, dict):
+            self._quarantine()
+            return
         for name, raw in data.get("tools", {}).items():
             self.tools[name] = ToolAffordance(**raw)
         for key, raw in data.get("resources", {}).items():
@@ -117,7 +150,7 @@ class AffordanceStore:
                     for (k, i), a in self.resources.items()
                 },
             }
-            self.path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            _atomic_write_text(self.path, json.dumps(payload, indent=2) + "\n")
 
     def record_tool(self, result: ToolResult) -> None:
         with self._lock:

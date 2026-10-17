@@ -54,6 +54,16 @@ from recertia.solver.transcript import TranscriptStore
 from recertia.trajectory.store import TrajectoryStore
 
 
+def _tenant_owns_run(ctx: Any, tenant_id: str, run_id: str) -> bool:
+    """True when this tenant has the run in memory, on disk, or in its event log."""
+
+    if (tenant_id, run_id) in ctx.runs:
+        return True
+    if ctx.events.exists(tenant_id, run_id):
+        return True
+    return ctx.load_from_checkpoints(ctx.root, tenant_id, run_id) is not None
+
+
 def register_library_routes(app: FastAPI, rs: RouteState) -> None:
     ctx = rs.ctx
     require_runs = rs.require_runs
@@ -233,14 +243,11 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> StreamingResponse:
         run_id = ctx.validate_run_id(run_id)
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
-        rec = ctx.runs.get((tenant_id, run_id)) or ctx.load_from_checkpoints(
-            ctx.root, tenant_id, run_id
-        )
-        if rec is None and not (ctx.root / "run_events" / f"{run_id}.jsonl").exists():
+        if not _tenant_owns_run(ctx, tenant_id, run_id):
             raise HTTPException(status_code=404, detail="run not found")
 
         def gen():
-            yield from ctx.events.iter_sse(run_id, after=after)
+            yield from ctx.events.iter_sse(tenant_id, run_id, after=after)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -251,10 +258,12 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         principal=Depends(require_runs),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
-        del x_recertia_tenant, request
         run_id = ctx.validate_run_id(run_id)
-        ctx.worker.request_cancel(run_id)
-        ctx.events.append(run_id, "run.cancelled", {"by": principal.key_id})
+        tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
+        if not _tenant_owns_run(ctx, tenant_id, run_id):
+            raise HTTPException(status_code=404, detail="run not found")
+        ctx.worker.request_cancel(tenant_id, run_id)
+        ctx.events.append(tenant_id, run_id, "run.cancelled", {"by": principal.key_id})
         return {"run_id": run_id, "status": "cancel_requested"}
 
     # ----- C0 skills -----

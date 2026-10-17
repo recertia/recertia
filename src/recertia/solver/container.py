@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
+import contextvars
 import os
 import shutil
 import signal
 import subprocess
 import sys
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Iterator, Literal
 
 from recertia.solver.sandbox import SandboxError, SandboxLimits
 
 Backend = Literal["container", "local"]
 
 _ALLOWED_IMAGES = frozenset({"python:3.12-slim", "python:3.11-slim", "python:3.12", "python:3.11"})
+_CUSTOM_IMAGE_TRUE = frozenset({"1", "true", "yes", "on"})
+_backend_override: contextvars.ContextVar[Backend | None] = contextvars.ContextVar(
+    "recertia_execution_backend", default=None
+)
 
 
 
@@ -51,12 +57,43 @@ def container_runtime() -> str | None:
 
 
 def configured_backend() -> Backend:
-    """Read the explicitly configured execution mode; production defaults to OCI."""
+    """Read the execution mode for this context; production defaults to OCI.
 
-    backend = os.environ.get("RECERTIA_EXECUTION_BACKEND", "container")
+    A context override (CLI ``--local-exec``, tests) wins over the process
+    environment. The process environment is never written by this module.
+    """
+
+    override = _backend_override.get()
+    backend = override if override is not None else os.environ.get(
+        "RECERTIA_EXECUTION_BACKEND", "container"
+    )
     if backend not in {"container", "local"}:
         raise SandboxError(f"unsupported execution backend: {backend!r}")
     return backend  # type: ignore[return-value]
+
+
+@contextmanager
+def execution_backend_override(backend: Backend) -> Iterator[None]:
+    """Select a backend for the current context without mutating ``os.environ``."""
+
+    if backend not in {"container", "local"}:
+        raise SandboxError(f"unsupported execution backend: {backend!r}")
+    token = _backend_override.set(backend)
+    try:
+        yield
+    finally:
+        _backend_override.reset(token)
+
+
+def allow_custom_image() -> bool:
+    """True only for an explicit opt-in, not for any non-empty string.
+
+    Accepted values (case-insensitive): ``1``, ``true``, ``yes``, ``on``.
+    ``0``, ``false``, and any other value stay on the image allowlist.
+    """
+
+    raw = os.environ.get("RECERTIA_ALLOW_CUSTOM_IMAGE", "").strip().lower()
+    return raw in _CUSTOM_IMAGE_TRUE
 
 
 def local_execution_capability() -> LocalExecutionCapability | None:
@@ -135,7 +172,7 @@ def default_container_image() -> str:
     image = os.environ.get("RECERTIA_CONTAINER_IMAGE", "python:3.12-slim")
     # Accept ``tag`` or ``tag@sha256:…``; allowlist checks the tag portion.
     tag = image.split("@", 1)[0]
-    if tag not in _ALLOWED_IMAGES and not os.environ.get("RECERTIA_ALLOW_CUSTOM_IMAGE"):
+    if tag not in _ALLOWED_IMAGES and not allow_custom_image():
         raise SandboxError(
             f"container image {image!r} is not on the allowlist {_ALLOWED_IMAGES}"
         )
@@ -209,7 +246,7 @@ def _enforce_container_policy(spec: ContainerSpec) -> ContainerSpec:
     if not spec.workdir_mount.startswith("/"):
         raise SandboxError("workdir_mount must be an absolute container path")
     tag = _image_tag(spec.image)
-    if tag not in _ALLOWED_IMAGES and not os.environ.get("RECERTIA_ALLOW_CUSTOM_IMAGE"):
+    if tag not in _ALLOWED_IMAGES and not allow_custom_image():
         raise SandboxError(f"container image {spec.image!r} is not on the allowlist")
     return spec
 
@@ -242,6 +279,8 @@ def _container_run(
         "512m",
         "--cpus",
         "1",
+        "-e",
+        f"HOME={spec.workdir_mount}",
     ]
     # Digest-pinned images should not be retargeted by a mutable tag pull.
     if "@sha256:" in spec.image:
@@ -334,15 +373,20 @@ def _local_run(
     workdir = workdir.resolve()
     if not workdir.is_dir():
         raise SandboxError(f"workdir does not exist: {workdir}")
-    env = {key: value for key, value in os.environ.items() if key in limits.allowed_env_keys}
+    # Never inherit a host HOME. The child home is the workdir even when a
+    # caller-supplied allowlist still names HOME.
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in limits.allowed_env_keys and key != "HOME"
+    }
+    env["HOME"] = str(workdir)
     if sys.platform == "win32":
         env.setdefault("PATH", os.environ.get("PATH", ""))
-        env.setdefault("HOME", str(workdir))
         env.setdefault("TMP", str(workdir))
         env.setdefault("TEMP", str(workdir))
     else:
         env.setdefault("PATH", "/usr/bin:/bin")
-        env.setdefault("HOME", str(workdir))
         env.setdefault("TMPDIR", str(workdir))
 
     kwargs: dict = {
@@ -358,22 +402,35 @@ def _local_run(
         import resource
 
         def limit_process() -> None:
+            # The platform has setrlimit (non-Windows). A failure must not run
+            # the command unlimited — fail closed in the child before exec.
             try:
                 resource.setrlimit(
                     resource.RLIMIT_CPU, (limits.max_cpu_seconds, limits.max_cpu_seconds)
                 )
                 bytes_cap = limits.max_address_space_mb * 1024 * 1024
                 resource.setrlimit(resource.RLIMIT_AS, (bytes_cap, bytes_cap))
-            except (AttributeError, OSError, ValueError):
-                pass
+            except (OSError, ValueError) as exc:
+                raise SandboxError(f"setrlimit failed: {exc}") from exc
 
         kwargs["preexec_fn"] = limit_process
 
     # Own session/process group: on timeout kill the whole tree, not just /bin/sh.
     del kwargs["timeout"], kwargs["capture_output"]
-    with subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, **kwargs
-    ) as proc:
+    try:
+        # preexec_fn exceptions are not reconstructed as SandboxError (vfork
+        # reports a builtin SubprocessError). A failed setrlimit must still
+        # surface as a closed sandbox, not as a started command.
+        proc_cm = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            **kwargs,
+        )
+    except subprocess.SubprocessError as exc:
+        raise SandboxError(f"setrlimit failed: {exc}") from exc
+    with proc_cm as proc:
         try:
             out, err = proc.communicate(timeout=timeout_s)
         except subprocess.TimeoutExpired:
