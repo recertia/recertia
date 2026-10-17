@@ -42,6 +42,9 @@ time.
 | **RW-TM** | ops + docs | Signed threat model; NIST AI RMF if tenant GA proceeds | single-operator §5 deltas accepted-with-owner; tenant signature open |
 | **RW-HY** | hygiene | Spec/README drift (license, "aspirational" API table) | shipped |
 | **RW-HCI** | engineering | Ye/Zhao high-confidence review fixes (honest faithfulness scorer, paired lift gap, exact applicability, writer, curator proposal log) | P0+P1+leftovers landed; `a9` under evaluation |
+| **RW-SR** | engineering | Store Receipts — published durability unit (ADR-0020) | P0 contract shipped; P1–P5 open; not a GA gate |
+| **RW-RC** | docs + gated | Recuris extracts (checked WM, blame taxonomy, three-arm lift, miner candidate). **Do not build.** | open, deferred |
+| **RW-REM** | engineering | Multi-tenant remediation (ADR-0021): services, queue, control plane, guardrails | Phase 0–1 shipped (#68/#69); Phases 2–5 remaining |
 
 Deliberately out of scope for this year (unchanged from
 [measurement-and-scope.md](measurement-and-scope.md) §18): fine-tuning, learned retrieval
@@ -288,3 +291,37 @@ Plan:
 [`docs/plans/2026-08-24-todays-work-refactor.md`](../plans/2026-08-24-todays-work-refactor.md).
 Do not grow the graph. Do not enable idle offload until a golden-class RSS row exists.
 Do not treat an empty-eval-DB `soak record` as a counted week.
+
+## 15. Sibling remaining-work tracks
+
+These rows belong in §2. Details stay in the sibling files until a later fold
+regenerates [`architecture2.md`](../architecture2.md) from this document only.
+
+### RW-SR — Store Receipts (ADR-0020)
+
+Index: [`remaining-work-sr.md`](remaining-work-sr.md). Plan:
+[`plans/2026-09-23-store-receipts.md`](../plans/2026-09-23-store-receipts.md).
+P0 (`StoreReceipt` contract, `close_receipt` ledger action) is on `main`. P1
+puts `receipts.jsonl` in the existing tar and adds `recertia receipt`; P2–P3
+are engineering; P4 flips `backup --receipts` only after one counted soak
+week compares tar vs receipt restore; P5 is sleep/Curator closers. HEX stays
+gated. Not a GA gate.
+
+### RW-RC — Recuris extracts (deferred)
+
+Index: [`remaining-work-rc.md`](remaining-work-rc.md). **Do not build.**
+RW-RC1–RC4 wait on the enablement predicate in that file (`a1` interval or a
+written design review). Fifteen nodes stay T3. No RSI language. No unbounded
+skill accretion.
+
+### RW-REM — Multi-tenant remediation (ADR-0021)
+
+Plan: [`plans/remediation/README.md`](../plans/remediation/README.md).
+Phase 0 hotfixes (#68) and Phase 1 foundations (#69) shipped. Remaining:
+
+- **Phase 2** — services, PDP action table, run ownership (ARCH-4/5/6, SEC-2/3/5/7/8/10, REL-3)
+- **Phase 3** — durable `RunQueue`, outbox, ledger repair/signing
+- **Phase 4** — paging/SSE, `/ready`, backup/GC, Postgres+RLS, tenant lifecycle, executor service, secrets
+- **Phase 5** — supply-chain review, security-review automation, blocking guardrails
+
+Do not treat Phase 0–1 as operator GA. Soak (RW-GA) is still the ops gate.

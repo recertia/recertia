@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Nightly lowest-deps floors** — raise direct floors so `pip install -e ".[dev]" -c lowest-direct.txt` can run the suite: `pydantic>=2.11,<3` (schema output), `typer>=0.13` (click 8.3+ secondary flags), `jsonschema>=4.0.1` (4.0.0 is yanked). Do not loosen the nightly lowest-deps job (#72).
+- **Remaining-work inventory** — fold RW-SR, RW-RC, and RW-REM (ADR-0021 Phase 0–1 shipped, Phases 2–5 remaining) into [`docs/architecture/remaining-work.md`](docs/architecture/remaining-work.md) §2/§15. Architecture index no longer calls the remediation plan "specifications only".
 
 - **Console / registry / distill extract** — `register_console_routes` is a
   dispatcher over session / library / program modules (`console_deps.RouteState`
