@@ -630,6 +630,51 @@ def _policy_decision_point_referenced(root: Path) -> bool:
     return defined and used
 
 
+def _local_run_uses_shell_false(root: Path) -> bool:
+    path = root / "src" / "recertia" / "solver" / "container.py"
+    if not path.is_file():
+        return False
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name != "_local_run":
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            for keyword in child.keywords:
+                if (
+                    keyword.arg == "shell"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is False
+                ):
+                    return True
+        return False
+    return False
+
+
+def _prometheus_metrics_route(root: Path) -> bool:
+    path = root / "src" / "recertia" / "api" / "__init__.py"
+    if not path.is_file():
+        return False
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name != "prometheus_metrics":
+            continue
+        for deco in node.decorator_list:
+            if not isinstance(deco, ast.Call) or not deco.args:
+                continue
+            arg = deco.args[0]
+            if isinstance(arg, ast.Constant) and arg.value == "/metrics":
+                return True
+    return False
+
+
 def check_ast_controls(root: Path) -> list[ControlResult]:
     """AST attestations. Existing substring controls stay in ``_RECERTIA_CONTROLS``."""
 
@@ -678,6 +723,18 @@ def check_ast_controls(root: Path) -> list[ControlResult]:
             _oidc_authorize_sends_nonce(root),
             "src/recertia/api/console_auth.py",
             "OIDC authorize URL must include a nonce",
+        ),
+        (
+            "local-exec-shell-false",
+            _local_run_uses_shell_false(root),
+            "src/recertia/solver/container.py",
+            "local executor must pass shell=False to the child process",
+        ),
+        (
+            "prometheus-metrics-route",
+            _prometheus_metrics_route(root),
+            "src/recertia/api/__init__.py",
+            "GET /metrics must be a route on the API app",
         ),
     )
     return [

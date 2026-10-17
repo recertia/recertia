@@ -135,10 +135,14 @@ def test_ast_controls_flag_missing_umask_and_origin(tmp_path: Path) -> None:
     assert results["api-umask-077"] is False
     assert results["cookie-post-origin-check"] is False
     assert results["oidc-authorize-nonce"] is False
+    assert results["local-exec-shell-false"] is False
+    assert results["prometheus-metrics-route"] is False
     live = {item.id: item.ok for item in check_ast_controls(REPO_ROOT)}
     assert live["api-umask-077"] is True
     assert live["cookie-post-origin-check"] is True
     assert live["oidc-authorize-nonce"] is True
+    assert live["local-exec-shell-false"] is True
+    assert live["prometheus-metrics-route"] is True
 
 
 def test_subprocess_list_form_is_clean(tmp_path: Path) -> None:
