@@ -77,6 +77,8 @@ def test_multi_node_requires_tenant_skills_and_workspace_roots(
     with pytest.raises(ConfigError, match="RECERTIA_WORKSPACE_ROOTS"):
         load_settings().validate_deployment(role="api")
     monkeypatch.setenv("RECERTIA_WORKSPACE_ROOTS", str(tmp_path))
+    monkeypatch.setenv("RECERTIA_TENANT_ENCRYPTION", "required")
+    monkeypatch.setenv("RECERTIA_CONSOLE_AUTH", "oidc")
     load_settings().validate_deployment(role="api")
 
 

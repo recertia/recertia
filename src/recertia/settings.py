@@ -360,6 +360,20 @@ class Settings:
             raise ConfigError("multi_node requires RECERTIA_WORKSPACE_ROOTS")
         if not self.api_key_pepper:
             raise ConfigError("multi_node requires RECERTIA_API_KEY_PEPPER")
+        if self.allow_faults:
+            raise ConfigError("multi_node refuses RECERTIA_ALLOW_FAULTS=1")
+        if self.tenant_encryption != "required":
+            raise ConfigError("multi_node requires RECERTIA_TENANT_ENCRYPTION=required")
+        owner = _database_role(self.database_url or "")
+        if owner in {"recertia_owner", "postgres"}:
+            raise ConfigError(
+                "multi_node refuses a database URL that uses the owner role "
+                f"{owner!r}; use the application role"
+            )
+        if self.console_auth != "oidc":
+            raise ConfigError("multi_node refuses RECERTIA_CONSOLE_AUTH=off and dev-login")
+        if self.console_dev_login:
+            raise ConfigError("multi_node refuses RECERTIA_CONSOLE_DEV_LOGIN")
         for check in _DEPLOYMENT_CHECKS:
             check(self)
 
@@ -393,6 +407,13 @@ class Settings:
             timeout_s=self.model_timeout_s,
             max_retries=self.model_max_retries,
         )
+
+
+def _database_role(url: str) -> str:
+    from urllib.parse import unquote, urlparse
+
+    name = urlparse(url).username or ""
+    return unquote(name).lower()
 
 
 def load_settings(environ: Mapping[str, str] | None = None) -> Settings:

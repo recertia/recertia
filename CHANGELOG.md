@@ -11,8 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Tenant-keyed control plane on the existing SQLite-and-files tree. Development
 default is still `RECERTIA_DEPLOYMENT_MODE=single_node`. Production solves still
-default to the container executor. `multi_node` refuses SQLite and the local
-backend; it does not yet run Postgres RLS, object storage, or a remote executor.
+default to the container executor. `multi_node` refuses SQLite, the local
+backend, `RECERTIA_ALLOW_FAULTS=1`, `RECERTIA_TENANT_ENCRYPTION` other than
+`required`, a database URL whose user is `recertia_owner` or `postgres`,
+`RECERTIA_CONSOLE_AUTH=off` or `dev`, and `RECERTIA_CONSOLE_DEV_LOGIN`. It does
+not yet run Postgres RLS, object storage, or a remote executor.
 
 **Tenancy.** Runs, events, and blobs live under `root/runs/<tenant>/` and
 `root/blobs/<tenant>/`. Memberships are `tenant_admin` or `operator`. The CLI is
