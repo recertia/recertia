@@ -93,9 +93,13 @@ def solve_scratch_observe_act(
             except CommandPolicyError as exc:
                 payload["refused"] = str(exc)
                 payload["usage"] = UsageDelta().as_dict()
+                if writer:
+                    writer.event("tool", tool="shell", command=command, refused=str(exc))
                 return payload
             payload["command"] = command
             invoke_window = RuntimeWindow(ctx)
+            if writer:
+                writer.event("tool", tool="shell", command=command, step=seq)
             result = tools.invoke(
                 "shell",
                 {"command": command},
@@ -144,14 +148,10 @@ def solve_scratch_observe_act(
         if result.get("refused"):
             last_error = str(result["refused"])
             history.append(f"$ {command}\n[refused] {result['refused']}")
-            if writer:
-                writer.event("tool", tool="shell", command=command, refused=str(result["refused"]))
             continue
 
         meter.charge_delta(UsageDelta.from_dict(result.get("usage") or {}))
         record_new_affordances(ctx, window)
-        if writer:
-            writer.event("tool", tool="shell", command=command, step=step)
         history.append(
             f"$ {command}\nexit={result['returncode']}\n"
             f"stdout:\n{result['stdout'][-1500:]}\nstderr:\n{result['stderr'][-800:]}"
