@@ -17,7 +17,7 @@ GOOD = {"choices": [{"message": {"content": "ok"}}], "usage": {"prompt_tokens": 
 @pytest.fixture
 def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     calls: list[float] = []
-    monkeypatch.setattr("recertia.solver.model.time.sleep", calls.append)
+    monkeypatch.setattr("recertia.solver.model._sleep", calls.append)
     return calls
 
 

@@ -24,6 +24,12 @@ from recertia.solver.resilience import (
 )
 
 
+def _sleep(seconds: float) -> None:
+    """Retry delay. Tests patch this name so they do not replace stdlib ``time.sleep``."""
+
+    time.sleep(seconds)
+
+
 @dataclass
 class ModelResponse:
     text: str
@@ -137,7 +143,7 @@ class ModelClient(ABC):
                     cap_s=self.backoff_cap_s,
                     retry_after_s=retry_after if isinstance(retry_after, (int, float)) else None,
                 )
-                time.sleep(delay)
+                _sleep(delay)
                 continue
             finished = time.monotonic()
             response.latency_s = finished - started
