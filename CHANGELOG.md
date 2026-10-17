@@ -46,8 +46,10 @@ Optional wait (async only): `?wait=<seconds>`, `X-Recertia-Wait`, or
 `GET /v1/runs` is tenant-scoped keyset pagination (`limit` 1–100, default 50,
 `cursor`; response `{items, next_cursor}`) from `run_summaries`. A second run
 whose resolved workdir is already held returns `409` `workspace_busy`.
-`RECERTIA_ENV=prod` turns off
-`/docs`, `/redoc`, and `/openapi.json`. The API process sets umask `077`.
+`RECERTIA_ENV=prod` turns off `/docs`, `/redoc`, and `/openapi.json`. The API
+process sets umask `077`. A workspace snapshot is refused when free disk is
+below 1.2 times the tree size (`disk_space_low`). `recertia gc` keeps
+snapshots whose run id is still non-terminal.
 
 **Auth and console.** API keys are HMAC-SHA256 with a pepper. Existing PBKDF2
 rows stay valid and rehash on the next successful authenticate. `multi_node`

@@ -117,3 +117,10 @@ class SecretUnavailable(RecertiaError):
     http_status = 503
     retryable = False
     exit_code = 7
+
+
+class DiskSpaceLow(RecertiaError):
+    code = "disk_space_low"
+    http_status = 507
+    retryable = False
+    exit_code = 7

@@ -271,6 +271,19 @@ class CheckpointStore:
             ).fetchall()
         return [r[0] for r in rows]
 
+    def nonterminal_run_ids(self) -> set[str]:
+        """Run ids whose summary has no terminal status. GC keeps their snapshots."""
+
+        with self._lock:
+            self._backfill_summaries()
+            rows = self._conn.execute(
+                """
+                SELECT run_id FROM run_summaries
+                WHERE terminal IS NULL OR terminal = ''
+                """
+            ).fetchall()
+        return {str(row[0]) for row in rows}
+
     def list_summaries(
         self,
         *,

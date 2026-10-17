@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from recertia.workspace import WorkspaceManager
@@ -15,6 +15,7 @@ class GcReport:
     snapshots: list[str]
     transcripts: list[str]
     workspaces: list[str]
+    skipped_live: list[str] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -26,12 +27,17 @@ def garbage_collect(
     *,
     older_than_days: float = 14.0,
     dry_run: bool = False,
+    live_run_ids: set[str] | None = None,
 ) -> GcReport:
     """Remove aged artifacts under ``runs_root`` (snapshots, transcripts, workspaces)."""
 
     root = Path(runs_root)
+    skipped: list[str] = []
     snapshots = WorkspaceManager(root / "snapshots").gc(
-        older_than_days=older_than_days, dry_run=dry_run
+        older_than_days=older_than_days,
+        dry_run=dry_run,
+        live_run_ids=live_run_ids,
+        skipped_live=skipped,
     )
     transcripts = _gc_named_children(
         root / "transcripts", older_than_days=older_than_days, dry_run=dry_run
@@ -39,7 +45,12 @@ def garbage_collect(
     workspaces = _gc_named_children(
         root / "workspaces", older_than_days=older_than_days, dry_run=dry_run
     )
-    return GcReport(snapshots=snapshots, transcripts=transcripts, workspaces=workspaces)
+    return GcReport(
+        snapshots=snapshots,
+        transcripts=transcripts,
+        workspaces=workspaces,
+        skipped_live=skipped,
+    )
 
 
 def _gc_named_children(

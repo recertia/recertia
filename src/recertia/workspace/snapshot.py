@@ -18,8 +18,11 @@ import shutil
 import uuid
 from pathlib import Path
 
+from recertia.errors import DiskSpaceLow
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.paths import PathEscapeError, contained_path, is_within
+
+_SNAPSHOT_HEADROOM = 1.2
 
 
 class WorkspaceManager:
@@ -47,6 +50,8 @@ class WorkspaceManager:
         run_id = validate_run_id(run_id)
         ref = f"{run_id}-attempt{attempt_no}-{uuid.uuid4().hex[:8]}"
         dest = contained_path(self._snapshots_root, ref)
+        need = int(_apparent_size(workdir) * _SNAPSHOT_HEADROOM) if workdir.exists() else 0
+        _check_free_space(self._snapshots_root, need)
         if workdir.exists():
             _copy_tree_contained(workdir, dest)
         else:
@@ -83,6 +88,8 @@ class WorkspaceManager:
         *,
         older_than_days: float = 14.0,
         dry_run: bool = False,
+        live_run_ids: set[str] | None = None,
+        skipped_live: list[str] | None = None,
     ) -> list[str]:
         """Delete snapshot directories whose mtime is older than ``older_than_days``.
 
@@ -93,6 +100,7 @@ class WorkspaceManager:
         import time
 
         cutoff = time.time() - (older_than_days * 86400.0)
+        live = live_run_ids or set()
         removed: list[str] = []
         if not self._snapshots_root.exists():
             return removed
@@ -105,10 +113,49 @@ class WorkspaceManager:
                 continue
             if mtime > cutoff:
                 continue
+            run_id = child.name.split("-attempt", 1)[0]
+            if run_id in live:
+                if skipped_live is not None:
+                    skipped_live.append(child.name)
+                continue
             removed.append(child.name)
             if not dry_run:
                 shutil.rmtree(child, ignore_errors=True)
         return removed
+
+
+def _apparent_size(path: Path) -> int:
+    total = 0
+    if not path.exists():
+        return 0
+    for root, dirnames, filenames in os.walk(path, followlinks=False):
+        root_path = Path(root)
+        dirnames[:] = [name for name in dirnames if not (root_path / name).is_symlink()]
+        for name in filenames:
+            src_file = root_path / name
+            if src_file.is_symlink():
+                continue
+            try:
+                total += src_file.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def _check_free_space(dest_parent: Path, need_bytes: int) -> None:
+    """Refuse the copy when the filesystem cannot hold ``need_bytes``."""
+
+    dest_parent.mkdir(parents=True, exist_ok=True)
+    stats = os.statvfs(dest_parent)
+    free = int(stats.f_bavail) * int(stats.f_frsize)
+    from recertia.observability.metrics import metrics
+
+    metrics.set_gauge("recertia_disk_free_bytes", float(free))
+    if free < need_bytes:
+        raise DiskSpaceLow(
+            f"snapshot needs {need_bytes} bytes but only {free} are free",
+            details={"need_bytes": need_bytes, "free_bytes": free},
+        )
 
 
 def _copy_tree_contained(src: Path, dst: Path) -> None:
