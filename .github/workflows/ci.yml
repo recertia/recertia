@@ -36,7 +36,9 @@ jobs:
         run: ruff --version
 
       - name: Lint (ruff)
-        run: ruff check contracts/ src/ scripts/ tests/ conftest.py
+        run: |
+          pip install ruff==0.17.1
+          ruff check contracts/ src/ scripts/ tests/ conftest.py
 
       - name: Lint preview (report-only)
         continue-on-error: true
