@@ -44,7 +44,9 @@ wait up to 60s for the worker thread; a timeout returns `202`. `mode=async`
 enqueues and returns `202 {run_id, status: queued}` unless a wait is requested.
 Optional wait (async only): `?wait=<seconds>`, `X-Recertia-Wait`, or
 `Prefer: wait` / `Prefer: wait=<seconds>` (cap 30s; timeout still returns 202).
-`GET /v1/runs` is tenant-scoped keyset pagination (`limit` 1–100, default 50,
+`GET /metrics` returns Prometheus text and requires the `metrics` scope
+(`admin` is accepted). `GET /v1/runs` is tenant-scoped keyset pagination
+(`limit` 1–100, default 50,
 `cursor`; response `{items, next_cursor}`) from `run_summaries`. A second run
 whose resolved workdir is already held returns `409` `workspace_busy`.
 `RECERTIA_ENV=prod` turns off `/docs`, `/redoc`, and `/openapi.json`. The API

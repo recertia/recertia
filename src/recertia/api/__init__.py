@@ -25,7 +25,7 @@ from contracts.criteria import TaskCriterion
 # ``api.auth`` do on the way to the core CLI) must succeed without it.
 try:
     from fastapi import Depends, FastAPI, HTTPException
-    from fastapi.responses import FileResponse, JSONResponse
+    from fastapi.responses import FileResponse, JSONResponse, Response
     from fastapi.staticfiles import StaticFiles
     from starlette.exceptions import HTTPException as StarletteHTTPException
 except ImportError:  # pragma: no cover - bare wheel has no [api] extra
@@ -34,6 +34,7 @@ except ImportError:  # pragma: no cover - bare wheel has no [api] extra
     HTTPException = None  # type: ignore[assignment,misc]
     FileResponse = None  # type: ignore[assignment,misc]
     JSONResponse = None  # type: ignore[assignment,misc]
+    Response = None  # type: ignore[assignment,misc]
     StaticFiles = None  # type: ignore[assignment,misc]
     StarletteHTTPException = None  # type: ignore[assignment,misc]
 else:
@@ -507,6 +508,21 @@ def create_app(
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=404, detail="blob not found") from exc
         return {"digest": key, "size": len(data), "text": data.decode(errors="replace")[:8000]}
+
+    @app.get("/metrics")
+    def prometheus_metrics(
+        principal: Principal = Depends(require_scope("metrics", key_store)),
+    ) -> Response:
+        """Prometheus text. Requires the ``metrics`` scope (``admin`` is accepted)."""
+
+        del principal
+        from recertia.observability.metrics import metrics
+
+        metrics.set_gauge("recertia_worker_up", 1.0, worker_id="api")
+        return Response(
+            content=metrics.render_prometheus(),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
 
     @app.get("/v1/metrics/dashboard")
     def dashboard(
