@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from recertia.ops.systems import not_established_detail, snapshot_from_events
+from recertia.observability.systems import not_established_detail, snapshot_from_events
 
 
 @dataclass

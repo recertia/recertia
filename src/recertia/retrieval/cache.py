@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from recertia.cache import CacheStats, ExactMatchTtl
-from recertia.ops.systems import canonical_args_hash
+from recertia.observability.systems import canonical_args_hash
 
 
 class RetrievalCache:

@@ -20,7 +20,7 @@ def systems_cmd(
 ) -> None:
     """Print the six-property snapshot. Does not claim lift or a 4.6× memory cut."""
 
-    from recertia.ops.systems import snapshot_from_events
+    from recertia.observability.systems import snapshot_from_events
     from recertia.telemetry import get_telemetry
 
     events: list[object]

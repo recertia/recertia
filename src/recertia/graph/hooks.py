@@ -76,7 +76,7 @@ class TelemetryHopHook:
     """Emits ``node.started`` and ``node.finished`` with the historical gauges."""
 
     def before(self, hop: Hop) -> None:
-        from recertia.ops.systems import component_class
+        from recertia.observability.systems import component_class
         from recertia.telemetry import emit_in_run
 
         emit_in_run(
@@ -93,7 +93,7 @@ class TelemetryHopHook:
         hop_ms: float,
         idle_gap_ms: float,
     ) -> None:
-        from recertia.ops.systems import hop_finished_attrs
+        from recertia.observability.systems import hop_finished_attrs
         from recertia.telemetry import emit_in_run
 
         emit_in_run(

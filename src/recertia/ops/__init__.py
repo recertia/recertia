@@ -1,14 +1,14 @@
 """Operator GA closeout helpers: backup/restore, tabletop, soak log, systems snapshot."""
 
-from recertia.ops.backup import BackupError, backup_tree, default_archive_name, restore_tree
-from recertia.ops.soak import classify_week, consecutive_counted, status
-from recertia.ops.systems import (
+from recertia.observability.systems import (
     SixPropertySnapshot,
     component_class,
     rss_bytes,
     snapshot_from_events,
     workdir_bytes,
 )
+from recertia.ops.backup import BackupError, backup_tree, default_archive_name, restore_tree
+from recertia.ops.soak import classify_week, consecutive_counted, status
 from recertia.ops.tabletop import inspect_run, run_tabletop
 
 __all__ = [

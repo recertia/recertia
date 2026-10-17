@@ -138,7 +138,7 @@ class Retriever:
         if suppress:
             return MemoryBundle(suppressed=True), explanation
 
-        from recertia.ops.systems import canonical_args_hash
+        from recertia.observability.systems import canonical_args_hash
         from recertia.telemetry import emit_in_run
 
         cached = self.result_cache.lookup(
