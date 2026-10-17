@@ -10,7 +10,7 @@ import copy
 from typing import Any, Mapping
 
 from recertia.cache import CACHEABLE_SIDE_EFFECTS, CacheStats, ExactMatchTtl, is_cacheable_side_effect
-from recertia.ops.systems import canonical_tool_key
+from recertia.observability.systems import canonical_tool_key
 from recertia.solver.registry import Tool, ToolResult
 
 # Re-export so existing imports keep working.
