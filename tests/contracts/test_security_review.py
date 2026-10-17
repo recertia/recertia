@@ -119,6 +119,26 @@ def test_ast_controls_flag_an_execution_backend_write(tmp_path: Path) -> None:
     assert results["policy-decision-point-referenced"] is False
 
 
+def test_ast_controls_flag_missing_umask_and_origin(tmp_path: Path) -> None:
+    api = tmp_path / "src" / "recertia" / "api"
+    api.mkdir(parents=True)
+    (api / "__init__.py").write_text("def create_app():\n    return None\n", encoding="utf-8")
+    (api / "console_session_routes.py").write_text(
+        "def dev_login():\n    return None\n"
+        "def logout():\n    return None\n"
+        "def switch_tenant():\n    return None\n",
+        encoding="utf-8",
+    )
+    from scripts.security_review import check_ast_controls
+
+    results = {item.id: item.ok for item in check_ast_controls(tmp_path)}
+    assert results["api-umask-077"] is False
+    assert results["cookie-post-origin-check"] is False
+    live = {item.id: item.ok for item in check_ast_controls(REPO_ROOT)}
+    assert live["api-umask-077"] is True
+    assert live["cookie-post-origin-check"] is True
+
+
 def test_subprocess_list_form_is_clean(tmp_path: Path) -> None:
     (tmp_path / "ok.py").write_text(
         "import subprocess\nsubprocess.run(['git', 'status'], check=False)\n",

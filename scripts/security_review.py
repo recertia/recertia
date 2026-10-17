@@ -550,6 +550,54 @@ def _run_event_log_includes_tenant(root: Path) -> bool:
     return False
 
 
+def _create_app_sets_umask(root: Path) -> bool:
+    path = root / "src" / "recertia" / "api" / "__init__.py"
+    if not path.is_file():
+        return False
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name != "create_app":
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call) or not isinstance(child.func, ast.Attribute):
+                continue
+            if child.func.attr != "umask" or not child.args:
+                continue
+            arg = child.args[0]
+            if isinstance(arg, ast.Constant) and arg.value == 0o077:
+                return True
+        return False
+    return False
+
+
+_COOKIE_POSTS = ("dev_login", "logout", "switch_tenant")
+
+
+def _cookie_posts_check_origin(root: Path) -> bool:
+    path = root / "src" / "recertia" / "api" / "console_session_routes.py"
+    if not path.is_file():
+        return False
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return False
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in _COOKIE_POSTS:
+            continue
+        calls = {
+            child.func.id
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+        }
+        if "_reject_foreign_origin" in calls:
+            found.add(node.name)
+    return found == set(_COOKIE_POSTS)
+
+
 def _policy_decision_point_referenced(root: Path) -> bool:
     defined = False
     used = False
@@ -596,6 +644,18 @@ def check_ast_controls(root: Path) -> list[ControlResult]:
             _policy_decision_point_referenced(root),
             "src/recertia",
             "PolicyDecisionPoint must be defined and referenced",
+        ),
+        (
+            "api-umask-077",
+            _create_app_sets_umask(root),
+            "src/recertia/api/__init__.py",
+            "create_app must set os.umask(0o077)",
+        ),
+        (
+            "cookie-post-origin-check",
+            _cookie_posts_check_origin(root),
+            "src/recertia/api/console_session_routes.py",
+            "dev-login, logout, and switch-tenant must reject a foreign Origin",
         ),
     )
     return [
