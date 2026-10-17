@@ -367,6 +367,8 @@ class HashChainLedger:
                     f"entry seq={entry.seq} entry_hash={entry.entry_hash!r} does not match "
                     f"recomputed {recomputed!r} (tampered or corrupted)"
                 )
+            if entry.action == "close_receipt":
+                _validate_close_receipt_evidence(entry)
             prev_hash = entry.entry_hash
 
     def _check_signatures(self, entries: list[LedgerEntry]) -> None:
@@ -391,6 +393,20 @@ class HashChainLedger:
 
         with self._held():
             return repair_locked(self, actor=actor, dry_run=dry_run)
+
+
+def _validate_close_receipt_evidence(entry: LedgerEntry) -> None:
+    """``close_receipt`` evidence must be a StoreReceipt (HMAC sig field stripped)."""
+
+    from contracts.receipt import StoreReceipt
+
+    evidence = {key: value for key, value in entry.evidence.items() if key != "_ledger_sig"}
+    try:
+        StoreReceipt.model_validate(evidence)
+    except Exception as exc:
+        raise LedgerVerificationError(
+            f"entry seq={entry.seq} close_receipt evidence is not a StoreReceipt: {exc}"
+        ) from exc
 
 
 def _resolve_durability(

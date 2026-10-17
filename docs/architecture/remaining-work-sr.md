@@ -11,7 +11,7 @@ Contract: [`contracts/receipt.py`](../../contracts/receipt.py)
 
 | ID | Kind | Item | Status |
 | --- | --- | --- | --- |
-| **RW-SR** | engineering | Store Receipts — published durability unit (ADR-0020) | P0 this PR; P1–P5 open; not a GA gate |
+| **RW-SR** | engineering | Store Receipts — published durability unit (ADR-0020) | P1 this PR; P2–P5 open; not a GA gate |
 
 ## Phase done-whens
 

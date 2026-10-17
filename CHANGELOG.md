@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Store Receipts P1** — `{runs_root}/receipts.jsonl` dual-write next to the
+  ledger, `recertia receipt show/verify/close` (advisory verify; missing genesis
+  exits 0). Tabletop-from-tar and `backup --receipts` defaults unchanged.
 - **ADR-0020 Store Receipts (Proposed)** — `StoreReceipt` contract, `close_receipt`
   ledger action, `schema/store_receipt.schema.json`. Does not flip `recertia backup`
   or tabletop defaults. P4 may switch `backup --receipts` only after one counted
