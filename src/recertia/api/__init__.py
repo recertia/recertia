@@ -385,7 +385,9 @@ def create_app(
     workspace_registry = WorkspaceRegistry(root / "workspaces_registry.sqlite")
     blobs_by_tenant: dict[str, FilesystemBlobStore] = {}
     # Keyed by (tenant_id, run_id) so tenants cannot collide on run_id.
-    runs: dict[tuple[str, str], RunRecord] = {}
+    from recertia.api.bounded import RUN_CACHE_MAX, BoundedDict
+
+    runs: BoundedDict[tuple[str, str], RunRecord] = BoundedDict(max_size=RUN_CACHE_MAX)
     from recertia.app.runs import RunService
 
     run_service = RunService(

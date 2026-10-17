@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import contextvars
 import json
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
+
+EVENT_CACHE_MAX = 4096
+SPAN_CACHE_MAX = 4096
 
 REQUIRED_EVENTS = frozenset(
     {
@@ -49,9 +53,11 @@ class SpanRecord:
 class Telemetry:
     """Process-local span/event recorder (OTel-compatible surface)."""
 
-    def __init__(self) -> None:
-        self.spans: list[SpanRecord] = []
-        self.events: list[SpanEvent] = []
+    def __init__(
+        self, *, max_events: int = EVENT_CACHE_MAX, max_spans: int = SPAN_CACHE_MAX
+    ) -> None:
+        self.spans: deque[SpanRecord] = deque(maxlen=max(1, max_spans))
+        self.events: deque[SpanEvent] = deque(maxlen=max(1, max_events))
         self._otel = None
         self._exporters: list[Any] = []
         try:
