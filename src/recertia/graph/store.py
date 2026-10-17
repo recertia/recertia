@@ -76,6 +76,21 @@ class CheckpointStore:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS run_summaries (
+                run_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                terminal TEXT,
+                updated_at TEXT NOT NULL,
+                cost_usd REAL,
+                task_class TEXT NOT NULL,
+                attempt_no INTEGER,
+                arm TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
         self._conn.commit()
 
     def close(self) -> None:
@@ -100,6 +115,7 @@ class CheckpointStore:
                     ") VALUES (?, ?, ?, ?, ?, datetime('now'), ?)",
                     (run_id, seq, node, next_node, state.model_dump_json(), fencing_token),
                 )
+                self._upsert_summary(state)
                 if eval_outbox is not None:
                     self._conn.execute(
                         """
@@ -123,6 +139,70 @@ class CheckpointStore:
                 raise CheckpointConflict(
                     f"checkpoint ({run_id!r}, seq={seq}) already exists"
                 ) from exc
+
+    def _upsert_summary(self, state: RunState) -> None:
+        terminal = str(state.terminal) if state.terminal else None
+        self._conn.execute(
+            """
+            INSERT INTO run_summaries (
+                run_id, status, terminal, updated_at, cost_usd,
+                task_class, attempt_no, arm, created_at
+            ) VALUES (?, ?, ?, datetime('now'), ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(run_id) DO UPDATE SET
+                status = excluded.status,
+                terminal = excluded.terminal,
+                updated_at = excluded.updated_at,
+                cost_usd = excluded.cost_usd,
+                task_class = excluded.task_class,
+                attempt_no = excluded.attempt_no,
+                arm = excluded.arm
+            """,
+            (
+                state.run_id,
+                terminal or "running",
+                terminal,
+                float(state.spent.cost_usd),
+                state.task.task_class or "repo-chore",
+                int(state.attempt_no),
+                str(state.arm),
+            ),
+        )
+
+    def _backfill_summaries(self) -> None:
+        """Fill summaries for checkpoints written before the summary table existed."""
+
+        self._conn.execute(
+            """
+            INSERT INTO run_summaries (
+                run_id, status, terminal, updated_at, cost_usd,
+                task_class, attempt_no, arm, created_at
+            )
+            SELECT
+                c.run_id,
+                CASE
+                    WHEN json_extract(c.state_json, '$.terminal') IS NULL
+                      OR json_extract(c.state_json, '$.terminal') = ''
+                    THEN 'running'
+                    ELSE json_extract(c.state_json, '$.terminal')
+                END,
+                NULLIF(json_extract(c.state_json, '$.terminal'), ''),
+                c.created_at,
+                json_extract(c.state_json, '$.spent.cost_usd'),
+                COALESCE(json_extract(c.state_json, '$.task.task_class'), 'repo-chore'),
+                json_extract(c.state_json, '$.attempt_no'),
+                json_extract(c.state_json, '$.arm'),
+                f.created_at
+            FROM checkpoints c
+            JOIN (
+                SELECT run_id, MAX(seq) AS seq FROM checkpoints GROUP BY run_id
+            ) l ON c.run_id = l.run_id AND c.seq = l.seq
+            JOIN (
+                SELECT run_id, MIN(created_at) AS created_at FROM checkpoints GROUP BY run_id
+            ) f ON f.run_id = c.run_id
+            WHERE c.run_id NOT IN (SELECT run_id FROM run_summaries)
+            """
+        )
+        self._conn.commit()
 
     def pending_eval_outbox(self) -> list[EvalOutboxPending]:
         with self._lock:
@@ -199,59 +279,27 @@ class CheckpointStore:
         task_class: str | None = None,
         terminal: str | None = None,
     ) -> list[dict[str, object]]:
-        """Latest checkpoint per run, via ``json_extract``. Does not parse ``RunState``.
+        """Rows from ``run_summaries``. Does not parse checkpoint JSON on the read path.
 
-        Returns at most ``limit`` rows ordered by ``run_id``, using ``cursor`` as an
-        exclusive keyset lower bound.
+        Checkpoints saved before the summary table are filled once with ``json_extract``.
+        Returns at most ``limit`` rows ordered by ``run_id``.
         """
 
         if limit < 1:
             return []
         with self._lock:
+            self._backfill_summaries()
             rows = self._conn.execute(
                 """
-                WITH latest AS (
-                    SELECT run_id, MAX(seq) AS seq
-                    FROM checkpoints
-                    GROUP BY run_id
-                ),
-                first_at AS (
-                    SELECT run_id, MIN(created_at) AS created_at
-                    FROM checkpoints
-                    GROUP BY run_id
-                )
-                SELECT
-                    c.run_id,
-                    COALESCE(json_extract(c.state_json, '$.task.task_class'), 'repo-chore'),
-                    json_extract(c.state_json, '$.terminal'),
-                    json_extract(c.state_json, '$.attempt_no'),
-                    json_extract(c.state_json, '$.arm'),
-                    json_extract(c.state_json, '$.spent.cost_usd'),
-                    f.created_at
-                FROM checkpoints c
-                JOIN latest l ON c.run_id = l.run_id AND c.seq = l.seq
-                JOIN first_at f ON f.run_id = c.run_id
-                WHERE (? IS NULL OR c.run_id > ?)
-                  AND (
-                    ? IS NULL
-                    OR COALESCE(json_extract(c.state_json, '$.task.task_class'), 'repo-chore') = ?
-                  )
-                  AND (
-                    ? IS NULL
-                    OR IFNULL(json_extract(c.state_json, '$.terminal'), '') = ?
-                  )
-                ORDER BY c.run_id
+                SELECT run_id, task_class, terminal, attempt_no, arm, cost_usd, created_at
+                FROM run_summaries
+                WHERE (? IS NULL OR run_id > ?)
+                  AND (? IS NULL OR task_class = ?)
+                  AND (? IS NULL OR IFNULL(terminal, '') = ?)
+                ORDER BY run_id
                 LIMIT ?
                 """,
-                (
-                    cursor,
-                    cursor,
-                    task_class,
-                    task_class,
-                    terminal,
-                    terminal,
-                    limit,
-                ),
+                (cursor, cursor, task_class, task_class, terminal, terminal, limit),
             ).fetchall()
         summaries: list[dict[str, object]] = []
         for run_id, task, terminal_value, attempt_no, arm, cost, created_at in rows:

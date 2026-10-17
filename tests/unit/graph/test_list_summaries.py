@@ -54,6 +54,10 @@ def test_list_summaries_reads_latest_hop_only(tmp_path: Path, monkeypatch: pytes
     assert page[0]["terminal"] == "solved"
     assert page[0]["status"] == "solved"
     assert page[0]["attempt_no"] == 2
+    store._conn.execute("UPDATE checkpoints SET state_json = '{}'")
+    store._conn.commit()
+    again = store.list_summaries(limit=2)
+    assert [row["terminal"] for row in again] == ["solved", "unsolved"]
     filtered = store.list_summaries(limit=10, cursor="a", terminal="solved")
     assert [row["run_id"] for row in filtered] == ["c"]
     store.close()
