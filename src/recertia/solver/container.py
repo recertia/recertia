@@ -451,11 +451,9 @@ def _local_run(
         raise SandboxError(f"workdir does not exist: {workdir}")
     # Never inherit a host HOME. The child home is the workdir even when a
     # caller-supplied allowlist still names HOME.
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if key in limits.allowed_env_keys and key != "HOME"
-    }
+    from recertia.secrets.model_keys import scrub_executor_env
+
+    env = scrub_executor_env(os.environ, limits.allowed_env_keys)
     env["HOME"] = home or str(workdir)
     if sys.platform == "win32":
         env.setdefault("PATH", os.environ.get("PATH", ""))

@@ -111,10 +111,20 @@ def load_model_config(
     )
 
 
-def resolve_api_key(config: ModelConfig) -> str | None:
-    """Return the API key from the configured env var, or None for stub."""
+def resolve_api_key(config: ModelConfig, *, tenant: str | None = None) -> str | None:
+    """Return one provider key.
+
+    A named tenant uses the BYO map when one is configured. Otherwise
+    ``single_node`` keeps the process env var. The map never substitutes
+    another tenant's secret.
+    """
 
     if config.provider == "stub" or not config.api_key_env:
         return None
-    key = os.environ.get(config.api_key_env, "").strip()
-    return key or None
+    from recertia.secrets.model_keys import tenant_provider_key
+
+    key, authoritative = tenant_provider_key(tenant, config.provider)
+    if authoritative:
+        return key
+    fallback = os.environ.get(config.api_key_env, "").strip()
+    return fallback or None

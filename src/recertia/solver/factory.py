@@ -18,6 +18,7 @@ def build_model_client(
     *,
     role: str = "solver",
     model_id: str | None = None,
+    tenant: str | None = None,
 ) -> ModelClient:
     """Build a model client for ``role`` (solver or verifier).
 
@@ -43,7 +44,7 @@ def build_model_client(
             f"provider {cfg.provider!r} requires a model id "
             f"(RECERTIA_MODEL_ID or --model {cfg.provider}:<id>)"
         )
-    api_key = resolve_api_key(cfg)
+    api_key = resolve_api_key(cfg, tenant=tenant)
     if not api_key:
         env = cfg.api_key_env or "(unset)"
         raise ModelConfigError(
