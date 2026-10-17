@@ -353,6 +353,10 @@ def create_app(
     configure_logging(loaded)
     root = root or DEFAULT_ROOT
     root.mkdir(parents=True, exist_ok=True)
+    from recertia.persistence.root_lock import RootLock
+
+    root_lock = RootLock(root / ".lock")
+    root_lock.acquire_shared()
     from recertia.persistence.migrate_run_events import migrate_run_events
 
     migrate_run_events(root)
@@ -497,6 +501,7 @@ def create_app(
         return payload
 
     app.state.root = root
+    app.state.root_lock = root_lock
     app.state.skills_root = skills_root
     app.state.facts_root = facts_root
     app.state.api_keys = key_store

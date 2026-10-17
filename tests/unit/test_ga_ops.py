@@ -12,7 +12,8 @@ from typer.testing import CliRunner
 
 from recertia.cli.main import app
 from recertia.evals.canary import LiveCanaryError, run_judge_canary, run_live_verifier_canary
-from recertia.ops.backup import BackupError, backup_tree, restore_tree
+from recertia.ops.backup import BackupError, backup_tree, restore_tree, verify_archive
+from recertia.persistence.root_lock import RootLock
 from recertia.solver.model import StubModelClient
 
 runner = CliRunner()
@@ -96,6 +97,67 @@ def test_backup_cli(tmp_path: Path) -> None:
     restored = runner.invoke(app, ["restore", str(archive), "--dest", str(dest)])
     assert restored.exit_code == 0, restored.output
     assert (dest / "x").read_text(encoding="utf-8") == "y"
+    verified = runner.invoke(app, ["backup", "verify", str(archive)])
+    assert verified.exit_code == 0, verified.output
+    assert "backup OK" in verified.output
+
+
+def test_verify_archive_detects_tamper(tmp_path: Path) -> None:
+    root = tmp_path / "recertia"
+    (root / "runs").mkdir(parents=True)
+    (root / "runs" / "note.txt").write_text("keep-me\n", encoding="utf-8")
+    archive = tmp_path / "ok.tar.gz"
+    backup_tree(root, archive)
+    manifest = verify_archive(archive)
+    note = next(item for item in manifest["files"] if item["path"] == "runs/note.txt")
+    assert note["bytes"] == len(b"keep-me\n")
+
+    tampered = tmp_path / "bad.tar.gz"
+    with tarfile.open(archive, "r:gz") as src, tarfile.open(tampered, "w:gz") as out:
+        for member in src.getmembers():
+            extracted = src.extractfile(member)
+            data = b"" if extracted is None else extracted.read()
+            if member.name == "runs/note.txt":
+                data = b"tampered\n"
+                member.size = len(data)
+            out.addfile(member, io.BytesIO(data) if not member.issym() else None)
+    try:
+        verify_archive(tampered)
+        raise AssertionError("expected checksum mismatch")
+    except BackupError as exc:
+        assert "checksum mismatch" in str(exc)
+
+
+def test_backup_and_restore_refused_while_api_holds_lock(tmp_path: Path) -> None:
+    root = tmp_path / "recertia"
+    root.mkdir()
+    (root / "note.txt").write_text("x", encoding="utf-8")
+    archive = tmp_path / "ok.tar.gz"
+    backup_tree(root, archive)
+
+    held = RootLock(root / ".lock")
+    held.acquire_shared()
+    try:
+        try:
+            backup_tree(root, tmp_path / "again.tar.gz")
+            raise AssertionError("expected backup refusal")
+        except BackupError as exc:
+            assert "backup refused: the API holds the root lock" in str(exc)
+    finally:
+        held.release()
+
+    dest = tmp_path / "restored"
+    dest.mkdir()
+    dest_lock = RootLock(dest / ".lock")
+    dest_lock.acquire_shared()
+    try:
+        try:
+            restore_tree(archive, dest, overwrite=True)
+            raise AssertionError("expected restore refusal")
+        except BackupError as exc:
+            assert "restore refused: the API holds the root lock" in str(exc)
+    finally:
+        dest_lock.release()
 
 
 def test_tabletop_walks_run_and_restore(tmp_path: Path) -> None:
