@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from contracts.policy import IsolationSettings, Policy
-from recertia.app.authz import PolicyDecisionPoint
+from recertia.app.authz import PolicyDecisionPoint, Resource
 from recertia.bootstrap import build_default_orchestrator
-from recertia.errors import ExecutionUnavailable
+from recertia.errors import ExecutionUnavailable, Forbidden, NotFound
 from recertia.ports.identity import Principal
 from recertia.settings import Settings
 
@@ -161,3 +161,75 @@ def test_membership_role_beats_scope_and_cli_stays_platform_admin() -> None:
     assert pdp.tenant_access(runs, None) == "operator"
     assert pdp.may_admin_registry(runs, membership_role="tenant_admin")
     assert not pdp.may_admin_registry(admin_key, membership_role="operator")
+
+
+def _pdp() -> PolicyDecisionPoint:
+    return PolicyDecisionPoint(_policy(), "local")
+
+
+def test_runs_create_requires_runs_scope() -> None:
+    pdp = _pdp()
+    resource = Resource(tenant_id="t1")
+    pdp.require(_runs_only(), "runs.create", resource)
+    metrics = Principal.from_api_key(
+        key_id="metrics", tenant_id="t1", scopes=frozenset({"metrics"})
+    )
+    with pytest.raises(Forbidden):
+        pdp.require(metrics, "runs.create", resource)
+
+
+def test_runs_read_requires_runs_scope() -> None:
+    pdp = _pdp()
+    resource = Resource(tenant_id="t1")
+    pdp.require(_runs_only(), "runs.read", resource)
+    metrics = Principal.from_api_key(
+        key_id="metrics", tenant_id="t1", scopes=frozenset({"metrics"})
+    )
+    with pytest.raises(Forbidden):
+        pdp.require(metrics, "runs.read", resource)
+
+
+def test_runs_script_requires_exec_or_admin() -> None:
+    pdp = _pdp()
+    resource = Resource(tenant_id="t1")
+    with pytest.raises(Forbidden):
+        pdp.require(_runs_only(), "runs.script", resource)
+    exec_principal = Principal.from_api_key(
+        key_id="exec", tenant_id="t1", scopes=frozenset({"runs", "exec"})
+    )
+    pdp.require(exec_principal, "runs.script", resource)
+    admin = Principal.from_api_key(
+        key_id="admin", tenant_id="t1", scopes=frozenset({"runs", "admin"})
+    )
+    pdp.require(admin, "runs.script", resource)
+
+
+def test_runs_cancel_other_tenant_is_not_found() -> None:
+    pdp = _pdp()
+    principal = _runs_only()
+    pdp.require(principal, "runs.cancel", Resource(tenant_id="t1"))
+    with pytest.raises(NotFound):
+        pdp.require(principal, "runs.cancel", Resource(tenant_id="t2"))
+
+
+def test_workspace_register_requires_platform_admin() -> None:
+    pdp = _pdp()
+    tenant_admin = Principal.from_api_key(
+        key_id="admin", tenant_id="t1", scopes=frozenset({"runs", "admin"})
+    )
+    with pytest.raises(Forbidden):
+        pdp.require(tenant_admin, "workspace.register")
+    host = Principal.from_api_key(
+        key_id="host", tenant_id="t1", scopes=frozenset({"runs", "platform_admin"})
+    )
+    pdp.require(host, "workspace.register")
+    pdp.require(Principal.local_operator(), "workspace.register")
+
+
+def test_skill_promote_seed_denied_for_tenant_admin() -> None:
+    pdp = _pdp()
+    tenant_admin = Principal.from_api_key(
+        key_id="admin", tenant_id="t1", scopes=frozenset({"runs", "admin"})
+    )
+    with pytest.raises(Forbidden):
+        pdp.require(tenant_admin, "skill.promote_seed")

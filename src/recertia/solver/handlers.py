@@ -244,12 +244,14 @@ def fetch_handler(inputs: dict, workdir: Path) -> ToolResult:
 def agent_subtask_handler(inputs: dict, workdir: "Path | HandlerContext") -> ToolResult:
     """Model-backed repair loop: propose one shell command, then execute it."""
 
+    from dataclasses import replace
+
     from recertia.solver.command_policy import (
         CommandPolicyError,
         enforce_model_shell,
         wrap_untrusted,
     )
-    from recertia.solver.runtime import active_model, active_step_context
+    from recertia.solver.runtime import HandlerContext, active_model, active_step_context
     from recertia.solver.sandbox import SandboxError
 
     root, limits, ctx = _command_binding(workdir)
@@ -306,9 +308,16 @@ def agent_subtask_handler(inputs: dict, workdir: "Path | HandlerContext") -> Too
         return ToolResult(
             tool="agent_subtask", ok=False, exit_code=126, stderr=str(exc)
         )
+    # SEC-5: agent_subtask always proposes model shell; stamp origin regardless
+    # of the invoke-site default ("tool").
+    model_ctx = (
+        replace(ctx, origin="model")
+        if ctx is not None
+        else HandlerContext(workdir=root, limits=limits, origin="model")
+    )
     try:
         proc = _run_handler_command(
-            command, workdir=root, limits=limits, timeout_s=120, ctx=ctx
+            command, workdir=root, limits=limits, timeout_s=120, ctx=model_ctx
         )
     except SandboxError as exc:
         return ToolResult(

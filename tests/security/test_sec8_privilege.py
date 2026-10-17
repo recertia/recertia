@@ -23,10 +23,35 @@ def test_tenant_admin_is_not_platform_admin() -> None:
         key_id="host", tenant_id="t1", scopes=frozenset({"runs", "platform_admin"})
     )
     pdp = PolicyDecisionPoint(Policy(version="s", authoring_prior_version="s"), "local")
+    assert tenant_admin.has_scope("runs")
+    assert not tenant_admin.has_scope("platform_admin")
     assert pdp.may_admin_registry(tenant_admin)
     assert not pdp.may_admin_host(tenant_admin)
     assert pdp.may_admin_host(host)
     assert pdp.may_admin_host(Principal.local_operator())
+
+
+def test_require_key_tenant_admin_is_not_platform_admin(tmp_path: Path) -> None:
+    pytest.importorskip("fastapi")
+    from fastapi import HTTPException
+
+    from recertia.api.auth import ApiKeyStore, require_key
+
+    store = ApiKeyStore(tmp_path / "keys.sqlite")
+    tenant_admin = store.issue(tenant_id="t1", scopes={"runs", "admin"}, actor="test")
+    platform = store.issue(
+        tenant_id="t1", scopes={"runs", "platform_admin"}, actor="test"
+    )
+    principal = store.authenticate(tenant_admin.secret)
+    assert principal is not None
+    assert principal.has_scope("runs")
+    assert not principal.has_scope("platform_admin")
+    with pytest.raises(HTTPException) as denied:
+        require_key("platform_admin", store, tenant_admin.secret)
+    assert denied.value.status_code == 403
+    assert require_key("runs", store, tenant_admin.secret).has_scope("runs")
+    got = require_key("platform_admin", store, platform.secret)
+    assert got.has_scope("platform_admin")
 
 
 def test_workspace_host_root_denies_recertia_and_honors_allowlist(

@@ -19,6 +19,14 @@ def test_routes_do_not_call_quota_admit() -> None:
     assert hits == []
 
 
+def test_routes_delegate_create_and_resume() -> None:
+    text = (API / "runs_routes.py").read_text(encoding="utf-8")
+    assert "run_service.create(" in text
+    assert "run_service.resume(" in text
+    assert "orchestrator.start" not in text
+    assert "orchestrator.resume" not in text
+
+
 def test_service_admit_is_the_quota_call() -> None:
     seen: list[str] = []
 

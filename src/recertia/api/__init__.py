@@ -435,6 +435,7 @@ def create_app(
         workspace_registry=workspace_registry,
         run_service=run_service,
     )
+    run_service.bind(console_ctx)
     register_console_routes(app, console_ctx)
     register_remaining_routes(app, console_ctx)
 
