@@ -1,4 +1,4 @@
-"""Policy decision point: tool grants and proposal decisions."""
+"""Policy decision point: action require/decide, tool grants, and proposal decisions."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from contracts.policy import Policy
-from recertia.errors import ExecutionUnavailable, Forbidden
+from recertia.errors import ExecutionUnavailable, Forbidden, NotFound
 from recertia.ports.execution import CommandOrigin, ExecutionBackend, Surface
 from recertia.ports.identity import Principal
 from recertia.settings import Settings
@@ -16,6 +16,20 @@ from recertia.settings import Settings
 _READ_TOOLS = ("read_file", "grep")
 _CONTAINER_WRITES = ("shell", "edit_file", "agent_subtask", "fetch")
 _LOCAL_EXEC_WRITES = ("shell", "edit_file", "agent_subtask")
+
+
+@dataclass(frozen=True)
+class Resource:
+    tenant_id: str | None = None
+    run_id: str | None = None
+    kind: str | None = None  # e.g. "_platform" for secrets
+
+
+@dataclass(frozen=True)
+class Decision:
+    allow: bool
+    status: int = 200
+    reason: str = ""
 
 
 @dataclass
@@ -55,7 +69,10 @@ class ToolGrants:
 
 
 class PolicyDecisionPoint:
-    """Authorizer and approval policy. Holds a resolved backend, not the policy field."""
+    """Authorizer and approval policy. Holds a resolved backend, not the policy field.
+
+    Routes and services call ``require`` / ``decide`` for the SEC-7 action table.
+    """
 
     def __init__(
         self,
@@ -193,6 +210,124 @@ class PolicyDecisionPoint:
         if console_is_admin is not None:
             return console_is_admin
         return self.tenant_access(principal, membership_role) in {"platform_admin", "tenant_admin"}
+
+    def decide(
+        self,
+        principal: Principal,
+        action: str,
+        resource: Resource | None = None,
+    ) -> Decision:
+        """Allow or deny ``action`` without raising. Unknown actions are denied."""
+
+        res = resource if resource is not None else Resource()
+        if action == "runs.create":
+            if not principal.has_scope("runs"):
+                return Decision(allow=False, status=403, reason="missing scope: runs")
+            if not _tenant_matches(principal, res):
+                return Decision(allow=False, status=403, reason="tenant mismatch")
+            return Decision(allow=True)
+        if action == "runs.script":
+            if not _principal_may_exec(principal):
+                return Decision(
+                    allow=False,
+                    status=403,
+                    reason="script requires the 'exec' scope (or admin)",
+                )
+            return Decision(allow=True)
+        if action == "runs.cancel":
+            if not principal.has_scope("runs"):
+                return Decision(allow=False, status=403, reason="missing scope: runs")
+            if (
+                res.tenant_id is not None
+                and res.tenant_id != principal.tenant_id
+                and not _platform_admin(principal)
+            ):
+                return Decision(allow=False, status=404, reason="not found")
+            return Decision(allow=True)
+        if action == "runs.resume":
+            if not principal.has_scope("runs"):
+                return Decision(allow=False, status=403, reason="missing scope: runs")
+            return Decision(allow=True)
+        if action == "skill.promote":
+            if principal.has_scope("promote") or principal.has_role("reviewer"):
+                return Decision(allow=True)
+            return Decision(allow=False, status=403, reason="missing scope: promote")
+        if action == "skill.promote_seed":
+            if not _platform_admin(principal):
+                return Decision(
+                    allow=False, status=403, reason="missing scope: platform_admin"
+                )
+            return Decision(allow=True)
+        if action == "job.run":
+            if not principal.has_scope("jobs"):
+                return Decision(allow=False, status=403, reason="missing scope: jobs")
+            return Decision(allow=True)
+        if action == "eval.run":
+            # SEC-8 currently skips a distinct evals key scope so existing
+            # metrics keys keep calling eval routes. Treat metrics OR evals.
+            if principal.has_scope("evals") or principal.has_scope("metrics"):
+                return Decision(allow=True)
+            return Decision(allow=False, status=403, reason="missing scope: evals")
+        if action == "policy.propose":
+            if not principal.has_scope("runs"):
+                return Decision(allow=False, status=403, reason="missing scope: runs")
+            return Decision(allow=True)
+        if action == "policy.apply":
+            if not (principal.has_scope("admin") or principal.has_role("admin")):
+                return Decision(allow=False, status=403, reason="missing scope: admin")
+            if not _tenant_matches(principal, res):
+                return Decision(allow=False, status=403, reason="tenant mismatch")
+            return Decision(allow=True)
+        if action == "workspace.register":
+            if not self.may_admin_host(principal):
+                return Decision(
+                    allow=False, status=403, reason="missing scope: platform_admin"
+                )
+            return Decision(allow=True)
+        if action == "membership.grant":
+            if not _platform_admin(principal):
+                return Decision(
+                    allow=False, status=403, reason="missing scope: platform_admin"
+                )
+            return Decision(allow=True)
+        if action == "secret.write":
+            if res.kind == "_platform" or res.tenant_id == "_platform":
+                if not _platform_admin(principal):
+                    return Decision(
+                        allow=False, status=403, reason="missing scope: platform_admin"
+                    )
+                return Decision(allow=True)
+            if not (principal.has_scope("admin") or principal.has_role("admin")):
+                return Decision(allow=False, status=403, reason="missing scope: admin")
+            if not _tenant_matches(principal, res):
+                return Decision(allow=False, status=403, reason="tenant mismatch")
+            return Decision(allow=True)
+        return Decision(allow=False, status=403, reason=f"unknown action: {action}")
+
+    def require(
+        self,
+        principal: Principal,
+        action: str,
+        resource: Resource | None = None,
+    ) -> None:
+        """Raise ``Forbidden`` (403) or ``NotFound`` (404) when ``decide`` denies."""
+
+        decision = self.decide(principal, action, resource)
+        if decision.allow:
+            return
+        if decision.status == 404:
+            raise NotFound(decision.reason or "not found")
+        raise Forbidden(decision.reason or "forbidden")
+
+
+def _platform_admin(principal: Principal) -> bool:
+    return principal.has_role("platform_admin") or "platform_admin" in principal.scopes
+
+
+def _tenant_matches(principal: Principal, resource: Resource) -> bool:
+    if resource.tenant_id is None:
+        return True
+    return resource.tenant_id == principal.tenant_id or _platform_admin(principal)
 
 
 def _principal_may_exec(principal: Principal | None) -> bool:

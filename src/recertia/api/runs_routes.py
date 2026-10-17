@@ -21,7 +21,7 @@ from recertia.api.console_deps import ConsoleContext
 from recertia.api.errors import v1_error
 from recertia.api.quotas import QuotaExceeded
 from recertia.api.runs_models import RunCreate, RunRecord
-from recertia.app.authz import assert_run_executable
+from recertia.app.authz import Resource
 from recertia.bootstrap import resolve_task_class
 from recertia.errors import Forbidden
 from recertia.graph.engine import RunIdExistsError
@@ -173,7 +173,13 @@ def register_run_routes(app: FastAPI, ctx: ConsoleContext) -> None:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
         try:
-            assert_run_executable(principal, script=bool(body.script))
+            ctx.pdp.require(
+                principal, "runs.create", Resource(tenant_id=principal.tenant_id)
+            )
+            if body.script:
+                ctx.pdp.require(
+                    principal, "runs.script", Resource(tenant_id=principal.tenant_id)
+                )
         except Forbidden as exc:
             raise HTTPException(status_code=403, detail=exc.message) from exc
 
