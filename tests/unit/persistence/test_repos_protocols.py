@@ -15,6 +15,10 @@ def test_sqlite_session_and_tenant_repos_roundtrip(tmp_path: Path) -> None:
     tenants.upsert(tenant, display_name="Demo", status="active")
     assert tenants.get(tenant) == {"tenant_id": "demo", "display_name": "Demo", "status": "active"}
     assert tenants.list_ids() == [tenant]
+    tenants.grant(tenant, "ada", "operator")
+    tenants.grant(tenant, "ada", "tenant_admin")
+    assert tenants.role_for(tenant, "ada") == "tenant_admin"
+    assert tenants.role_for(tenant, "missing") is None
 
     sessions = SqliteSessionRepo(tmp_path / "control.db")
     expires = datetime.now(timezone.utc) + timedelta(hours=1)

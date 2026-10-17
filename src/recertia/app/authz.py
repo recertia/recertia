@@ -168,16 +168,31 @@ class PolicyDecisionPoint:
             return "platform_admin" in console_roles
         return principal.has_role("platform_admin") or "platform_admin" in principal.scopes
 
+    def tenant_access(self, principal: Principal, recorded: str | None = None) -> str:
+        """``platform_admin`` for the CLI operator. A membership row is tenant_admin or operator."""
+
+        if principal.kind == "local_operator" or principal.has_role("platform_admin"):
+            return "platform_admin"
+        if recorded in {"tenant_admin", "admin"}:
+            return "tenant_admin"
+        if recorded == "operator":
+            return "operator"
+        if "admin" in principal.scopes or principal.has_role("admin"):
+            return "tenant_admin"
+        return "operator"
+
     def may_admin_registry(
-        self, principal: Principal, *, console_is_admin: bool | None = None
+        self,
+        principal: Principal,
+        *,
+        console_is_admin: bool | None = None,
+        membership_role: str | None = None,
     ) -> bool:
         """Patching or disabling a workspace is tenant admin or platform_admin."""
 
         if console_is_admin is not None:
             return console_is_admin
-        if principal.has_role("platform_admin") or "platform_admin" in principal.scopes:
-            return True
-        return "admin" in principal.scopes
+        return self.tenant_access(principal, membership_role) in {"platform_admin", "tenant_admin"}
 
 
 def _principal_may_exec(principal: Principal | None) -> bool:

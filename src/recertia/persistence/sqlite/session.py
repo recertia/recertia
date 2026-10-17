@@ -110,13 +110,19 @@ class SqliteSessionRepo:
 class SqliteTenantRepo:
     def __init__(self, path: Path) -> None:
         self._conn = open_db(path)
-        self._conn.execute(
+        self._conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS tenants (
                 tenant_id TEXT PRIMARY KEY,
                 display_name TEXT NOT NULL,
                 status TEXT NOT NULL
-            )
+            );
+            CREATE TABLE IF NOT EXISTS memberships (
+                tenant_id TEXT NOT NULL,
+                principal_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, principal_id)
+            );
             """
         )
         self._conn.commit()
@@ -139,6 +145,23 @@ class SqliteTenantRepo:
         if row is None:
             return None
         return {"tenant_id": row[0], "display_name": row[1], "status": row[2]}
+
+    def grant(self, tenant: TenantId, principal_id: str, role: str) -> None:
+        if role not in {"tenant_admin", "operator"}:
+            raise ValueError("membership role must be tenant_admin or operator")
+        self._conn.execute(
+            """INSERT INTO memberships(tenant_id, principal_id, role) VALUES (?, ?, ?)
+               ON CONFLICT(tenant_id, principal_id) DO UPDATE SET role=excluded.role""",
+            (str(tenant), principal_id, role),
+        )
+        self._conn.commit()
+
+    def role_for(self, tenant: TenantId, principal_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT role FROM memberships WHERE tenant_id=? AND principal_id=?",
+            (str(tenant), principal_id),
+        ).fetchone()
+        return None if row is None else str(row[0])
 
     def list_ids(self) -> list[TenantId]:
         rows = self._conn.execute("SELECT tenant_id FROM tenants ORDER BY tenant_id").fetchall()

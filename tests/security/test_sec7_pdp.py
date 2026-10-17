@@ -147,3 +147,17 @@ def test_bootstrap_wires_approval_flag_and_skips_local_blanket(tmp_path: Path) -
         assert not gate.is_approved("shell", "step")
     finally:
         limited.close()
+
+
+def test_membership_role_beats_scope_and_cli_stays_platform_admin() -> None:
+    pdp = PolicyDecisionPoint(_policy(), "local")
+    operator = Principal.local_operator()
+    assert pdp.tenant_access(operator, "operator") == "platform_admin"
+    admin_key = Principal.from_api_key(key_id="k", tenant_id="t1", scopes=frozenset({"admin"}))
+    assert pdp.tenant_access(admin_key, "operator") == "operator"
+    assert pdp.tenant_access(admin_key, "tenant_admin") == "tenant_admin"
+    assert pdp.tenant_access(admin_key, None) == "tenant_admin"
+    runs = _runs_only()
+    assert pdp.tenant_access(runs, None) == "operator"
+    assert pdp.may_admin_registry(runs, membership_role="tenant_admin")
+    assert not pdp.may_admin_registry(admin_key, membership_role="operator")
