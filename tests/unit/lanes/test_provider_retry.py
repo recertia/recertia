@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import socket
+import threading
+import time
 import urllib.error
 from unittest.mock import patch
 
@@ -17,7 +19,7 @@ GOOD = {"choices": [{"message": {"content": "ok"}}], "usage": {"prompt_tokens": 
 @pytest.fixture
 def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     calls: list[float] = []
-    monkeypatch.setattr("recertia.solver.model.time.sleep", calls.append)
+    monkeypatch.setattr("recertia.solver.model._sleep", calls.append)
     return calls
 
 
@@ -44,6 +46,35 @@ def test_transient_failure_then_success(failure: object, sleeps: list[float]) ->
     assert len(sleeps) == 1
     assert 0 < sleeps[0] <= client.retry_backoff_s
     assert client.spend.retries == 1 and client.spend.calls == 1
+
+
+def test_timeout_retry_sleep_count_ignores_stdlib_time_sleep(sleeps: list[float]) -> None:
+    """URLError(socket.timeout) retries once; queue-poll time.sleep must not count.
+
+    main@ab11e62 failed ``test_transient_failure_then_success[timeout]`` with
+    ``assert 2 == 1`` on sleeps because the fixture patched stdlib ``time.sleep``.
+    """
+
+    stop = threading.Event()
+    real_sleep = time.sleep
+
+    def poll() -> None:
+        while not stop.is_set():
+            time.sleep(0.05)
+            real_sleep(0.001)
+
+    threading.Thread(target=poll, name="queue-poll", daemon=True).start()
+    try:
+        script = Script(urllib.error.URLError(socket.timeout("timed out")), ok(GOOD))
+        client = _client()
+        with patch("urllib.request.urlopen", side_effect=script):
+            assert client.complete("hi").text == "ok"
+        assert len(script.requests) == 2
+        assert len(sleeps) == 1
+        assert 0 < sleeps[0] <= client.retry_backoff_s
+        assert client.spend.retries == 1 and client.spend.calls == 1
+    finally:
+        stop.set()
 
 
 def test_exhausted_retries_raise_last_error_with_exponential_backoff(sleeps: list[float]) -> None:
