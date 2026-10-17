@@ -199,7 +199,9 @@ def register_run_routes(app: FastAPI, ctx: ConsoleContext) -> None:
             workdir=workdir,
         )
         owner_id = f"{principal.tenant_id}/{run_id}"
-        ws_handle = _acquire_workspace(root, workdir, owner_id=owner_id)
+        ws_handle: WorkspaceLockHandle | None = _acquire_workspace(
+            root, workdir, owner_id=owner_id
+        )
         try:
             if wd_meta.get("kind") != "registered":
                 workdir.mkdir(parents=True, exist_ok=True)
@@ -276,8 +278,10 @@ def register_run_routes(app: FastAPI, ctx: ConsoleContext) -> None:
                 ctx.embedded.ensure_started()
                 # Release before wait/202 so an embedded worker can later take the
                 # same workdir lock. TODO(REL-3): worker re-acquires for the lease.
-                ws_handle.release()
+                held = ws_handle
                 ws_handle = None
+                if held is not None:
+                    held.release()
                 if wait_s is not None:
                     finished = ctx.queue.wait(principal.tenant_id, run_id, timeout_s=wait_s)
                     if finished is not None:
