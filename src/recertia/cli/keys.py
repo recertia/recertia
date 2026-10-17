@@ -23,7 +23,7 @@ def keys_issue(
 ) -> None:
     """Issue a key; the plaintext secret is shown exactly once."""
 
-    from recertia.api.auth import ApiKeyStore
+    from recertia.persistence.sqlite.api_keys import ApiKeyStore
 
     issued = ApiKeyStore(db).issue(
         tenant_id=tenant_id,
@@ -45,7 +45,7 @@ def keys_revoke(
 ) -> None:
     """Revoke an API key and write an audit event."""
 
-    from recertia.api.auth import ApiKeyStore
+    from recertia.persistence.sqlite.api_keys import ApiKeyStore
 
     if not ApiKeyStore(db).revoke(key_id, actor=actor):
         raise typer.Exit(code=1)
@@ -56,7 +56,7 @@ def keys_revoke(
 def keys_list(db: Path = typer.Option(Path(".recertia/api_keys.sqlite"), "--db")) -> None:
     """List key metadata without ever exposing a key secret or hash."""
 
-    from recertia.api.auth import ApiKeyStore
+    from recertia.persistence.sqlite.api_keys import ApiKeyStore
 
     for record in ApiKeyStore(db).list_keys():
         typer.echo(json.dumps(record, sort_keys=True))

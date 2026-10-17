@@ -163,9 +163,6 @@ forbidden_modules = ["recertia.graph.engine"]
 name = "api-cli-independent"
 type = "independence"
 modules = ["recertia.api", "recertia.cli"]
-ignore_imports = [
-    "recertia.cli.keys -> recertia.api.auth",
-]
 
 [tool.mypy]
 python_version = "3.11"

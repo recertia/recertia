@@ -24,4 +24,3 @@ recertia.memory.procedural.promote -> recertia.review.promotion
 recertia.memory.procedural.applicability -> recertia.solver.registry
 # contract: evals-no-engine
 # contract: api-cli-independent
-recertia.cli.keys -> recertia.api.auth

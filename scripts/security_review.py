@@ -442,7 +442,7 @@ _RECERTIA_CONTROLS: tuple[tuple[str, str | tuple[str, ...], tuple[str, ...], str
     ),
     (
         "api-key-pbkdf2",
-        "src/recertia/api/auth.py",
+        "src/recertia/persistence/sqlite/api_keys.py",
         ("pbkdf2_hmac", "key_hash", "salt", "hmac-sha256", "pepper"),
         "API keys are HMAC-SHA256 with a pepper; PBKDF2 rows rehash on use",
     ),
@@ -472,7 +472,7 @@ _RECERTIA_CONTROLS: tuple[tuple[str, str | tuple[str, ...], tuple[str, ...], str
     ),
     (
         "no-legacy-key-scan",
-        "src/recertia/api/auth.py",
+        "src/recertia/persistence/sqlite/api_keys.py",
         ("unstructured key rejected", "_STRUCTURED_SECRET_RE"),
         "API key auth must not scan every key for unstructured secrets",
     ),
