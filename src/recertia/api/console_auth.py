@@ -73,7 +73,7 @@ def session_cookie_kwargs() -> SessionCookieKwargs:
     }
 
 
-def csrf_cookie_kwargs() -> dict[str, bool | str]:
+def csrf_cookie_kwargs() -> SessionCookieKwargs:
     """Double-submit cookie. Not HttpOnly, so the console can copy it into a header."""
 
     base = session_cookie_kwargs()

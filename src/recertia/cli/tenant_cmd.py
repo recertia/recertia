@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 import typer
 
@@ -34,7 +34,7 @@ def _collect(runs_root: Path, blobs: Path) -> list[Path]:
     return lines
 
 
-def _refuse(message: str) -> None:
+def _refuse(message: str) -> NoReturn:
     typer.echo(message, err=True)
     raise typer.Exit(code=2)
 
