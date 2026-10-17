@@ -8,9 +8,13 @@ license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Robert Schmidt" }]
 requires-python = ">=3.11"
 dependencies = [
-    "pydantic>=2.9,<3",
-    "typer>=0.12",
-    "jsonschema>=4",
+    # Nightly lowest-deps pins == the >= floor. 2.11 is the first 2.x whose
+    # model_json_schema() matches committed schema/; 2.9/2.10 drift.
+    "pydantic>=2.11,<3",
+    # typer 0.12 + click 8.3+ raises TypeError on boolean secondary flags.
+    "typer>=0.13",
+    # 4.0.0 is yanked (Improper python_requires declaration).
+    "jsonschema>=4.0.1",
 ]
 
 [project.urls]
