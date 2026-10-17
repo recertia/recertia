@@ -112,6 +112,85 @@ class CheckpointStore:
             ).fetchall()
         return [r[0] for r in rows]
 
+    def list_summaries(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        task_class: str | None = None,
+        terminal: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Latest checkpoint per run, via ``json_extract``. Does not parse ``RunState``.
+
+        Returns at most ``limit`` rows ordered by ``run_id``, using ``cursor`` as an
+        exclusive keyset lower bound.
+        """
+
+        if limit < 1:
+            return []
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                WITH latest AS (
+                    SELECT run_id, MAX(seq) AS seq
+                    FROM checkpoints
+                    GROUP BY run_id
+                ),
+                first_at AS (
+                    SELECT run_id, MIN(created_at) AS created_at
+                    FROM checkpoints
+                    GROUP BY run_id
+                )
+                SELECT
+                    c.run_id,
+                    COALESCE(json_extract(c.state_json, '$.task.task_class'), 'repo-chore'),
+                    json_extract(c.state_json, '$.terminal'),
+                    json_extract(c.state_json, '$.attempt_no'),
+                    json_extract(c.state_json, '$.arm'),
+                    json_extract(c.state_json, '$.spent.cost_usd'),
+                    f.created_at
+                FROM checkpoints c
+                JOIN latest l ON c.run_id = l.run_id AND c.seq = l.seq
+                JOIN first_at f ON f.run_id = c.run_id
+                WHERE (? IS NULL OR c.run_id > ?)
+                  AND (
+                    ? IS NULL
+                    OR COALESCE(json_extract(c.state_json, '$.task.task_class'), 'repo-chore') = ?
+                  )
+                  AND (
+                    ? IS NULL
+                    OR IFNULL(json_extract(c.state_json, '$.terminal'), '') = ?
+                  )
+                ORDER BY c.run_id
+                LIMIT ?
+                """,
+                (
+                    cursor,
+                    cursor,
+                    task_class,
+                    task_class,
+                    terminal,
+                    terminal,
+                    limit,
+                ),
+            ).fetchall()
+        summaries: list[dict[str, object]] = []
+        for run_id, task, terminal_value, attempt_no, arm, cost, created_at in rows:
+            terminal_text = str(terminal_value) if terminal_value not in (None, "") else None
+            summaries.append(
+                {
+                    "run_id": str(run_id),
+                    "task_class": str(task or "repo-chore"),
+                    "terminal": terminal_text,
+                    "status": terminal_text or "running",
+                    "attempt_no": int(attempt_no) if attempt_no is not None else None,
+                    "created_at": created_at,
+                    "cost_usd": float(cost) if cost is not None else None,
+                    "arm": str(arm) if arm is not None else None,
+                }
+            )
+        return summaries
+
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
     cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}

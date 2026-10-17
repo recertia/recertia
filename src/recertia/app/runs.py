@@ -14,6 +14,21 @@ class RunQuota(Protocol):
     def complete(self, tenant_id: str, *, cost_usd: float = 0.0) -> None: ...
 
 
+def _summary_from_record(rec: Any) -> dict[str, Any]:
+    created = rec.created_at
+    return {
+        "run_id": rec.run_id,
+        "task_class": rec.task_class,
+        "terminal": rec.terminal,
+        "status": rec.status,
+        "attempt_no": rec.attempt_no,
+        "created_at": created.isoformat() if hasattr(created, "isoformat") else created,
+        "cost_usd": getattr(rec, "cost_usd", None),
+        "arm": rec.arm,
+        "tenant_id": rec.tenant_id,
+    }
+
+
 class RunService:
     """create/resume admit here. get and list read the same cache the routes use."""
 
@@ -56,43 +71,40 @@ class RunService:
         task_class: str | None = None,
         terminal: str | None = None,
     ) -> dict[str, Any]:
-        from recertia.graph.engine import GraphOrchestrator
+        from recertia.graph.store import CheckpointStore
 
-        orch = GraphOrchestrator(runs_root)
+        store = CheckpointStore(Path(runs_root) / "checkpoints.db")
         try:
-            ids = orch.checkpoints.list_run_ids()
-        finally:
-            orch.close()
-        mem_ids = [rid for (tid, rid) in self.runs if tid == tenant_id]
-        all_ids = sorted(set(ids) | set(mem_ids))
-        if cursor:
-            all_ids = [i for i in all_ids if i > cursor]
-        items: list[dict[str, Any]] = []
-        for run_id in all_ids:
-            if len(items) >= limit:
-                break
-            rec = self.get(tenant_id, run_id)
-            if rec is None:
-                continue
-            if task_class and rec.task_class != task_class:
-                continue
-            if terminal and (rec.terminal or "") != terminal:
-                continue
-            if rec.tenant_id != tenant_id:
-                continue
-            created = rec.created_at
-            items.append(
-                {
-                    "run_id": rec.run_id,
-                    "task_class": rec.task_class,
-                    "terminal": rec.terminal,
-                    "status": rec.status,
-                    "attempt_no": rec.attempt_no,
-                    "created_at": created.isoformat() if hasattr(created, "isoformat") else created,
-                    "cost_usd": getattr(rec, "cost_usd", None),
-                    "arm": rec.arm,
-                    "tenant_id": rec.tenant_id,
-                }
+            disk_rows = store.list_summaries(
+                limit=limit + 1,
+                cursor=cursor,
+                task_class=task_class,
+                terminal=terminal,
             )
-        next_cursor = items[-1]["run_id"] if items and len(items) == limit else None
+        finally:
+            store.close()
+        disk_has_extra = len(disk_rows) > limit
+        page = disk_rows[:limit]
+        next_disk_id = str(disk_rows[limit]["run_id"]) if disk_has_extra else None
+        chosen: dict[str, dict[str, Any]] = {
+            str(row["run_id"]): {**row, "tenant_id": tenant_id} for row in page
+        }
+        for (tid, run_id), rec in self.runs.items():
+            if tid != tenant_id or rec is None:
+                continue
+            if getattr(rec, "tenant_id", tenant_id) != tenant_id:
+                continue
+            if cursor and not run_id > cursor:
+                continue
+            if next_disk_id is not None and run_id >= next_disk_id:
+                continue
+            if task_class and getattr(rec, "task_class", None) != task_class:
+                continue
+            if terminal and (getattr(rec, "terminal", None) or "") != terminal:
+                continue
+            chosen[run_id] = _summary_from_record(rec)
+        ordered = sorted(chosen.values(), key=lambda row: str(row["run_id"]))
+        has_more = disk_has_extra or len(ordered) > limit
+        items = ordered[:limit]
+        next_cursor = items[-1]["run_id"] if items and has_more else None
         return {"items": items, "next_cursor": next_cursor}
