@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
@@ -9,6 +10,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from recertia.api.console_auth import (
     ConsoleUser,
     auth_mode,
+    csrf_cookie_kwargs,
     dev_admin_enabled,
     dev_login_enabled,
     oidc_authorize_url,
@@ -24,6 +26,27 @@ from recertia.api.console_routes import (
     WorkspaceCreate,
     WorkspacePatch,
 )
+
+
+def _set_session_cookies(response: Response, sessions: Any, token: str) -> None:
+    response.set_cookie("recertia_session", token, **session_cookie_kwargs())
+    csrf = sessions.csrf_for(token)
+    if csrf:
+        response.set_cookie("recertia_csrf", csrf, **csrf_cookie_kwargs())
+
+
+def _require_cookie_csrf(request: Request, sessions: Any) -> None:
+    """Cookie-authenticated POSTs must echo the double-submit token."""
+
+    session_cookie = request.cookies.get("recertia_session")
+    if not session_cookie:
+        return
+    header = request.headers.get("x-recertia-csrf") or ""
+    cookie = request.cookies.get("recertia_csrf") or ""
+    if not header or len(header) != len(cookie) or not hmac.compare_digest(header, cookie):
+        raise HTTPException(status_code=403, detail="csrf rejected")
+    if not sessions.csrf_matches(session_cookie, header):
+        raise HTTPException(status_code=403, detail="csrf rejected")
 
 
 def _reject_foreign_origin(request: Request) -> None:
@@ -66,6 +89,7 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
     @app.post("/v1/auth/dev-login")
     def dev_login(body: DevLogin, request: Request, response: Response) -> dict[str, Any]:
         _reject_foreign_origin(request)
+        _require_cookie_csrf(request, ctx.sessions)
         if not dev_login_enabled():
             raise HTTPException(status_code=404, detail="dev login disabled")
         requested = frozenset(body.roles) or frozenset({"operator"})
@@ -87,18 +111,21 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
             token = ctx.sessions.issue(user)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        response.set_cookie("recertia_session", token, **session_cookie_kwargs())
+        _set_session_cookies(response, ctx.sessions, token)
         return {"ok": True, "user": _public_user(user)}
 
     @app.post("/v1/auth/logout")
     def logout(request: Request, response: Response) -> dict[str, str]:
         _reject_foreign_origin(request)
+        _require_cookie_csrf(request, ctx.sessions)
         response.delete_cookie("recertia_session", path="/")
+        response.delete_cookie("recertia_csrf", path="/")
         return {"status": "ok"}
 
     @app.post("/v1/auth/switch-tenant")
     def switch_tenant(body: TenantSwitch, request: Request, response: Response) -> dict[str, Any]:
         _reject_foreign_origin(request)
+        _require_cookie_csrf(request, ctx.sessions)
         user = _optional_console_user(request)
         if user is None:
             raise HTTPException(status_code=401, detail="console authentication required")
@@ -107,7 +134,7 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         token = ctx.sessions.issue(switched)
-        response.set_cookie("recertia_session", token, **session_cookie_kwargs())
+        _set_session_cookies(response, ctx.sessions, token)
         return {"active_tenant": switched.active_tenant, "tenants": list(switched.tenants)}
 
     # ----- Registered workspaces (RW0) -----
@@ -237,6 +264,6 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
             code=code, redirect_uri=pending.redirect_uri, code_verifier=pending.verifier
         )
         token = ctx.sessions.issue(user)
-        response.set_cookie("recertia_session", token, **session_cookie_kwargs())
+        _set_session_cookies(response, ctx.sessions, token)
         return {"ok": True, "user_id": user.user_id, "tenants": list(user.tenants)}
 

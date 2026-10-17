@@ -463,6 +463,7 @@ def test_c5_tenant_switch_isolates_skills_and_proposals(
     switched = client.post(
         "/v1/auth/switch-tenant",
         json={"tenant_id": "tenant-b"},
+        headers={"X-Recertia-CSRF": client.cookies.get("recertia_csrf") or ""},
     )
     assert switched.status_code == 200
     headers_b = {

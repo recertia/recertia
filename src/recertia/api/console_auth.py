@@ -18,8 +18,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Lock
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 from urllib.parse import urlencode
 
 from fastapi import Header, HTTPException, Request
@@ -69,6 +70,18 @@ def session_cookie_kwargs() -> SessionCookieKwargs:
         "samesite": "strict",
         "secure": cookie_secure(),
         "path": "/",
+    }
+
+
+def csrf_cookie_kwargs() -> dict[str, bool | str]:
+    """Double-submit cookie. Not HttpOnly, so the console can copy it into a header."""
+
+    base = session_cookie_kwargs()
+    return {
+        "httponly": False,
+        "samesite": base["samesite"],
+        "secure": base["secure"],
+        "path": base["path"],
     }
 
 
@@ -140,39 +153,48 @@ def pkce_challenge(verifier: str) -> str:
 
 
 class SessionStore:
-    """Signed cookie sessions (HMAC) — no server DB required for C3."""
+    """Cookie v2 carries a session id. Roles live in sqlite (or an in-memory row)."""
 
-    def __init__(self, secret: str | None = None) -> None:
+    def __init__(self, secret: str | None = None, *, path: Path | None = None) -> None:
         self._hmac_key = resolve_session_secret(secret)
         self._oidc: dict[str, OidcPending] = {}
         self._oidc_lock = Lock()
+        self._rows: dict[str, str] = {}
+        self._conn = None
+        if path is not None:
+            from recertia.persistence.db import open_db
+
+            self._conn = open_db(path)
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS console_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                )
+                """
+            )
+            self._conn.commit()
 
     def issue(self, user: ConsoleUser, *, ttl_s: int = 86400) -> str:
         tenants, active = _checked_tenants(tuple(user.tenants), user.active_tenant)
+        session_id = secrets.token_urlsafe(24)
+        exp = int(time.time()) + ttl_s
         payload = {
             "user_id": user.user_id,
             "display_name": user.display_name,
             "roles": sorted(user.roles),
             "tenants": list(tenants),
             "active_tenant": active,
-            "exp": int(time.time()) + ttl_s,
+            "csrf": secrets.token_urlsafe(24),
+            "exp": exp,
         }
-        body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-        sig = hmac.new(self._hmac_key, body.encode(), hashlib.sha256).hexdigest()
-        return f"{body}.{sig}"
+        self._save(session_id, payload)
+        return self._token(session_id)
 
     def parse(self, token: str | None) -> ConsoleUser | None:
-        if not token or "." not in token:
-            return None
-        body, _, sig = token.rpartition(".")
-        expect = hmac.new(self._hmac_key, body.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expect, sig):
-            return None
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            return None
-        if int(payload.get("exp", 0)) < int(time.time()):
+        payload = self._payload(token)
+        if payload is None:
             return None
         raw_tenants = tuple(str(item) for item in (payload.get("tenants") or []))
         if not raw_tenants:
@@ -184,7 +206,7 @@ class SessionStore:
             )
         except ValueError:
             return None
-        roles = frozenset(payload.get("roles") or [])
+        roles = frozenset(str(item) for item in (payload.get("roles") or []))
         if not roles & _VALID_ROLES:
             return None
         return ConsoleUser(
@@ -194,6 +216,94 @@ class SessionStore:
             tenants=tenants,
             active_tenant=active,
         )
+
+    def csrf_for(self, token: str | None) -> str | None:
+        payload = self._payload(token)
+        if payload is None:
+            return None
+        csrf = payload.get("csrf")
+        return str(csrf) if isinstance(csrf, str) and csrf else None
+
+    def csrf_matches(self, token: str | None, presented: str) -> bool:
+        expected = self.csrf_for(token) or ""
+        if not expected or len(expected) != len(presented):
+            return False
+        return hmac.compare_digest(expected, presented)
+
+    def _token(self, session_id: str) -> str:
+        sig = hmac.new(self._hmac_key, session_id.encode(), hashlib.sha256).hexdigest()
+        return f"v2.{session_id}.{sig}"
+
+    def _payload(self, token: str | None) -> dict[str, Any] | None:
+        session_id = self._session_id(token)
+        if session_id is None:
+            return None
+        raw = self._load(session_id)
+        if raw is None:
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if int(payload.get("exp", 0)) < int(time.time()):
+            self._delete(session_id)
+            return None
+        return payload
+
+    def _session_id(self, token: str | None) -> str | None:
+        """v2 cookies only. A body that still carries roles does not authenticate."""
+
+        if not token or not token.startswith("v2."):
+            return None
+        parts = token.split(".", 2)
+        if len(parts) != 3:
+            return None
+        prefix, session_id, sig = parts
+        if prefix != "v2" or not session_id or not sig:
+            return None
+        expect = hmac.new(self._hmac_key, session_id.encode(), hashlib.sha256).hexdigest()
+        if len(expect) != len(sig) or not hmac.compare_digest(expect, sig):
+            return None
+        return session_id
+
+    def _save(self, session_id: str, payload: dict[str, Any]) -> None:
+        raw = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        expires = str(payload.get("exp", ""))
+        with self._oidc_lock:
+            if self._conn is not None:
+                self._conn.execute(
+                    """INSERT INTO console_sessions(session_id, payload, expires_at)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(session_id) DO UPDATE SET
+                         payload=excluded.payload,
+                         expires_at=excluded.expires_at""",
+                    (session_id, raw, expires),
+                )
+                self._conn.commit()
+            else:
+                self._rows[session_id] = raw
+
+    def _load(self, session_id: str) -> str | None:
+        with self._oidc_lock:
+            if self._conn is not None:
+                row = self._conn.execute(
+                    "SELECT payload FROM console_sessions WHERE session_id=?",
+                    (session_id,),
+                ).fetchone()
+                return None if row is None else str(row[0])
+            return self._rows.get(session_id)
+
+    def _delete(self, session_id: str) -> None:
+        with self._oidc_lock:
+            if self._conn is not None:
+                self._conn.execute(
+                    "DELETE FROM console_sessions WHERE session_id=?", (session_id,)
+                )
+                self._conn.commit()
+            else:
+                self._rows.pop(session_id, None)
 
     def switch_tenant(self, user: ConsoleUser, tenant_id: str) -> ConsoleUser:
         tenant_id = validate_tenant_id(tenant_id)

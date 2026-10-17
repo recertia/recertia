@@ -65,7 +65,7 @@ class ConsoleContext:
 
             pdp = PolicyDecisionPoint.load(surface="api")
         self.pdp = pdp
-        self.sessions = SessionStore()
+        self.sessions = SessionStore(path=root / "console_sessions.sqlite")
         self.proposals = ProposalStore(root / "proposals.sqlite")
         self.programs = ProgramStore(root / "programs.sqlite")
         self.job_runs = JobRunStore(root / "job_runs.sqlite")
