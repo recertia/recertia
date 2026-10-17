@@ -14,23 +14,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Literal
 
+from recertia.ports.execution import LocalExecutionCapability
+from recertia.settings import load_settings
 from recertia.solver.sandbox import SandboxError, SandboxLimits
 
 Backend = Literal["container", "local"]
 
 _ALLOWED_IMAGES = frozenset({"python:3.12-slim", "python:3.11-slim", "python:3.12", "python:3.11"})
-_CUSTOM_IMAGE_TRUE = frozenset({"1", "true", "yes", "on"})
 _backend_override: contextvars.ContextVar[Backend | None] = contextvars.ContextVar(
     "recertia_execution_backend", default=None
 )
-
-
-
-@dataclass(frozen=True)
-class LocalExecutionCapability:
-    """Explicit opt-in for the non-production executor (tests and local development)."""
-
-    purpose: str = "test-or-local-development"
 
 
 @dataclass(frozen=True)
@@ -48,12 +41,18 @@ class ContainerSpec:
 def container_runtime() -> str | None:
     """Return the explicitly requested or first approved OCI runtime."""
 
-    requested = os.environ.get("RECERTIA_CONTAINER_RUNTIME")
+    requested = load_settings().container_runtime
     if requested:
         if requested not in {"docker", "podman"}:
             return None
         return requested if shutil.which(requested) else None
     return next((runtime for runtime in ("docker", "podman") if shutil.which(runtime)), None)
+
+
+def backend_override() -> Backend | None:
+    """Context-local backend from ``--local-exec``. ``None`` when unset."""
+
+    return _backend_override.get()
 
 
 def configured_backend() -> Backend:
@@ -64,9 +63,7 @@ def configured_backend() -> Backend:
     """
 
     override = _backend_override.get()
-    backend = override if override is not None else os.environ.get(
-        "RECERTIA_EXECUTION_BACKEND", "container"
-    )
+    backend = override if override is not None else load_settings().execution_backend
     if backend not in {"container", "local"}:
         raise SandboxError(f"unsupported execution backend: {backend!r}")
     return backend  # type: ignore[return-value]
@@ -92,8 +89,7 @@ def allow_custom_image() -> bool:
     ``0``, ``false``, and any other value stay on the image allowlist.
     """
 
-    raw = os.environ.get("RECERTIA_ALLOW_CUSTOM_IMAGE", "").strip().lower()
-    return raw in _CUSTOM_IMAGE_TRUE
+    return load_settings().allow_custom_image
 
 
 def local_execution_capability() -> LocalExecutionCapability | None:
@@ -131,8 +127,7 @@ def ensure_api_execution_ready() -> Backend:
 
     backend = ensure_execution_ready()
     if backend == "local":
-        flag = os.environ.get("RECERTIA_API_ALLOW_LOCAL_EXEC", "").strip().lower()
-        if flag not in {"1", "true", "yes"}:
+        if not load_settings().api_allow_local_exec:
             raise SandboxError(
                 "RECERTIA_EXECUTION_BACKEND=local is not allowed for the HTTP API. "
                 "Use the container backend, or set RECERTIA_API_ALLOW_LOCAL_EXEC=1 "
@@ -160,8 +155,7 @@ def ensure_workdir_writable_by_container(workdir: Path) -> None:
         return
     mode = workdir.stat().st_mode
     new_mode = mode | 0o0770
-    flag = os.environ.get("RECERTIA_WORKDIR_WORLD_WRITE", "").strip().lower()
-    if flag in {"1", "true", "yes"}:
+    if load_settings().workdir_world_write:
         new_mode |= 0o0007
     workdir.chmod(new_mode)
 
@@ -169,7 +163,7 @@ def ensure_workdir_writable_by_container(workdir: Path) -> None:
 def default_container_image() -> str:
     """Allowlisted image tag; optional ``RECERTIA_CONTAINER_IMAGE`` override."""
 
-    image = os.environ.get("RECERTIA_CONTAINER_IMAGE", "python:3.12-slim")
+    image = load_settings().container_image
     # Accept ``tag`` or ``tag@sha256:…``; allowlist checks the tag portion.
     tag = image.split("@", 1)[0]
     if tag not in _ALLOWED_IMAGES and not allow_custom_image():
@@ -258,14 +252,21 @@ def _container_run(
     workdir: Path,
     spec: ContainerSpec,
     timeout_s: int,
+    output_cap_bytes: int | None = None,
+    run_id: str | None = None,
+    owner_id: str | None = None,
+    tenant_id: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     name = f"rec-{uuid.uuid4().hex[:16]}"
+    memory = "512m"
     args = [
         runtime,
         "run",
         "--rm" if spec.remove else "",
         f"--name={name}",
         f"--network={spec.network}",
+        "--ipc",
+        "none",
         f"--user={spec.user}",
         f"--workdir={spec.workdir_mount}",
         "--cap-drop=ALL",
@@ -273,29 +274,99 @@ def _container_run(
         "no-new-privileges",
         "--pids-limit",
         "256",
-        "-v",
-        f"{workdir}:{spec.workdir_mount}:rw",
+        "--ulimit",
+        "nproc=256",
+        "--ulimit",
+        "nofile=1024",
+        "--mount",
+        f"type=bind,source={workdir},destination={spec.workdir_mount}",
         "--memory",
-        "512m",
+        memory,
+        "--memory-swap",
+        memory,
         "--cpus",
         "1",
         "-e",
         f"HOME={spec.workdir_mount}",
     ]
+    if tenant_id:
+        args.extend(["--label", f"recertia.tenant={tenant_id}"])
+    if run_id:
+        args.extend(["--label", f"recertia.run_id={run_id}"])
+    if owner_id:
+        args.extend(["--label", f"recertia.owner_id={owner_id}"])
     # Digest-pinned images should not be retargeted by a mutable tag pull.
     if "@sha256:" in spec.image:
         args.extend(["--pull", "never"])
     if spec.read_only_root:
         args.append("--read-only")
-        args.extend(["--tmpfs", "/tmp:rw,size=64m"])
+        args.extend(["--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=64m"])
     args = [a for a in args if a]
     args.extend([spec.image, "sh", "-c", command])
+    cap = output_cap_bytes if output_cap_bytes is not None else 0
     try:
+        if cap > 0:
+            return _run_capped(args, runtime=runtime, name=name, timeout_s=timeout_s, cap=cap)
         return subprocess.run(args, capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired:
         # Killing the CLI client does not stop the container; kill it by name.
         _kill_container(runtime, name)
         raise
+
+
+def _run_capped(
+    args: list[str],
+    *,
+    runtime: str,
+    name: str,
+    timeout_s: int,
+    cap: int,
+) -> subprocess.CompletedProcess[str]:
+    """Stream stdout and stderr, killing the container once the byte cap is hit."""
+
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    total = 0
+    try:
+        assert proc.stdout is not None and proc.stderr is not None
+        # Read stderr on a side thread so a full stderr pipe cannot stall stdout.
+        import threading
+
+        stderr_box: list[str] = []
+
+        def _read_err() -> None:
+            assert proc.stderr is not None
+            stderr_box.append(proc.stderr.read())
+
+        thread = threading.Thread(target=_read_err, daemon=True)
+        thread.start()
+        while True:
+            chunk = proc.stdout.read(4096)
+            if not chunk:
+                break
+            stdout_parts.append(chunk)
+            total += len(chunk.encode("utf-8", errors="replace"))
+            if total > cap:
+                _kill_container(runtime, name)
+                proc.kill()
+                thread.join(timeout=2)
+                return subprocess.CompletedProcess(
+                    args,
+                    125,
+                    "".join(stdout_parts),
+                    ("".join(stderr_box) + "\noutput cap exceeded").strip(),
+                )
+        proc.wait(timeout=timeout_s)
+        thread.join(timeout=2)
+        stderr_parts = stderr_box
+    except subprocess.TimeoutExpired:
+        _kill_container(runtime, name)
+        proc.kill()
+        raise
+    return subprocess.CompletedProcess(
+        args, proc.returncode or 0, "".join(stdout_parts), "".join(stderr_parts)
+    )
 
 
 def _kill_container(runtime: str, name: str) -> None:
@@ -366,7 +437,12 @@ def run_configured_command(
 
 
 def _local_run(
-    command: str, *, workdir: Path, limits: SandboxLimits, timeout_s: int
+    command: str,
+    *,
+    workdir: Path,
+    limits: SandboxLimits,
+    timeout_s: int,
+    home: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Bounded local executor for explicitly opted-in test/development use only."""
 
@@ -375,12 +451,10 @@ def _local_run(
         raise SandboxError(f"workdir does not exist: {workdir}")
     # Never inherit a host HOME. The child home is the workdir even when a
     # caller-supplied allowlist still names HOME.
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if key in limits.allowed_env_keys and key != "HOME"
-    }
-    env["HOME"] = str(workdir)
+    from recertia.secrets.model_keys import scrub_executor_env
+
+    env = scrub_executor_env(os.environ, limits.allowed_env_keys)
+    env["HOME"] = home or str(workdir)
     if sys.platform == "win32":
         env.setdefault("PATH", os.environ.get("PATH", ""))
         env.setdefault("TMP", str(workdir))

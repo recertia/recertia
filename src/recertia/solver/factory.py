@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import replace
 
 from recertia.config import ModelConfig, load_model_config, resolve_api_key
@@ -19,6 +18,7 @@ def build_model_client(
     *,
     role: str = "solver",
     model_id: str | None = None,
+    tenant: str | None = None,
 ) -> ModelClient:
     """Build a model client for ``role`` (solver or verifier).
 
@@ -44,7 +44,7 @@ def build_model_client(
             f"provider {cfg.provider!r} requires a model id "
             f"(RECERTIA_MODEL_ID or --model {cfg.provider}:<id>)"
         )
-    api_key = resolve_api_key(cfg)
+    api_key = resolve_api_key(cfg, tenant=tenant)
     if not api_key:
         env = cfg.api_key_env or "(unset)"
         raise ModelConfigError(
@@ -55,7 +55,14 @@ def build_model_client(
         "anthropic": "RECERTIA_ANTHROPIC_BASE_URL",
         "openai": "RECERTIA_OPENAI_BASE_URL",
     }.get(cfg.provider)
-    base_url = os.environ.get(base_url_env, "").strip() if base_url_env else ""
+    from recertia.settings import load_settings
+
+    settings = load_settings()
+    base_url = ""
+    if base_url_env == "RECERTIA_ANTHROPIC_BASE_URL":
+        base_url = settings.anthropic_base_url or ""
+    elif base_url_env == "RECERTIA_OPENAI_BASE_URL":
+        base_url = settings.openai_base_url or ""
 
     if cfg.provider == "anthropic":
         kwargs: dict = {
@@ -96,11 +103,9 @@ def build_solver_and_verifier(
     """
 
     cfg = config or load_model_config()
-    allow_stub = os.environ.get("RECERTIA_ALLOW_STUB_MODEL", "").strip() in {
-        "1",
-        "true",
-        "yes",
-    }
+    from recertia.settings import load_settings
+
+    allow_stub = load_settings().allow_stub_model
     if cfg.provider == "stub" and not allow_stub:
         return None, None
 

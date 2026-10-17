@@ -13,13 +13,15 @@ import hmac
 import json
 import os
 import secrets
+import sqlite3
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Lock
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 from urllib.parse import urlencode
 
 from fastapi import Header, HTTPException, Request
@@ -66,9 +68,21 @@ class SessionCookieKwargs(TypedDict):
 def session_cookie_kwargs() -> SessionCookieKwargs:
     return {
         "httponly": True,
-        "samesite": "lax",
+        "samesite": "strict",
         "secure": cookie_secure(),
         "path": "/",
+    }
+
+
+def csrf_cookie_kwargs() -> SessionCookieKwargs:
+    """Double-submit cookie. Not HttpOnly, so the console can copy it into a header."""
+
+    base = session_cookie_kwargs()
+    return {
+        "httponly": False,
+        "samesite": base["samesite"],
+        "secure": base["secure"],
+        "path": base["path"],
     }
 
 
@@ -114,6 +128,7 @@ class OidcPending:
     verifier: str
     redirect_uri: str
     created_at: float
+    nonce: str
 
 
 def _checked_tenants(
@@ -140,39 +155,52 @@ def pkce_challenge(verifier: str) -> str:
 
 
 class SessionStore:
-    """Signed cookie sessions (HMAC) — no server DB required for C3."""
+    """Cookie v2 carries a session id. Roles live in sqlite (or an in-memory row)."""
 
-    def __init__(self, secret: str | None = None) -> None:
+    def __init__(self, secret: str | None = None, *, path: Path | None = None) -> None:
         self._hmac_key = resolve_session_secret(secret)
         self._oidc: dict[str, OidcPending] = {}
         self._oidc_lock = Lock()
+        self._jti: set[str] = set()
+        self._rows: dict[str, str] = {}
+        self._conn = None
+        if path is not None:
+            from recertia.persistence.db import open_db
+
+            self._conn = open_db(path)
+            self._conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS console_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS oidc_jti (
+                    jti TEXT PRIMARY KEY
+                );
+                """
+            )
+            self._conn.commit()
 
     def issue(self, user: ConsoleUser, *, ttl_s: int = 86400) -> str:
         tenants, active = _checked_tenants(tuple(user.tenants), user.active_tenant)
+        session_id = secrets.token_urlsafe(24)
+        exp = int(time.time()) + ttl_s
         payload = {
             "user_id": user.user_id,
             "display_name": user.display_name,
             "roles": sorted(user.roles),
             "tenants": list(tenants),
             "active_tenant": active,
-            "exp": int(time.time()) + ttl_s,
+            "csrf": secrets.token_urlsafe(24),
+            "exp": exp,
         }
-        body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-        sig = hmac.new(self._hmac_key, body.encode(), hashlib.sha256).hexdigest()
-        return f"{body}.{sig}"
+        self._save(session_id, payload)
+        return self._token(session_id)
 
     def parse(self, token: str | None) -> ConsoleUser | None:
-        if not token or "." not in token:
-            return None
-        body, _, sig = token.rpartition(".")
-        expect = hmac.new(self._hmac_key, body.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expect, sig):
-            return None
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            return None
-        if int(payload.get("exp", 0)) < int(time.time()):
+        payload = self._payload(token)
+        if payload is None:
             return None
         raw_tenants = tuple(str(item) for item in (payload.get("tenants") or []))
         if not raw_tenants:
@@ -184,7 +212,7 @@ class SessionStore:
             )
         except ValueError:
             return None
-        roles = frozenset(payload.get("roles") or [])
+        roles = frozenset(str(item) for item in (payload.get("roles") or []))
         if not roles & _VALID_ROLES:
             return None
         return ConsoleUser(
@@ -194,6 +222,94 @@ class SessionStore:
             tenants=tenants,
             active_tenant=active,
         )
+
+    def csrf_for(self, token: str | None) -> str | None:
+        payload = self._payload(token)
+        if payload is None:
+            return None
+        csrf = payload.get("csrf")
+        return str(csrf) if isinstance(csrf, str) and csrf else None
+
+    def csrf_matches(self, token: str | None, presented: str) -> bool:
+        expected = self.csrf_for(token) or ""
+        if not expected or len(expected) != len(presented):
+            return False
+        return hmac.compare_digest(expected, presented)
+
+    def _token(self, session_id: str) -> str:
+        sig = hmac.new(self._hmac_key, session_id.encode(), hashlib.sha256).hexdigest()
+        return f"v2.{session_id}.{sig}"
+
+    def _payload(self, token: str | None) -> dict[str, Any] | None:
+        session_id = self._session_id(token)
+        if session_id is None:
+            return None
+        raw = self._load(session_id)
+        if raw is None:
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if int(payload.get("exp", 0)) < int(time.time()):
+            self._delete(session_id)
+            return None
+        return payload
+
+    def _session_id(self, token: str | None) -> str | None:
+        """v2 cookies only. A body that still carries roles does not authenticate."""
+
+        if not token or not token.startswith("v2."):
+            return None
+        parts = token.split(".", 2)
+        if len(parts) != 3:
+            return None
+        prefix, session_id, sig = parts
+        if prefix != "v2" or not session_id or not sig:
+            return None
+        expect = hmac.new(self._hmac_key, session_id.encode(), hashlib.sha256).hexdigest()
+        if len(expect) != len(sig) or not hmac.compare_digest(expect, sig):
+            return None
+        return session_id
+
+    def _save(self, session_id: str, payload: dict[str, Any]) -> None:
+        raw = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        expires = str(payload.get("exp", ""))
+        with self._oidc_lock:
+            if self._conn is not None:
+                self._conn.execute(
+                    """INSERT INTO console_sessions(session_id, payload, expires_at)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(session_id) DO UPDATE SET
+                         payload=excluded.payload,
+                         expires_at=excluded.expires_at""",
+                    (session_id, raw, expires),
+                )
+                self._conn.commit()
+            else:
+                self._rows[session_id] = raw
+
+    def _load(self, session_id: str) -> str | None:
+        with self._oidc_lock:
+            if self._conn is not None:
+                row = self._conn.execute(
+                    "SELECT payload FROM console_sessions WHERE session_id=?",
+                    (session_id,),
+                ).fetchone()
+                return None if row is None else str(row[0])
+            return self._rows.get(session_id)
+
+    def _delete(self, session_id: str) -> None:
+        with self._oidc_lock:
+            if self._conn is not None:
+                self._conn.execute(
+                    "DELETE FROM console_sessions WHERE session_id=?", (session_id,)
+                )
+                self._conn.commit()
+            else:
+                self._rows.pop(session_id, None)
 
     def switch_tenant(self, user: ConsoleUser, tenant_id: str) -> ConsoleUser:
         tenant_id = validate_tenant_id(tenant_id)
@@ -207,13 +323,31 @@ class SessionStore:
             active_tenant=tenant_id,
         )
 
-    def begin_oidc(self, *, redirect_uri: str) -> tuple[str, str]:
+    def begin_oidc(self, *, redirect_uri: str) -> tuple[str, str, str]:
         state = secrets.token_urlsafe(24)
         verifier = secrets.token_urlsafe(48)
+        nonce = secrets.token_urlsafe(24)
         with self._oidc_lock:
             self._purge_oidc_locked()
-            self._oidc[state] = OidcPending(verifier, redirect_uri, time.time())
-        return state, verifier
+            self._oidc[state] = OidcPending(verifier, redirect_uri, time.time(), nonce)
+        return state, verifier, nonce
+
+    def claim_jti(self, jti: str) -> None:
+        """Remember an OIDC ``jti``. A second claim is rejected."""
+
+        if not jti or any(ch.isspace() for ch in jti):
+            raise ValueError("oidc jti missing")
+        with self._oidc_lock:
+            if self._conn is not None:
+                try:
+                    self._conn.execute("INSERT INTO oidc_jti (jti) VALUES (?)", (jti,))
+                    self._conn.commit()
+                except sqlite3.IntegrityError as exc:
+                    raise ValueError("duplicate oidc jti") from exc
+                return
+            if jti in self._jti:
+                raise ValueError("duplicate oidc jti")
+            self._jti.add(jti)
 
     def take_oidc(self, state: str) -> OidcPending | None:
         with self._oidc_lock:
@@ -236,7 +370,7 @@ def oidc_configured() -> bool:
 
 
 def oidc_authorize_url(
-    *, redirect_uri: str, state: str, code_challenge: str
+    *, redirect_uri: str, state: str, code_challenge: str, nonce: str
 ) -> str:
     issuer = os.environ["RECERTIA_OIDC_ISSUER"].rstrip("/")
     client_id = os.environ["RECERTIA_OIDC_CLIENT_ID"]
@@ -248,6 +382,7 @@ def oidc_authorize_url(
             "redirect_uri": redirect_uri,
             "scope": scope,
             "state": state,
+            "nonce": nonce,
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
         }
@@ -272,8 +407,48 @@ def _map_oidc_roles(profile: dict) -> frozenset[str]:
     return frozenset(roles) or frozenset({"operator"})
 
 
+def _id_token_payload(token: str) -> dict[str, Any]:
+    """Decode a JWT payload. Signature verification needs a JWKS client we do not ship."""
+
+    parts = token.split(".")
+    if len(parts) != 3 or not parts[1]:
+        raise HTTPException(status_code=400, detail="oidc id_token malformed")
+    padded = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        payload = json.loads(raw.decode("utf-8"))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="oidc id_token malformed") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="oidc id_token malformed")
+    return payload
+
+
+def _check_id_token(token: str, *, nonce: str, sessions: SessionStore) -> None:
+    payload = _id_token_payload(token)
+    got = payload.get("nonce")
+    if (
+        not isinstance(got, str)
+        or len(got) != len(nonce)
+        or not hmac.compare_digest(got, nonce)
+    ):
+        raise HTTPException(status_code=400, detail="oidc nonce rejected")
+    jti = payload.get("jti")
+    if not isinstance(jti, str):
+        raise HTTPException(status_code=400, detail="oidc jti missing")
+    try:
+        sessions.claim_jti(jti)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def oidc_exchange_code(
-    *, code: str, redirect_uri: str, code_verifier: str
+    *,
+    code: str,
+    redirect_uri: str,
+    code_verifier: str,
+    nonce: str,
+    sessions: SessionStore,
 ) -> ConsoleUser:
     """Exchange auth code for tokens and map to ConsoleUser (generic OIDC + PKCE)."""
 
@@ -300,6 +475,10 @@ def oidc_exchange_code(
         access = tok_payload.get("access_token")
         if not access:
             raise HTTPException(status_code=502, detail="oidc token missing access_token")
+        id_token = tok_payload.get("id_token")
+        if not isinstance(id_token, str) or not id_token:
+            raise HTTPException(status_code=502, detail="oidc token missing id_token")
+        _check_id_token(id_token, nonce=nonce, sessions=sessions)
         info_req = urllib.request.Request(
             userinfo_url,
             headers={"authorization": f"Bearer {access}"},
@@ -335,6 +514,15 @@ def oidc_exchange_code(
     )
 
 
+def console_session(sessions: SessionStore, request: Request) -> ConsoleUser | None:
+    """Parse a browser session. Auth mode ``off`` ignores cookies and headers."""
+
+    if auth_mode() == "off":
+        return None
+    token = request.headers.get("X-Recertia-Session") or request.cookies.get("recertia_session")
+    return sessions.parse(token)
+
+
 def require_console_user(
     request: Request,
     sessions: SessionStore,
@@ -343,8 +531,8 @@ def require_console_user(
     x_recertia_session: str | None = Header(default=None, alias="X-Recertia-Session"),
     x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
 ) -> ConsoleUser:
-    token = x_recertia_session or request.cookies.get("recertia_session")
-    user = sessions.parse(token)
+    del x_recertia_session
+    user = console_session(sessions, request)
     if user is None:
         raise HTTPException(status_code=401, detail="console authentication required")
     if not user.may(min_role):

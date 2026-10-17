@@ -30,6 +30,7 @@ def eval_run(
 
     from recertia.evals.golden import run_eval_suite
     from recertia.evals.store import EvalStore
+    from recertia.review.gate import default_golden_factory
 
     store = EvalStore(eval_db)
     try:
@@ -41,6 +42,7 @@ def eval_run(
             eval_store=store,
             snapshot_id=snapshot_id,
             golden_dir=golden_dir,
+            factory=default_golden_factory(),
         )
     finally:
         store.close()

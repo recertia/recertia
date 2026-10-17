@@ -41,6 +41,23 @@ def backup_create(
     _backup(root, output)
 
 
+@backup_app.command("verify")
+def backup_verify(
+    archive: Path = typer.Argument(..., help="Backup .tar.gz"),
+) -> None:
+    """Recompute MANIFEST.json checksums. Refuses a tampered archive."""
+
+    from recertia.ops.backup import BackupError, verify_archive
+
+    try:
+        manifest = verify_archive(archive)
+    except BackupError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    count = len(manifest.get("files", []))
+    typer.echo(f"backup OK: {count} files")
+
+
 def _backup(root: Path, output: Path | None) -> None:
     from recertia.ops.backup import BackupError, backup_tree, default_archive_name
 

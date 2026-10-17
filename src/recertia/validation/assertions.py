@@ -8,6 +8,7 @@ writes, no imports, and no builtins.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 from typing import Any
 
@@ -163,6 +164,15 @@ class _SafeEval(ast.NodeVisitor):
         if node.keywords:
             raise UnsafeAssertionError("keyword arguments are not allowed in assertions")
         func = node.func
+        if isinstance(func, ast.Name) and func.id in {"file_exists", "file_contains"}:
+            args = [self.visit(arg) for arg in node.args]
+            if func.id == "file_exists":
+                if len(args) != 1 or not isinstance(args[0], str):
+                    raise UnsafeAssertionError("file_exists expects one string path")
+                return self._file_exists(args[0])
+            if len(args) != 2 or not isinstance(args[0], str) or not isinstance(args[1], str):
+                raise UnsafeAssertionError("file_contains expects a path and a pattern")
+            return self._file_contains(args[0], args[1])
         if isinstance(func, ast.Attribute):
             obj = self.visit(func.value)
             if not isinstance(obj, Path) or func.attr not in _ALLOWED_PATH_ATTRS:
@@ -190,6 +200,22 @@ class _SafeEval(ast.NodeVisitor):
 
     def visit_FormattedValue(self, node: ast.FormattedValue) -> Any:
         return self.visit(node.value)
+
+    def _file_exists(self, path: str) -> bool:
+        return self._confine(self.workdir / path).is_file()
+
+    def _file_contains(self, path: str, pattern: str) -> bool:
+        if len(pattern) > 256:
+            return False
+        try:
+            compiled = re.compile(pattern)
+        except re.error:
+            return False
+        confined = self._confine(self.workdir / path)
+        if not confined.is_file():
+            return False
+        text = confined.read_bytes()[: 1024 * 1024].decode("utf-8", errors="replace")
+        return compiled.search(text) is not None
 
     def _confine(self, path: Path) -> Path:
         resolved = path if path.is_absolute() else (self.workdir / path)

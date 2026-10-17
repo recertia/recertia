@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+
+from recertia.persistence.db import open_db
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
@@ -21,7 +22,7 @@ def apply_sqlite_migrations(db_path: Path) -> list[str]:
     """Apply all sqlite migrations to ``db_path``; return applied version ids."""
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = open_db(db_path)
     try:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS schema_migrations ("
@@ -55,7 +56,7 @@ def postgres_migration_sql() -> str:
 
 
 def verify_sqlite_schema(db_path: Path) -> set[str]:
-    conn = sqlite3.connect(db_path)
+    conn = open_db(db_path)
     try:
         rows = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"

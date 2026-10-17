@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
@@ -9,6 +10,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from recertia.api.console_auth import (
     ConsoleUser,
     auth_mode,
+    csrf_cookie_kwargs,
     dev_admin_enabled,
     dev_login_enabled,
     oidc_authorize_url,
@@ -26,12 +28,46 @@ from recertia.api.console_routes import (
 )
 
 
+def _set_session_cookies(response: Response, sessions: Any, token: str) -> None:
+    response.set_cookie("recertia_session", token, **session_cookie_kwargs())
+    csrf = sessions.csrf_for(token)
+    if csrf:
+        response.set_cookie("recertia_csrf", csrf, **csrf_cookie_kwargs())
+
+
+def _require_cookie_csrf(request: Request, sessions: Any) -> None:
+    """Cookie-authenticated POSTs must echo the double-submit token."""
+
+    session_cookie = request.cookies.get("recertia_session")
+    if not session_cookie:
+        return
+    header = request.headers.get("x-recertia-csrf") or ""
+    cookie = request.cookies.get("recertia_csrf") or ""
+    if not header or len(header) != len(cookie) or not hmac.compare_digest(header, cookie):
+        raise HTTPException(status_code=403, detail="csrf rejected")
+    if not sessions.csrf_matches(session_cookie, header):
+        raise HTTPException(status_code=403, detail="csrf rejected")
+
+
+def _reject_foreign_origin(request: Request) -> None:
+    """Cookie POSTs with an Origin must match the Host. A missing Origin is allowed."""
+
+    origin = request.headers.get("origin")
+    if not origin:
+        return
+    host = request.headers.get("host") or ""
+    allowed = {f"http://{host}", f"https://{host}"}
+    if origin.rstrip("/") not in allowed:
+        raise HTTPException(status_code=403, detail="origin rejected")
+
+
 def register_session_routes(app: FastAPI, rs: RouteState) -> None:
     ctx = rs.ctx
     require_runs = rs.require_runs
     _optional_console_user = rs.optional_console_user
     _resolve_tenant = rs.resolve_tenant
     _require_workspace_admin = rs.require_workspace_admin
+    _require_host_admin = rs.require_host_admin
     _require_library_write = rs.require_library_write
     _public_user = rs.public_user
 
@@ -51,7 +87,9 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
         }
 
     @app.post("/v1/auth/dev-login")
-    def dev_login(body: DevLogin, response: Response) -> dict[str, Any]:
+    def dev_login(body: DevLogin, request: Request, response: Response) -> dict[str, Any]:
+        _reject_foreign_origin(request)
+        _require_cookie_csrf(request, ctx.sessions)
         if not dev_login_enabled():
             raise HTTPException(status_code=404, detail="dev login disabled")
         requested = frozenset(body.roles) or frozenset({"operator"})
@@ -73,16 +111,21 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
             token = ctx.sessions.issue(user)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        response.set_cookie("recertia_session", token, **session_cookie_kwargs())
+        _set_session_cookies(response, ctx.sessions, token)
         return {"ok": True, "user": _public_user(user)}
 
     @app.post("/v1/auth/logout")
-    def logout(response: Response) -> dict[str, str]:
+    def logout(request: Request, response: Response) -> dict[str, str]:
+        _reject_foreign_origin(request)
+        _require_cookie_csrf(request, ctx.sessions)
         response.delete_cookie("recertia_session", path="/")
+        response.delete_cookie("recertia_csrf", path="/")
         return {"status": "ok"}
 
     @app.post("/v1/auth/switch-tenant")
     def switch_tenant(body: TenantSwitch, request: Request, response: Response) -> dict[str, Any]:
+        _reject_foreign_origin(request)
+        _require_cookie_csrf(request, ctx.sessions)
         user = _optional_console_user(request)
         if user is None:
             raise HTTPException(status_code=401, detail="console authentication required")
@@ -91,7 +134,7 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         token = ctx.sessions.issue(switched)
-        response.set_cookie("recertia_session", token, **session_cookie_kwargs())
+        _set_session_cookies(response, ctx.sessions, token)
         return {"active_tenant": switched.active_tenant, "tenants": list(switched.tenants)}
 
     # ----- Registered workspaces (RW0) -----
@@ -131,7 +174,7 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         if ctx.workspace_registry is None:
             raise HTTPException(status_code=500, detail="workspace registry unavailable")
-        actor = _require_workspace_admin(request, principal)
+        actor = _require_host_admin(request, principal)
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         from recertia.paths import HostRootError
 
@@ -198,12 +241,13 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
         if auth_mode() != "oidc" or not oidc_configured():
             raise HTTPException(status_code=404, detail="oidc not configured")
         redirect = str(request.url_for("oidc_callback"))
-        state, verifier = ctx.sessions.begin_oidc(redirect_uri=redirect)
+        state, verifier, nonce = ctx.sessions.begin_oidc(redirect_uri=redirect)
         return {
             "authorize_url": oidc_authorize_url(
                 redirect_uri=redirect,
                 state=state,
                 code_challenge=pkce_challenge(verifier),
+                nonce=nonce,
             ),
             "state": state,
         }
@@ -218,9 +262,13 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
         if pending is None:
             raise HTTPException(status_code=400, detail="invalid or expired oidc state")
         user = oidc_exchange_code(
-            code=code, redirect_uri=pending.redirect_uri, code_verifier=pending.verifier
+            code=code,
+            redirect_uri=pending.redirect_uri,
+            code_verifier=pending.verifier,
+            nonce=pending.nonce,
+            sessions=ctx.sessions,
         )
         token = ctx.sessions.issue(user)
-        response.set_cookie("recertia_session", token, **session_cookie_kwargs())
+        _set_session_cookies(response, ctx.sessions, token)
         return {"ok": True, "user_id": user.user_id, "tenants": list(user.tenants)}
 

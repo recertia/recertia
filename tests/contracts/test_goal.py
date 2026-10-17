@@ -42,9 +42,10 @@ def test_goal_file_exists_compiles_to_command_criterion():
     criteria = compile_goal(goal)
     assert len(criteria) == 2
     assert criteria[0].id == "ec"
-    assert criteria[0].kind == "command"
-    assert "test -f .editorconfig" in (criteria[0].run or "")
-    assert criteria[1].kind == "command"
+    assert criteria[0].kind == "assertion"
+    assert criteria[0].expr == "file_exists('.editorconfig')"
+    assert criteria[1].kind == "assertion"
+    assert criteria[1].expr is not None and criteria[1].expr.startswith("file_contains(")
     assert criteria[0].source == "caller"
     assert all(c.preregistered for c in criteria)
 

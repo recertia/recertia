@@ -5,10 +5,10 @@ from __future__ import annotations
 import heapq
 import json
 import math
-import sqlite3
 from pathlib import Path
 from typing import Iterable, Protocol
 
+from recertia.persistence.db import open_db
 from recertia.retrieval.index import EMBED_DIM, cosine, embed_text
 
 
@@ -32,7 +32,7 @@ class JsonBlobVectorIndex:
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        self._conn = open_db(self.db_path)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS vectors ("

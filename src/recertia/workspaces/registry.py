@@ -8,7 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from contracts.workspace import RegisteredWorkspace
-from recertia.paths import HostRootError, normalize_host_root, validate_workspace_id
+from recertia.paths import (
+    HostRootError,
+    assert_host_root_allowed,
+    normalize_host_root,
+    validate_workspace_id,
+)
+from recertia.persistence.db import open_db
 
 
 class WorkspaceRegistry:
@@ -16,7 +22,7 @@ class WorkspaceRegistry:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
+        self._conn = open_db(self.path)
         self._conn.row_factory = sqlite3.Row
         with self._conn:
             self._conn.execute(
@@ -65,7 +71,9 @@ class WorkspaceRegistry:
     ) -> RegisteredWorkspace:
         workspace_id = validate_workspace_id(workspace_id)
         try:
-            normalized = normalize_host_root(host_root, must_exist=True)
+            normalized = assert_host_root_allowed(
+                normalize_host_root(host_root, must_exist=True)
+            )
         except HostRootError:
             raise
         now = self._now()

@@ -35,6 +35,31 @@ def test_federated_query_refuses_stale_index(tmp_path: Path) -> None:
     assert payload["skills"]["returned"] == []
 
 
+def test_federated_query_refuses_another_tenant_store(tmp_path: Path) -> None:
+    root = tmp_path / "runs" / "acme"
+    other = tmp_path / "runs" / "beta" / "episodic"
+    for path in (root / "facts", root / "episodic", other):
+        path.mkdir(parents=True)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    try:
+        federated_query(
+            "hello",
+            skills_root=skills,
+            facts_root=root / "facts",
+            episodic_root=other,
+            index_path=root / "skill_index.db",
+            workdir=root,
+            tenant_id="acme",
+            tenant_root=root,
+        )
+    except ValueError as exc:
+        assert "episodic" in str(exc)
+        assert "acme" in str(exc)
+    else:
+        raise AssertionError("expected another tenant's episodic store to be refused")
+
+
 def test_federated_query_does_not_rebuild(tmp_path: Path, monkeypatch) -> None:
     skills = tmp_path / "skills"
     facts = tmp_path / "facts"

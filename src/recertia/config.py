@@ -88,17 +88,19 @@ def load_model_config(
     else:
         verifier_model_id = env_verifier
 
+    from recertia.settings import load_settings
+
+    settings = load_settings()
     api_key_env = {
         "anthropic": "ANTHROPIC_API_KEY",
         "openai": "OPENAI_API_KEY",
         "stub": "",
     }[provider]
-    override = os.environ.get("RECERTIA_API_KEY_ENV")
-    if override:
-        api_key_env = override
+    if settings.api_key_env:
+        api_key_env = settings.api_key_env
 
-    timeout_s = float(os.environ.get("RECERTIA_MODEL_TIMEOUT_S", "60"))
-    max_retries = int(os.environ.get("RECERTIA_MODEL_MAX_RETRIES", "2"))
+    timeout_s = settings.model_timeout_s
+    max_retries = settings.model_max_retries
     return ModelConfig(
         provider=provider,
         model_id=model_id or "stub",
@@ -109,10 +111,20 @@ def load_model_config(
     )
 
 
-def resolve_api_key(config: ModelConfig) -> str | None:
-    """Return the API key from the configured env var, or None for stub."""
+def resolve_api_key(config: ModelConfig, *, tenant: str | None = None) -> str | None:
+    """Return one provider key.
+
+    A named tenant uses the BYO map when one is configured. Otherwise
+    ``single_node`` keeps the process env var. The map never substitutes
+    another tenant's secret.
+    """
 
     if config.provider == "stub" or not config.api_key_env:
         return None
-    key = os.environ.get(config.api_key_env, "").strip()
-    return key or None
+    from recertia.secrets.model_keys import tenant_provider_key
+
+    key, authoritative = tenant_provider_key(tenant, config.provider)
+    if authoritative:
+        return key
+    fallback = os.environ.get(config.api_key_env, "").strip()
+    return fallback or None

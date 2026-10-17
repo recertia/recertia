@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
 import urllib.error
 import urllib.parse
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from contracts.resources import ResourceClaim
 from recertia.solver.registry import (
@@ -16,6 +16,10 @@ from recertia.solver.registry import (
     ToolRegistry,
     ToolResult,
 )
+
+if TYPE_CHECKING:
+    from recertia.solver.runtime import HandlerContext
+    from recertia.solver.sandbox import SandboxLimits
 
 
 def confined_path(workdir: Path, value: object) -> Path:
@@ -28,16 +32,65 @@ def confined_path(workdir: Path, value: object) -> Path:
     return path
 
 
-def shell_handler(inputs: dict, workdir: Path) -> ToolResult:
+def _command_binding(
+    second: object,
+) -> tuple[Path, "SandboxLimits", "HandlerContext | None"]:
+    """Accept a Path (tests and unmigrated callers) or a HandlerContext."""
+
+    from recertia.solver.runtime import HandlerContext, active_sandbox_limits
+
+    if isinstance(second, HandlerContext):
+        limits = second.limits if second.limits is not None else active_sandbox_limits()
+        return second.workdir, limits, second
+    if isinstance(second, Path):
+        return second, active_sandbox_limits(), None
+    raise TypeError(f"handler expected Path or HandlerContext, got {type(second).__name__}")
+
+
+def _run_handler_command(
+    command: str,
+    *,
+    workdir: Path,
+    limits: "SandboxLimits",
+    timeout_s: int,
+    ctx: "HandlerContext | None",
+):
+    if ctx is not None and ctx.executor is not None:
+        from recertia.ports.execution import CommandRequest
+
+        return ctx.executor.run(
+            CommandRequest(
+                command=command,
+                workdir=workdir,
+                timeout_s=timeout_s,
+                limits=limits,
+                run_id=ctx.run_id,
+                owner_id=ctx.owner_id,
+                origin=ctx.origin,
+            )
+        )
     from recertia.solver.container import run_configured_command
-    from recertia.solver.runtime import active_sandbox_limits
+
+    return run_configured_command(
+        command, workdir=workdir, limits=limits, timeout_s=timeout_s
+    )
+
+
+def shell_handler(inputs: dict, workdir: "Path | HandlerContext") -> ToolResult:
+    from recertia.solver.command_policy import CommandPolicyError, enforce_model_shell
     from recertia.solver.sandbox import SandboxError
 
     command = str(inputs.get("command", "true"))
-    limits = active_sandbox_limits()
+    root, limits, ctx = _command_binding(workdir)
+    origin = ctx.origin if ctx is not None else "tool"
+    if origin == "model":
+        try:
+            command = enforce_model_shell(command)
+        except CommandPolicyError as exc:
+            return ToolResult(tool="shell", ok=False, exit_code=126, stderr=str(exc))
     try:
-        proc = run_configured_command(
-            command, workdir=workdir, limits=limits, timeout_s=60
+        proc = _run_handler_command(
+            command, workdir=root, limits=limits, timeout_s=60, ctx=ctx
         )
     except SandboxError as exc:
         return ToolResult(tool="shell", ok=False, exit_code=126, stderr=str(exc))
@@ -146,8 +199,11 @@ def fetch_handler(inputs: dict, workdir: Path) -> ToolResult:
             exit_code=126,
             stderr=f"host not allowlisted: {parsed.hostname}",
         )
-    timeout_s = float(os.environ.get("RECERTIA_FETCH_TIMEOUT_S", "20"))
-    max_bytes = int(os.environ.get("RECERTIA_FETCH_MAX_BYTES", str(512 * 1024)))
+    from recertia.settings import load_settings
+
+    settings = load_settings()
+    timeout_s = settings.fetch_timeout_s
+    max_bytes = settings.fetch_max_bytes
     try:
         raw = _registry._https_get(url, timeout_s=timeout_s, max_bytes=max_bytes)
     except urllib.error.HTTPError as exc:
@@ -185,19 +241,20 @@ def fetch_handler(inputs: dict, workdir: Path) -> ToolResult:
     return ToolResult(tool="fetch", ok=True, stdout=text[-8000:])
 
 
-def agent_subtask_handler(inputs: dict, workdir: Path) -> ToolResult:
+def agent_subtask_handler(inputs: dict, workdir: "Path | HandlerContext") -> ToolResult:
     """Model-backed repair loop: propose one shell command, then execute it."""
 
     from recertia.solver.command_policy import (
         CommandPolicyError,
-        assert_command_allowed,
+        enforce_model_shell,
         wrap_untrusted,
     )
-    from recertia.solver.container import run_configured_command
-    from recertia.solver.runtime import active_model, active_sandbox_limits, active_step_context
+    from recertia.solver.runtime import active_model, active_step_context
     from recertia.solver.sandbox import SandboxError
 
-    model = active_model()
+    root, limits, ctx = _command_binding(workdir)
+    bound_model = ctx.model if ctx is not None else None
+    model = bound_model if bound_model is not None else active_model()
     if model is None:
         return ToolResult(
             tool="agent_subtask",
@@ -208,13 +265,14 @@ def agent_subtask_handler(inputs: dict, workdir: Path) -> ToolResult:
                 "(set RECERTIA_MODEL_PROVIDER / --model)"
             ),
         )
-    step_ctx = active_step_context()
+    bound_step = ctx.step if ctx is not None else None
+    step_ctx = bound_step if bound_step is not None else active_step_context()
     intent = str(inputs.get("intent") or step_ctx.intent or "repair the workspace")
     changelog = str(inputs.get("changelog") or inputs.get("notes") or "")
     sync_status = inputs.get("sync_status", inputs.get("synced", ""))
     untrusted = wrap_untrusted("changelog_or_notes", changelog)
     prompt = (
-        f"You are repairing a repository workspace at {workdir}.\n"
+        f"You are repairing a repository workspace at {root}.\n"
         f"Task intent (trusted): {intent}\n"
         f"Sync status (trusted): {sync_status!r}\n"
         f"{untrusted}"
@@ -243,15 +301,14 @@ def agent_subtask_handler(inputs: dict, workdir: Path) -> ToolResult:
             stderr="model returned an empty/no-op command",
         )
     try:
-        command = assert_command_allowed(command)
+        command = enforce_model_shell(command)
     except CommandPolicyError as exc:
         return ToolResult(
             tool="agent_subtask", ok=False, exit_code=126, stderr=str(exc)
         )
-    limits = active_sandbox_limits()
     try:
-        proc = run_configured_command(
-            command, workdir=workdir, limits=limits, timeout_s=120
+        proc = _run_handler_command(
+            command, workdir=root, limits=limits, timeout_s=120, ctx=ctx
         )
     except SandboxError as exc:
         return ToolResult(

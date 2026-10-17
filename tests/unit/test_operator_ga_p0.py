@@ -115,12 +115,12 @@ def test_agent_subtask_refuses_injected_disallowed_command(
     assert "allowlisted" in result.stderr or "forbidden" in result.stderr
 
 
-def test_scratch_observe_act_succeeds_on_second_step(
+def test_scratch_refuses_model_shell_on_local(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("RECERTIA_EXECUTION_BACKEND", "local")
     monkeypatch.setenv("RECERTIA_COMMAND_POLICY", "on")
-    monkeypatch.setenv("RECERTIA_SCRATCH_MAX_STEPS", "4")
+    monkeypatch.setenv("RECERTIA_SCRATCH_MAX_STEPS", "2")
 
     # First command fails (missing file), second creates marker.
     model = StubModelClient(responses=["test -f MARKER", "touch MARKER"])
@@ -170,9 +170,10 @@ def test_scratch_observe_act_succeeds_on_second_step(
         model=model,
     )
     outcome = solve(state, ctx)
-    assert outcome.route == "attempt_completed"
-    assert (workdir / "MARKER").exists()
-    assert outcome.state.spent.tool_calls >= 2
+    assert outcome.route != "attempt_completed"
+    assert not (workdir / "MARKER").exists()
+    signal = outcome.state.failure_signal
+    assert signal is not None and "container" in signal.detail
 
 
 def test_run_manifest_pinned_by_bootstrap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

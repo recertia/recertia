@@ -6,7 +6,6 @@ library apply paths — not a bare checkpoint engine.
 
 from __future__ import annotations
 
-import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +13,6 @@ from typing import TYPE_CHECKING
 
 from contracts.run import RunManifest
 from recertia.config import ModelConfig, load_model_config
-from recertia.governance.sandbox import ApprovalGate
 from recertia.memory.affordance import AffordanceStore
 from recertia.memory.episodic import EpisodicStore
 from recertia.memory.procedural.store import SkillStore
@@ -25,10 +23,11 @@ from recertia.solver.apply import SkillApplicator
 from recertia.solver.factory import build_solver_and_verifier
 from recertia.solver.tools import ClaimScheduler, ToolRuntime, default_registry
 from recertia.solver.transcript import TranscriptStore
-from recertia.workspace import WorkspaceManager
 
 if TYPE_CHECKING:
     from recertia.graph.engine import GraphOrchestrator
+    from recertia.ports.execution import Surface
+    from recertia.ports.identity import Principal
     from recertia.solver.model import ModelClient
 
 
@@ -89,7 +88,10 @@ def build_run_manifest(
         store = bundle.orchestrator.store
         if store is not None and hasattr(store, "library_fingerprint"):
             snapshot_id = f"fp:{store.library_fingerprint()}"
-    library_commit = os.environ.get("RECERTIA_LIBRARY_COMMIT") or _git_head()
+    from recertia.settings import load_settings
+
+    settings = load_settings()
+    library_commit = settings.library_commit or _git_head()
     if library_commit is None and snapshot_id:
         library_commit = str(snapshot_id)
     return RunManifest(
@@ -97,7 +99,7 @@ def build_run_manifest(
         model_version=model_id,
         index_snapshot_id=str(snapshot_id) if snapshot_id else None,
         library_commit=library_commit,
-        policy_version=os.environ.get("RECERTIA_POLICY_VERSION"),
+        policy_version=settings.policy_version or None,
         seed=seed,
     )
 
@@ -111,6 +113,8 @@ def build_default_orchestrator(
     golden_root: Path | str | None = None,
     env_fingerprint: dict[str, str] | None = None,
     approve_default_tools: bool = True,
+    principal: "Principal | None" = None,
+    surface: "Surface" = "cli",
     model_config: ModelConfig | None = None,
     model: "ModelClient | None" = None,
     verifier_model: "ModelClient | None" = None,
@@ -126,10 +130,14 @@ def build_default_orchestrator(
     fails loud instead of silently no-oping.
     """
 
+    from recertia.app.authz import PolicyDecisionPoint
     from recertia.graph.engine import GraphOrchestrator
+    from recertia.graph.persistence import open_run_persistence
     from recertia.memory.procedural.lineage import LineageServices
     from recertia.policy_load import load_policy
+    from recertia.ports.identity import Principal
     from recertia.review import ReviewService
+    from recertia.settings import load_settings
 
     runs_root = Path(runs_root)
     runs_root.mkdir(parents=True, exist_ok=True)
@@ -162,10 +170,17 @@ def build_default_orchestrator(
     retriever.result_cache.ttl_s = sm.retrieval_cache_ttl_s
 
     registry = default_registry()
-    gate = ApprovalGate()
-    if approve_default_tools:
-        for name in registry.names():
-            gate.approve(name, actor="runtime-bootstrap", reason="default offline grant")
+    settings = load_settings()
+    pdp = PolicyDecisionPoint.open(settings, policy, surface=surface)
+    # CLI with no explicit principal is the local operator (D5). The flag no
+    # longer approves every registry name: local runs stay on the PDP grant
+    # list, and container runs auto-approve only the sandboxed tools.
+    grant_as = principal
+    if grant_as is None and surface == "cli" and approve_default_tools:
+        grant_as = Principal.local_operator()
+    if not approve_default_tools:
+        grant_as = None
+    pdp.approve_tools(grant_as, origin="tool")
     from recertia.solver.result_cache import ToolResultCache
 
     tool_cache = ToolResultCache(
@@ -175,11 +190,13 @@ def build_default_orchestrator(
     tools = ToolRuntime(
         registry,
         ClaimScheduler(),
-        approval_gate=gate,
+        require_approval_for_non_read=policy.require_tool_approval_for_non_read,
+        approval_gate=pdp,
         model=model,
         result_cache=tool_cache,
     )
-    workspaces = WorkspaceManager(runs_root / "snapshots")
+    persistence = open_run_persistence(runs_root)
+    workspaces = persistence.workspaces
     transcripts = TranscriptStore(runs_root / "transcripts")
     applicator = SkillApplicator(tools, workspaces)
 
@@ -195,13 +212,12 @@ def build_default_orchestrator(
         if state.terminal is None:
             return
         try:
-            from recertia.evals.store import EvalStore, ObservationError
+            from recertia.evals.outbox import drain_eval_outbox
+            from recertia.evals.store import EvalStore
 
             eval_store = EvalStore(runs_root / "evals.db")
             try:
-                eval_store.append_run(state)
-            except ObservationError:
-                return
+                drain_eval_outbox(persistence.checkpoints, eval_store)
             finally:
                 eval_store.close()
         except Exception:  # noqa: BLE001 — eval recording must not fail runs
@@ -209,6 +225,7 @@ def build_default_orchestrator(
 
     orch = GraphOrchestrator(
         runs_root,
+        persistence=persistence,
         store=store,
         retriever=retriever,
         tools=tools,
@@ -225,8 +242,6 @@ def build_default_orchestrator(
         policy=policy,
         on_finalize=_record_eval,
     )
-    # Share the same WorkspaceManager the applicator uses for attempt isolation.
-    orch.workspaces = workspaces
     return OrchestratorBundle(orchestrator=orch, index=index, model_config=cfg)
 
 

@@ -42,10 +42,12 @@ def test_api_keys_are_salted_scoped_durable_and_revocable(tmp_path: Path) -> Non
     assert principal.scopes == frozenset({"runs"})
 
     with sqlite3.connect(db) as conn:
-        stored = conn.execute("SELECT key_hash, salt FROM api_keys").fetchone()
+        stored = conn.execute(
+            "SELECT key_hash, salt, hash_alg FROM api_keys"
+        ).fetchone()
         audit = conn.execute("SELECT action FROM api_key_audit ORDER BY id").fetchall()
     assert issued.secret.encode() not in stored[0]
-    assert len(stored[1]) >= 16
+    assert stored[2] == "hmac-sha256"
     assert [row[0] for row in audit] == ["issued", "authenticated"]
 
     assert keys.revoke(issued.key_id, actor="operator")

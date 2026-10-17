@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Header, Request
 from pydantic import BaseModel, Field, ValidationError
 
+from recertia.api.console_auth import console_session
 from recertia.api.console_routes import ConsoleContext
 from recertia.api.errors import V1HTTPError
 from recertia.evals.golden import run_eval_suite
@@ -20,6 +21,7 @@ from recertia.memory.query import federated_query
 from recertia.memory.semantic import FactStore
 from recertia.paths import PathEscapeError, contained_path, looks_absolute
 from recertia.policy_load import load_policy
+from recertia.ports.identity import ledger_actor
 from recertia.proposals.store import ProposalRecord
 from recertia.trajectory.import_store import ImportRejected, ingest_trajectory
 
@@ -88,10 +90,7 @@ def _tenant(
     request: Request,
     x_recertia_tenant: str | None,
 ) -> str:
-    token = request.headers.get("X-Recertia-Session") or request.cookies.get(
-        "recertia_session"
-    )
-    user = ctx.sessions.parse(token)
+    user = console_session(ctx.sessions, request)
     if x_recertia_tenant:
         if user is not None:
             if x_recertia_tenant not in user.tenants:
@@ -171,6 +170,8 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         skills_root = ctx.tenant_skills_root(tenant_id)
         runs_root = ctx.tenant_runs_root(tenant_id)
         eval_db = runs_root / "evals.db"
+        from recertia.review.gate import default_golden_factory
+
         store = EvalStore(eval_db)
         try:
             report = run_eval_suite(
@@ -181,6 +182,7 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
                 eval_store=store,
                 snapshot_id=body.snapshot or "eval-api",
                 golden_dir=_safe_golden_dir(body.golden_dir),
+                factory=default_golden_factory(),
             )
         finally:
             store.close()
@@ -212,11 +214,8 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
-        token = request.headers.get("X-Recertia-Session") or request.cookies.get(
-            "recertia_session"
-        )
-        user = ctx.sessions.parse(token)
-        actor = user.user_id if user else principal.key_id
+        user = console_session(ctx.sessions, request)
+        actor = user.user_id if user else ledger_actor(principal)
         rec = ProposalRecord(
             proposal_id=uuid4().hex[:12],
             kind="policy",
@@ -265,23 +264,25 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
             raise V1HTTPError(
                 400, code="invalid_decision", message="approve|reject|request_changes"
             )
-        token = request.headers.get("X-Recertia-Session") or request.cookies.get(
-            "recertia_session"
-        )
-        user = ctx.sessions.parse(token)
-        actor = user.user_id if user else principal.key_id
+        user = console_session(ctx.sessions, request)
+        actor = user.user_id if user else ledger_actor(principal)
         rec = ctx.proposals.get(decision_id, tenant_id=tenant_id)
         if rec is None:
             raise V1HTTPError(404, code="not_found", message="review not found")
-        if rec.kind in {"correction"} or rec.payload.get("tier") == "T2":
-            if user is not None and not user.may("reviewer"):
+        console_may = user.may("reviewer") if user is not None else None
+        if not ctx.pdp.may_decide_proposal(
+            principal,
+            kind=rec.kind,
+            payload=rec.payload,
+            console_may_review=console_may,
+        ):
+            if user is not None:
                 raise V1HTTPError(403, code="forbidden", message="T2 requires reviewer")
-            if user is None and "admin" not in principal.scopes:
-                raise V1HTTPError(
-                    403,
-                    code="forbidden",
-                    message="T2 requires admin key or reviewer",
-                )
+            raise V1HTTPError(
+                403,
+                code="forbidden",
+                message="T2 requires admin key or reviewer",
+            )
         try:
             updated = ctx.proposals.decide(
                 decision_id,
@@ -435,4 +436,6 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
             env_fingerprint=body.env,
             limit=body.limit,
             affordance_path=runs_root / "affordances.json",
+            tenant_id=tenant_id,
+            tenant_root=runs_root,
         )

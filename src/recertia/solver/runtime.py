@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import contextvars
+import inspect
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 from contracts.resources import ResourceClaim
+from recertia.ports.approval import ApprovalPolicy as ApprovalGate
+from recertia.ports.execution import CommandOrigin
 from recertia.solver.claims import ClaimScheduler
 from recertia.solver.registry import ToolRegistry, ToolResult
 from recertia.solver.sandbox import SandboxLimits
 
 if TYPE_CHECKING:
+    from recertia.ports.execution import CommandExecutor
     from recertia.solver.model import ModelClient
     from recertia.solver.result_cache import ToolResultCache
 
@@ -37,10 +41,41 @@ class StepInvokeContext:
     params: dict = field(default_factory=dict)
 
 
+@dataclass
+class HandlerContext:
+    """Explicit invoke context. ContextVar shims stay for unmigrated handlers."""
+
+    workdir: Path
+    executor: "CommandExecutor | None" = None
+    limits: SandboxLimits | None = None
+    model: "ModelClient | None" = None
+    step: StepInvokeContext | None = None
+    run_id: str | None = None
+    owner_id: str | None = None
+    origin: CommandOrigin = "tool"
+
+
+def _accepts_handler_context(handler: Callable[..., object]) -> bool:
+    """True when the handler's second parameter is annotated as HandlerContext."""
+
+    try:
+        params = list(inspect.signature(handler).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    if len(params) < 2:
+        return False
+    ann = params[1].annotation
+    if ann is HandlerContext:
+        return True
+    name = getattr(ann, "__name__", None)
+    text = name if isinstance(name, str) else str(ann)
+    return "HandlerContext" in text
+
+
 def active_sandbox_limits() -> SandboxLimits:
     """Limits for the in-flight ``ToolRuntime.invoke`` (handlers may read this)."""
 
-    return _ACTIVE_SANDBOX_LIMITS.get() or SandboxLimits.from_policy()
+    return _ACTIVE_SANDBOX_LIMITS.get() or SandboxLimits()
 
 
 def active_model() -> "ModelClient | None":
@@ -53,12 +88,6 @@ def active_step_context() -> StepInvokeContext:
     """Intent / bound params for the in-flight skill step (empty outside applicator)."""
 
     return _ACTIVE_STEP_CONTEXT.get() or StepInvokeContext()
-
-
-class ApprovalGate(Protocol):
-    """Capability required of any approval gate wired into ``ToolRuntime``."""
-
-    def is_approved(self, tool: str, step_id: str) -> bool: ...
 
 
 class ApprovalRequiredError(PermissionError):
@@ -87,10 +116,13 @@ class ToolRuntime:
         self.approval_gate = approval_gate
         self.model = model
         self.result_cache = result_cache
+        to_limits = getattr(sandbox_policy, "to_limits", None) if sandbox_policy is not None else None
         if sandbox_limits is not None:
             self.sandbox_limits = sandbox_limits
+        elif callable(to_limits):
+            self.sandbox_limits = to_limits()
         else:
-            self.sandbox_limits = SandboxLimits.from_policy(sandbox_policy)
+            self.sandbox_limits = SandboxLimits()
 
     @property
     def invocations(self) -> Sequence[ToolResult]:
@@ -107,6 +139,7 @@ class ToolRuntime:
         step_id: str,
         extra_claims: list[ResourceClaim] | None = None,
         step_context: StepInvokeContext | None = None,
+        origin: CommandOrigin = "tool",
     ) -> ToolResult:
         tool = self._registry.get(tool_name)
         if (
@@ -148,7 +181,19 @@ class ToolRuntime:
                 emit_in_run("cache.hit", kind="tool", tool=tool_name)
                 return cached
             handler = self._registry.handler(tool_name)
-            result = handler(inputs, workdir)
+            if _accepts_handler_context(handler):
+                result = handler(
+                    inputs,
+                    HandlerContext(
+                        workdir=workdir,
+                        limits=self.sandbox_limits,
+                        model=self.model,
+                        step=step_context or StepInvokeContext(),
+                        origin=origin,
+                    ),
+                )
+            else:
+                result = handler(inputs, workdir)
             result.duration_s = time.monotonic() - started
             result.claimed = claims
             if not result.ok:

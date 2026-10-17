@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -75,25 +74,6 @@ class ResourceAffordance:
         return float(s[min(len(s) - 1, int(len(s) * 0.95))])
 
 
-def _atomic_write_text(path: Path, text: str) -> None:
-    """Write ``text`` via a same-directory temp file, fsync, then replace."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
-
-
 class AffordanceStore:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
@@ -150,7 +130,14 @@ class AffordanceStore:
                     for (k, i), a in self.resources.items()
                 },
             }
-            _atomic_write_text(self.path, json.dumps(payload, indent=2) + "\n")
+            from recertia.fsutil import atomic_write_text, durability_from_settings
+            from recertia.settings import load_settings
+
+            atomic_write_text(
+                self.path,
+                json.dumps(payload, indent=2) + "\n",
+                durability=durability_from_settings(load_settings()),
+            )
 
     def record_tool(self, result: ToolResult) -> None:
         with self._lock:

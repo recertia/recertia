@@ -6,14 +6,12 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Literal
+from typing import Any, Callable, Literal
 
 from contracts.review import ReviewDecision
 from contracts.skill import SkillVersion
 from recertia.memory.procedural.hygiene import scan_skill
-
-if TYPE_CHECKING:
-    from recertia.evals.golden import GoldenReport
+from recertia.ports.orchestration import GateRunner
 
 DecisionPolicy = Callable[[SkillVersion, str], Literal["approved", "rejected"]]
 
@@ -32,6 +30,7 @@ class ReviewService:
         golden_root: Path | None = None,
         runs_root: Path | None = None,
         policy: DecisionPolicy | None = None,
+        gate: GateRunner | None = None,
     ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -41,6 +40,7 @@ class ReviewService:
         self.golden_root = golden_root
         self.runs_root = runs_root or (self.root / "review-runs")
         self.policy = policy or self._auto_approve_if_clean
+        self.gate = gate
 
     def enqueue(self, version: SkillVersion, *, run_id: str) -> str:
         item_id = f"rev-{uuid.uuid4().hex[:10]}"
@@ -112,12 +112,14 @@ class ReviewService:
             golden_report_ref=golden_ref,
         )
 
-    def _run_gate(self, version: SkillVersion) -> "GoldenReport":
-        # Lazy import: recertia.evals.golden imports GraphOrchestrator, which imports nodes/review.
-        from recertia.evals.golden import select_and_run_gate
+    def _run_gate(self, version: SkillVersion) -> Any:
+        gate = self.gate
+        if gate is None:
+            from recertia.review.gate import GoldenGateRunner
 
+            gate = GoldenGateRunner()
         assert self.golden_root is not None
-        return select_and_run_gate(
+        return gate.run(
             version,
             golden_root=self.golden_root,
             runs_root=self.runs_root,

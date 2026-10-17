@@ -31,23 +31,18 @@ from recertia.jobs.enablement import attach_enablement
 from recertia.jobs.workers import (
     correction_miner_from_reviewer_edits,
     curator_active_set_and_dedup,
-    load_one_off_reasons,
     load_reviewer_edits,
     mine_from_repo_hints,
-    practice_from_fail_clusters,
-    practice_from_one_offs,
-    propose_compress,
     propose_hex_search,
     propose_parallelise,
     propose_serialise,
-    recertify_with_revokes,
-    schedule_shadow_evaluations,
 )
 from recertia.ledger import HashChainLedger
 from recertia.memory.procedural.active_set import recompute_active_set
 from recertia.memory.procedural.composition import mean_composition_depth
 from recertia.memory.procedural.promote import PromotionError, promote_to_approved
 from recertia.memory.procedural.store import SkillStore
+from recertia.ports.identity import ledger_actor
 from recertia.proposals.store import ProposalRecord
 from recertia.review.autonomy_config import DEFAULT_AUTONOMY
 from recertia.solver.transcript import TranscriptStore
@@ -146,49 +141,14 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
-        orch = GraphOrchestrator(ctx.tenant_runs_root(tenant_id))
-        try:
-            ids = orch.checkpoints.list_run_ids()
-        finally:
-            orch.close()
-        # Also include in-memory runs for this tenant.
-        mem_ids = [rid for (tid, rid) in ctx.runs if tid == tenant_id]
-        all_ids = sorted(set(ids) | set(mem_ids))
-        if cursor:
-            all_ids = [i for i in all_ids if i > cursor]
-        items: list[dict[str, Any]] = []
-        for run_id in all_ids:
-            if len(items) >= limit:
-                break
-            rec = ctx.runs.get((tenant_id, run_id)) or ctx.load_from_checkpoints(
-                ctx.root, tenant_id, run_id
-            )
-            if rec is None:
-                continue
-            if task_class and rec.task_class != task_class:
-                continue
-            if terminal and (rec.terminal or "") != terminal:
-                continue
-            # PC-1: never leak other tenants — record carries tenant_id
-            if rec.tenant_id != tenant_id:
-                continue
-            items.append(
-                {
-                    "run_id": rec.run_id,
-                    "task_class": rec.task_class,
-                    "terminal": rec.terminal,
-                    "status": rec.status,
-                    "attempt_no": rec.attempt_no,
-                    "created_at": rec.created_at.isoformat()
-                    if hasattr(rec.created_at, "isoformat")
-                    else rec.created_at,
-                    "cost_usd": getattr(rec, "cost_usd", None),
-                    "arm": rec.arm,
-                    "tenant_id": rec.tenant_id,
-                }
-            )
-        next_cursor = items[-1]["run_id"] if items and len(items) == limit else None
-        return {"items": items, "next_cursor": next_cursor}
+        return ctx.run_service.list(
+            tenant_id,
+            runs_root=ctx.tenant_runs_root(tenant_id),
+            limit=limit,
+            cursor=cursor,
+            task_class=task_class,
+            terminal=terminal,
+        )
 
     @app.get("/v1/runs/{run_id}/transcript")
     def run_transcript(
@@ -442,7 +402,7 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         ctx.job_runs.save(job)
         ledger = HashChainLedger(runs_root / "ledger.jsonl")
         ledger.append(
-            actor=(user.user_id if user else principal.key_id),
+            actor=(user.user_id if user else ledger_actor(principal)),
             action="policy_change",
             target=f"skill:{skill_id}@v{version}",
             evidence={"kind": "console_promote", "job_run_id": job.job_run_id},
@@ -473,6 +433,7 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
                 skill_store=skill_store,
                 task_class=task_class,
                 snapshot_id=snapshot_id,
+                tenant_id=tenant_id,
             )
         finally:
             store.close()
@@ -499,8 +460,17 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         path = ctx.tenant_runs_root(tenant_id) / "ledger.jsonl"
         ledger = HashChainLedger(path)
         try:
-            ledger.verify()
-            return {"ok": True, "entries": len(ledger.entries())}
+            from recertia.settings import load_settings
+
+            full = load_settings().ledger_verify_full
+            report = ledger.verify(full=full)
+            return {
+                "ok": report.ok,
+                "entries": report.entries,
+                "full": report.full,
+                "suffix_entries": report.suffix_entries,
+                "tip_hash": report.tip_hash,
+            }
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
@@ -546,12 +516,17 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         rec = ctx.proposals.get(proposal_id, tenant_id=tenant_id)
         if rec is None:
             raise HTTPException(status_code=404, detail="proposal not found")
-        if rec.kind in {"correction"} or rec.payload.get("tier") == "T2":
-            if user is not None and not user.may("reviewer"):
+        console_may = user.may("reviewer") if user is not None else None
+        if not ctx.pdp.may_decide_proposal(
+            principal,
+            kind=rec.kind,
+            payload=rec.payload,
+            console_may_review=console_may,
+        ):
+            if user is not None:
                 raise HTTPException(status_code=403, detail="T2 requires reviewer")
-            if user is None and "admin" not in principal.scopes:
-                raise HTTPException(status_code=403, detail="T2 requires admin key or reviewer")
-        actor = user.user_id if user else principal.key_id
+            raise HTTPException(status_code=403, detail="T2 requires admin key or reviewer")
+        actor = user.user_id if user else ledger_actor(principal)
         try:
             updated = ctx.proposals.decide(
                 proposal_id,
@@ -611,8 +586,9 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         _require_library_write(request, principal, scope="jobs", min_role="reviewer")
-        name = job.strip().lower()
-        from recertia.memory.episodic import EpisodicStore
+        from recertia.app.jobs import JobDispatch, canonical_job, run_named_job
+
+        name = canonical_job(job) or ""
         from recertia.memory.procedural.lineage import LineageServices
         from recertia.policy_load import load_policy
 
@@ -653,56 +629,24 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
                     ),
                     budget=budget,
                 )
-            elif name == "practice":
-                explicit = list(body.one_off) if body.one_off else None
-                episodic = EpisodicStore(runs_root / "episodic")
-                eligible = (
-                    episodic.clusters.eligible()
-                    if policy.improvement.fail_cluster_curriculum and not explicit
-                    else []
+            elif name in {"practice", "recertify", "shadow", "compress"}:
+                dispatched = run_named_job(
+                    name,
+                    JobDispatch(
+                        store=store,
+                        runner=runner,
+                        budget=budget,
+                        policy=policy,
+                        runs_root=runs_root,
+                        lineage=lineage,
+                        dry_run=body.dry_run,
+                        one_off=list(body.one_off) if body.one_off else None,
+                        tool_upgraded=body.tool_upgraded,
+                    ),
                 )
-                if eligible:
-                    curriculum = None if body.dry_run else runs_root / "practice-curriculum"
-                    result = runner.run(
-                        "fail_cluster_author",
-                        lambda: practice_from_fail_clusters(
-                            eligible, curriculum_dir=curriculum
-                        ),
-                        budget=budget,
-                    )
-                else:
-                    reasons = explicit if explicit else load_one_off_reasons(
-                        runs_root / "one_off_log.jsonl"
-                    )
-                    if not reasons:
-                        reasons = ["unsolved one-off cluster"]
-                    curriculum = None if body.dry_run else runs_root / "practice-curriculum"
-                    result = runner.run(
-                        "practice",
-                        lambda: practice_from_one_offs(reasons, curriculum_dir=curriculum),
-                        budget=budget,
-                    )
-            elif name == "recertify":
-                eval_store = EvalStore(runs_root / "evals.db")
-                try:
-                    result = runner.run(
-                        "recertify",
-                        lambda: recertify_with_revokes(
-                            store,
-                            lineage_index=lineage.index,
-                            revoke_queue=lineage.queue,
-                            max_writes=runner.quota.max_status_writes_per_tick,
-                            tool_upgraded=body.tool_upgraded,
-                            eval_store=eval_store,
-                        ),
-                        budget=budget,
-                    )
-                finally:
-                    eval_store.close()
-            elif name == "shadow":
-                result = runner.run(
-                    "shadow", lambda: schedule_shadow_evaluations(store), budget=budget
-                )
+                if dispatched is None:
+                    raise HTTPException(status_code=404, detail=f"unknown job {job}")
+                result = dispatched
             elif name in {"parallelise", "parallelize"}:
                 if not body.skill_id:
                     raise HTTPException(status_code=400, detail="skill_id required")
@@ -736,8 +680,6 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
                 )
             elif name in {"hex", "practice_hex"}:
                 result = runner.run("practice_hex", propose_hex_search, budget=budget)
-            elif name == "compress":
-                result = runner.run("compress", propose_compress, budget=budget)
             else:
                 raise HTTPException(status_code=404, detail=f"unknown job {job}")
         except HTTPException:

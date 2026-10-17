@@ -7,29 +7,20 @@ an isolated artifact+rubric context with ``context_hash`` recorded so isolation 
 from __future__ import annotations
 
 import functools
-import json
-import operator
-import subprocess
 from collections.abc import Sequence
-from pathlib import Path
-from typing import Any
 
 from contracts.criteria import CriterionResult, SkillCertificationCriterion, TaskCriterion
 from contracts.failure import FailureSignal
 from contracts.run import RunState
 from recertia.nodes._util import now
 from recertia.nodes.context import NodeContext, NodeOutcome
-from recertia.validation.judge import assert_distinct_lenses, evaluate_judge
+from recertia.ports.execution import CommandRequest, CommandResult
+from recertia.validation.criteria import CriterionRunner, JudgeContext
+from recertia.validation.criteria import PathEscapeError as PathEscapeError  # noqa: F401
+from recertia.validation.criteria import _resolve_path as _resolve_path  # noqa: F401
+from recertia.validation.judge import assert_distinct_lenses
 
 CriterionLike = TaskCriterion | SkillCertificationCriterion
-
-_OPS = {
-    "lt": operator.lt,
-    "lte": operator.le,
-    "gt": operator.gt,
-    "gte": operator.ge,
-    "eq": operator.eq,
-}
 
 
 _CERT_OBS_OP_BASE = 10_000
@@ -162,186 +153,45 @@ def score_owned_criteria(
     ]
 
 
+class _FallbackExecutor:
+    """Today's ``run_configured_command`` path, behind the executor port."""
+
+    def __init__(self) -> None:
+        from recertia.settings import load_settings
+
+        self.config = load_settings().execution_config()
+
+    def run(self, request: CommandRequest) -> CommandResult:
+        from recertia.solver.container import run_configured_command
+        from recertia.solver.sandbox import SandboxError
+
+        try:
+            proc = run_configured_command(
+                request.command,
+                workdir=request.workdir,
+                timeout_s=int(request.timeout_s),
+                limits=request.limits,
+            )
+        except SandboxError as exc:
+            return CommandResult(returncode=126, stdout="", stderr=str(exc))
+        return CommandResult(
+            returncode=proc.returncode,
+            stdout=proc.stdout or "",
+            stderr=proc.stderr or "",
+        )
+
+
+def criterion_runner() -> CriterionRunner:
+    return CriterionRunner(_FallbackExecutor())
+
+
 def _score_criterion_dict(criterion: CriterionLike, ctx: NodeContext) -> dict:
     return _score_criterion(criterion, ctx).model_dump(mode="json")
 
 
 def _score_criterion(criterion: CriterionLike, ctx: NodeContext) -> CriterionResult:
-    if criterion.kind == "command":
-        return _run_command(criterion, ctx)
-    if criterion.kind == "assertion":
-        return _run_assertion(criterion, ctx)
-    if criterion.kind == "schema":
-        return _run_schema(criterion, ctx)
-    if criterion.kind == "metric":
-        return _run_metric(criterion, ctx)
-    if criterion.kind == "judge":
-        if not isinstance(criterion, TaskCriterion):
-            raise ValueError(f"judge criterion {criterion.id!r} can only be scored as a TaskCriterion")
-        if ctx.verifier_model is None:
-            raise ValueError(f"judge criterion {criterion.id!r} requires an independent verifier model")
-        if ctx.model is not None and ctx.verifier_model.shares_identity_with(ctx.model):
-            raise ValueError("solver model cannot judge its own artifact")
-        return evaluate_judge(criterion, workdir=ctx.workdir, model=ctx.verifier_model)
-    raise ValueError(f"validate does not support kind={criterion.kind!r} for criterion {criterion.id!r}")
-
-
-def _run_command(criterion: CriterionLike, ctx: NodeContext) -> CriterionResult:
-    assert criterion.run is not None
-    from recertia.solver.container import run_configured_command
-    from recertia.solver.sandbox import SandboxError
-
-    try:
-        proc = run_configured_command(criterion.run, workdir=ctx.workdir, timeout_s=criterion.timeout_s)
-        exit_code, output = proc.returncode, proc.stdout + proc.stderr
-    except SandboxError as exc:
-        exit_code, output = 126, str(exc)
-    except subprocess.TimeoutExpired:
-        exit_code, output = 124, f"timed out after {criterion.timeout_s}s"
-    return CriterionResult(
-        criterion_id=criterion.id,
-        kind="command",
-        passed=exit_code == criterion.expect_exit,
-        weight=criterion.weight,
-        exit_code=exit_code,
-        output_excerpt=output[-2000:],
-        duration_s=0.0,
+    return criterion_runner().score(
+        criterion,
+        workdir=ctx.workdir,
+        judge=JudgeContext(model=ctx.model, verifier_model=ctx.verifier_model),
     )
-
-
-def _run_assertion(criterion: CriterionLike, ctx: NodeContext) -> CriterionResult:
-    assert criterion.expr is not None
-    from recertia.validation.assertions import UnsafeAssertionError, evaluate_assertion
-
-    try:
-        passed = evaluate_assertion(criterion.expr, workdir=ctx.workdir)
-        excerpt = f"assertion {criterion.expr!r} => {passed}"
-        errored = False
-    except UnsafeAssertionError as exc:
-        passed = False
-        excerpt = f"assertion rejected: {exc}"
-        errored = True
-    except Exception as exc:  # noqa: BLE001
-        passed = False
-        excerpt = f"assertion error: {exc}"
-        errored = True
-    return CriterionResult(
-        criterion_id=criterion.id,
-        kind="assertion",
-        passed=passed,
-        weight=criterion.weight,
-        output_excerpt=excerpt[:2000],
-        errored=errored,
-    )
-
-
-class PathEscapeError(ValueError):
-    """Raised when a criterion path escapes ``workdir``."""
-
-
-def _resolve_path(workdir: Path, ref: str) -> Path:
-    """Resolve ``ref`` strictly under ``workdir``; reject absolute paths and ``..`` escapes."""
-
-    path = Path(ref)
-    if path.is_absolute():
-        raise PathEscapeError(f"absolute paths are not allowed: {ref!r}")
-    root = workdir.resolve()
-    candidate = (root / path).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError as exc:
-        raise PathEscapeError(f"path escapes workdir: {ref!r}") from exc
-    return candidate
-
-
-def _load_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _run_schema(criterion: CriterionLike, ctx: NodeContext) -> CriterionResult:
-    assert criterion.target is not None and criterion.schema_ref is not None
-    try:
-        import jsonschema
-    except ImportError as exc:  # pragma: no cover - core dependency missing from the install
-        return CriterionResult(
-            criterion_id=criterion.id,
-            kind="schema",
-            passed=False,
-            weight=criterion.weight,
-            output_excerpt=f"jsonschema unavailable: {exc}",
-            errored=True,
-        )
-    try:
-        target_path = _resolve_path(ctx.workdir, criterion.target)
-        schema_path = _resolve_path(ctx.workdir, criterion.schema_ref)
-    except PathEscapeError as exc:
-        return CriterionResult(
-            criterion_id=criterion.id,
-            kind="schema",
-            passed=False,
-            weight=criterion.weight,
-            output_excerpt=f"schema error: {exc}"[:2000],
-            errored=True,
-        )
-    try:
-        instance = _load_json(target_path)
-        schema = _load_json(schema_path)
-        jsonschema.validate(instance=instance, schema=schema)
-        return CriterionResult(
-            criterion_id=criterion.id,
-            kind="schema",
-            passed=True,
-            weight=criterion.weight,
-            output_excerpt=f"schema ok: {criterion.target} ⊨ {criterion.schema_ref}",
-        )
-    except Exception as exc:  # noqa: BLE001
-        return CriterionResult(
-            criterion_id=criterion.id,
-            kind="schema",
-            passed=False,
-            weight=criterion.weight,
-            output_excerpt=f"schema error: {exc}"[:2000],
-            errored=not isinstance(exc, jsonschema.ValidationError),
-        )
-
-
-def _run_metric(criterion: CriterionLike, ctx: NodeContext) -> CriterionResult:
-    assert criterion.metric is not None and criterion.op is not None and criterion.threshold is not None
-    try:
-        metrics_path = _resolve_path(ctx.workdir, "metrics.json")
-    except PathEscapeError as exc:
-        return CriterionResult(
-            criterion_id=criterion.id,
-            kind="metric",
-            passed=False,
-            weight=criterion.weight,
-            output_excerpt=f"metric error: {exc}"[:2000],
-            errored=True,
-        )
-    try:
-        if not metrics_path.exists():
-            raise FileNotFoundError("metrics.json missing in workdir")
-        payload = _load_json(metrics_path)
-        if not isinstance(payload, dict) or criterion.metric not in payload:
-            raise KeyError(f"metric {criterion.metric!r} not present in metrics.json")
-        raw = payload[criterion.metric]
-        value = float(raw)
-        cmp = _OPS[criterion.op]
-        passed = bool(cmp(value, float(criterion.threshold)))
-        excerpt = f"metric {criterion.metric}={value} {criterion.op} {criterion.threshold} => {passed}"
-        return CriterionResult(
-            criterion_id=criterion.id,
-            kind="metric",
-            passed=passed,
-            weight=criterion.weight,
-            output_excerpt=excerpt[:2000],
-        )
-    except Exception as exc:  # noqa: BLE001
-        return CriterionResult(
-            criterion_id=criterion.id,
-            kind="metric",
-            passed=False,
-            weight=criterion.weight,
-            output_excerpt=f"metric error: {exc}"[:2000],
-            errored=True,
-        )

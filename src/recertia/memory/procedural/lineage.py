@@ -156,18 +156,32 @@ class RevokeQueue:
             "reason": reason,
             "enqueued_at": datetime.now(timezone.utc).isoformat(),
         }
+        from recertia.fsutil import JsonlAppender, durability_from_settings
+        from recertia.settings import load_settings
+
+        line = (json.dumps(item) + "\n").encode("utf-8")
         with self._lock:
-            with self.path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(item) + "\n")
+            JsonlAppender(
+                self.path,
+                durability=durability_from_settings(load_settings()),
+                fsync_each=True,
+            ).append(line)
 
     def drain(self, limit: int) -> list[dict]:
         if not self.path.exists() or limit <= 0:
             return []
+        from recertia.fsutil import JsonlRewriter, durability_from_settings
+        from recertia.settings import load_settings
+
         with self._lock:
             lines = [ln for ln in self.path.read_text(encoding="utf-8").splitlines() if ln.strip()]
             taken = lines[:limit]
             rest = lines[limit:]
-            self.path.write_text(("\n".join(rest) + "\n") if rest else "", encoding="utf-8")
+            JsonlRewriter().rewrite(
+                self.path,
+                [ln.encode("utf-8") for ln in rest],
+                durability=durability_from_settings(load_settings()),
+            )
         return [json.loads(ln) for ln in taken]
 
 

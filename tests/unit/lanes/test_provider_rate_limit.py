@@ -35,9 +35,6 @@ def test_persistent_429_error_message_names_code(sleeps: list[float]) -> None:
             OpenAIModelClient(api_key="k", model_id="m").complete("hi")
 
 
-@pytest.mark.xfail(
-    strict=True, reason="bug 10: Retry-After ignored; backoff is retry_backoff_s * 2**n (0.05s)"
-)
 def test_429_honours_retry_after(sleeps: list[float]) -> None:
     script = Script(http_error(429, RL_BODY, {"Retry-After": "2"}), ok(GOOD))
     with patch("urllib.request.urlopen", side_effect=script):

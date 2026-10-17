@@ -443,8 +443,8 @@ _RECERTIA_CONTROLS: tuple[tuple[str, str | tuple[str, ...], tuple[str, ...], str
     (
         "api-key-pbkdf2",
         "src/recertia/api/auth.py",
-        ("pbkdf2_hmac", "key_hash", "salt"),
-        "API keys must be stored as salted PBKDF2 hashes, not plaintext",
+        ("pbkdf2_hmac", "key_hash", "salt", "hmac-sha256", "pepper"),
+        "API keys are HMAC-SHA256 with a pepper; PBKDF2 rows rehash on use",
     ),
     (
         "hygiene-refuse-store",
@@ -485,6 +485,212 @@ _RECERTIA_CONTROLS: tuple[tuple[str, str | tuple[str, ...], tuple[str, ...], str
 )
 
 
+def _py_under_recertia(root: Path) -> list[Path]:
+    base = root / "src" / "recertia"
+    if not base.is_dir():
+        return []
+    return [
+        path
+        for path in base.rglob("*.py")
+        if path.is_file() and "__pycache__" not in path.parts
+    ]
+
+
+def _is_environ(node: ast.AST) -> bool:
+    return isinstance(node, ast.Attribute) and node.attr == "environ"
+
+
+def _environ_subscript_key(node: ast.AST) -> str | None:
+    if not isinstance(node, ast.Subscript) or not _is_environ(node.value):
+        return None
+    if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+        return node.slice.value
+    return None
+
+
+def _writes_execution_backend(tree: ast.AST) -> bool:
+    key = "RECERTIA_EXECUTION_BACKEND"
+    for node in ast.walk(tree):
+        targets: list[ast.AST] = []
+        if isinstance(node, ast.Assign):
+            targets.extend(node.targets)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            targets.append(node.target)
+        if any(_environ_subscript_key(target) == key for target in targets):
+            return True
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in {"setdefault", "__setitem__", "update"} or not _is_environ(node.func.value):
+            continue
+        if not node.args:
+            continue
+        arg = node.args[0]
+        if isinstance(arg, ast.Constant) and arg.value == key:
+            return True
+        if node.func.attr == "update" and isinstance(arg, ast.Dict):
+            if any(isinstance(item, ast.Constant) and item.value == key for item in arg.keys):
+                return True
+    return False
+
+
+def _run_event_log_includes_tenant(root: Path) -> bool:
+    path = root / "src" / "recertia" / "api" / "events.py"
+    if not path.is_file():
+        return False
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name != "_path":
+            continue
+        names = {item.id for item in ast.walk(node) if isinstance(item, ast.Name)}
+        constants = {item.value for item in ast.walk(node) if isinstance(item, ast.Constant)}
+        return "tenant_id" in names and "runs" in constants
+    return False
+
+
+def _create_app_sets_umask(root: Path) -> bool:
+    path = root / "src" / "recertia" / "api" / "__init__.py"
+    if not path.is_file():
+        return False
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name != "create_app":
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call) or not isinstance(child.func, ast.Attribute):
+                continue
+            if child.func.attr != "umask" or not child.args:
+                continue
+            arg = child.args[0]
+            if isinstance(arg, ast.Constant) and arg.value == 0o077:
+                return True
+        return False
+    return False
+
+
+_COOKIE_POSTS = ("dev_login", "logout", "switch_tenant")
+
+
+def _cookie_posts_check_origin(root: Path) -> bool:
+    path = root / "src" / "recertia" / "api" / "console_session_routes.py"
+    if not path.is_file():
+        return False
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return False
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in _COOKIE_POSTS:
+            continue
+        calls = {
+            child.func.id
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+        }
+        if "_reject_foreign_origin" in calls:
+            found.add(node.name)
+    return found == set(_COOKIE_POSTS)
+
+
+def _oidc_authorize_sends_nonce(root: Path) -> bool:
+    path = root / "src" / "recertia" / "api" / "console_auth.py"
+    if not path.is_file():
+        return False
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name != "oidc_authorize_url":
+            continue
+        constants = {item.value for item in ast.walk(node) if isinstance(item, ast.Constant)}
+        return "nonce" in constants
+    return False
+
+
+def _policy_decision_point_referenced(root: Path) -> bool:
+    defined = False
+    used = False
+    for path in _py_under_recertia(root):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "PolicyDecisionPoint":
+                defined = True
+            elif isinstance(node, ast.Name) and node.id == "PolicyDecisionPoint":
+                used = True
+    return defined and used
+
+
+def check_ast_controls(root: Path) -> list[ControlResult]:
+    """AST attestations. Existing substring controls stay in ``_RECERTIA_CONTROLS``."""
+
+    writes = False
+    for path in _py_under_recertia(root):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        if _writes_execution_backend(tree):
+            writes = True
+            break
+    checks = (
+        (
+            "no-execution-backend-env-write",
+            not writes,
+            "src/recertia",
+            "runtime code must not assign os.environ RECERTIA_EXECUTION_BACKEND",
+        ),
+        (
+            "run-event-log-tenant-path",
+            _run_event_log_includes_tenant(root),
+            "src/recertia/api/events.py",
+            "RunEventLog path must include the tenant id",
+        ),
+        (
+            "policy-decision-point-referenced",
+            _policy_decision_point_referenced(root),
+            "src/recertia",
+            "PolicyDecisionPoint must be defined and referenced",
+        ),
+        (
+            "api-umask-077",
+            _create_app_sets_umask(root),
+            "src/recertia/api/__init__.py",
+            "create_app must set os.umask(0o077)",
+        ),
+        (
+            "cookie-post-origin-check",
+            _cookie_posts_check_origin(root),
+            "src/recertia/api/console_session_routes.py",
+            "dev-login, logout, and switch-tenant must reject a foreign Origin",
+        ),
+        (
+            "oidc-authorize-nonce",
+            _oidc_authorize_sends_nonce(root),
+            "src/recertia/api/console_auth.py",
+            "OIDC authorize URL must include a nonce",
+        ),
+    )
+    return [
+        ControlResult(
+            id=control_id,
+            ok=ok,
+            path=path,
+            message=message if ok else f"MISSING: {message}",
+        )
+        for control_id, ok, path, message in checks
+    ]
+
+
 def check_recertia_controls(root: Path) -> list[ControlResult]:
     results: list[ControlResult] = []
     for control_id, rel, needles, message in _RECERTIA_CONTROLS:
@@ -519,7 +725,7 @@ def review(
             scan_secrets(path, root, report.findings)
     use_recertia = profile == "recertia" or (profile == "auto" and recertia_layout(root))
     if use_recertia:
-        report.controls = check_recertia_controls(root)
+        report.controls = check_recertia_controls(root) + check_ast_controls(root)
     report.findings.sort(key=lambda f: (f.severity, f.path, f.line, f.rule))
     return report
 

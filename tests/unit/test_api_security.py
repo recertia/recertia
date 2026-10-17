@@ -86,10 +86,6 @@ def test_blob_upload_rejects_oversized_payload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("RECERTIA_MAX_BLOB_BYTES", "32")
-    # Re-import clamp is read at module load — patch the module attribute.
-    import recertia.api as api_mod
-
-    monkeypatch.setattr(api_mod, "_MAX_BLOB_BYTES", 32)
     app = create_app(root=tmp_path / "api-root")
     issued = app.state.api_keys.issue(tenant_id="t1", scopes={"blobs"}, actor="test")
     client = TestClient(app)

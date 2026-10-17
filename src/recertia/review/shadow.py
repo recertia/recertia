@@ -70,22 +70,15 @@ def enter_shadow(store: SkillStore, skill_id: str, version: int) -> None:
 def evaluate_shadow_offline(store: SkillStore, slot: ShadowSlot, *, workdir: Path) -> bool:
     """Score required non-judge command criteria in an isolated workdir (never caller-visible)."""
 
-    from recertia.solver.container import run_configured_command
-    from recertia.solver.sandbox import SandboxError
+    from recertia.nodes.validate import criterion_runner
 
     version = store.get_version(slot.skill_id, slot.version)
     workdir.mkdir(parents=True, exist_ok=True)
+    runner = criterion_runner()
     for criterion in version.certification_criteria:
         if criterion.kind != "command" or not criterion.is_required:
             continue
-        assert criterion.run is not None
-        try:
-            proc = run_configured_command(
-                criterion.run, workdir=workdir, timeout_s=criterion.timeout_s
-            )
-        except SandboxError:
-            return False
-        if proc.returncode != criterion.expect_exit:
+        if not runner.score(criterion, workdir=workdir).passed:
             return False
     return True
 

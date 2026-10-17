@@ -1,0 +1,108 @@
+"""Shared/exclusive lock for one runtime root.
+
+The API holds a shared lock for its lifetime. Backup and restore take an
+exclusive lock and refuse when the shared lock is already held.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
+
+
+class RootLockBusy(RuntimeError):
+    """An exclusive lock could not be taken because the root is in use."""
+
+
+class RootLock:
+    """One open file description for ``root/.lock`` (or any lock path)."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self._fd: int | None = None
+
+    def acquire_shared(self) -> None:
+        """Blocking shared lock. Compatible with other shared holders."""
+
+        fd = self._open()
+        try:
+            _lock_shared(fd)
+        except OSError:
+            os.close(fd)
+            raise
+        self._fd = fd
+
+    def try_exclusive(self) -> None:
+        """Non-blocking exclusive lock. Raises ``RootLockBusy`` when held."""
+
+        fd = self._open()
+        try:
+            _lock_exclusive_nb(fd)
+        except BlockingIOError as exc:
+            os.close(fd)
+            raise RootLockBusy(f"root lock held: {self.path}") from exc
+        except OSError as exc:
+            os.close(fd)
+            if _is_busy(exc):
+                raise RootLockBusy(f"root lock held: {self.path}") from exc
+            raise
+        self._fd = fd
+
+    def release(self) -> None:
+        fd = self._fd
+        self._fd = None
+        if fd is None:
+            return
+        try:
+            _unlock(fd)
+        finally:
+            os.close(fd)
+
+    def _open(self) -> int:
+        if self._fd is not None:
+            raise RuntimeError(f"root lock already held: {self.path}")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        return os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+
+
+def _lock_shared(fd: int) -> None:
+    if sys.platform == "win32":
+        _win_prepare(fd)
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        return
+    fcntl.flock(fd, fcntl.LOCK_SH)
+
+
+def _lock_exclusive_nb(fd: int) -> None:
+    if sys.platform == "win32":
+        _win_prepare(fd)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        return
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock(fd: int) -> None:
+    if sys.platform == "win32":
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        return
+    fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _win_prepare(fd: int) -> None:
+    if os.fstat(fd).st_size == 0:
+        os.write(fd, b"\0")
+        os.lseek(fd, 0, os.SEEK_SET)
+
+
+def _is_busy(exc: OSError) -> bool:
+    return getattr(exc, "winerror", None) in {33, 36} or exc.errno in {11, 35}

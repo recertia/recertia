@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import sys
 from pathlib import Path
@@ -86,11 +85,9 @@ def split_rel_subpath(subpath: str | None) -> tuple[str, ...]:
 
 
 def _posix_roots_allowed() -> bool:
-    return os.environ.get("RECERTIA_ALLOW_POSIX_WORKSPACE_ROOTS", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
+    from recertia.settings import load_settings
+
+    return load_settings().allow_posix_workspace_roots
 
 
 def normalize_host_root(host_root: str, *, must_exist: bool = True) -> str:
@@ -150,6 +147,63 @@ def normalize_host_root(host_root: str, *, must_exist: bool = True) -> str:
         "host_root must be a Windows drive-letter absolute directory "
         "(e.g. D:\\src\\recertia)"
     )
+
+
+_DENIED_HOST_PARTS = frozenset({".recertia"})
+
+
+def assert_host_root_allowed(host_root: str) -> str:
+    """Allowlist from ``RECERTIA_WORKSPACE_ROOTS``, plus a ``.recertia`` denylist.
+
+    An empty allowlist in ``single_node`` keeps today's registration behavior.
+    ``multi_node`` refuses registration until the allowlist is set. A path
+    whose components include ``.recertia`` is refused for every caller.
+    """
+
+    from recertia.settings import load_settings
+
+    settings = load_settings()
+    try:
+        resolved = Path(host_root).resolve()
+    except OSError as exc:
+        raise HostRootError(f"host_root could not be resolved: {exc}") from exc
+    if any(part in _DENIED_HOST_PARTS for part in resolved.parts):
+        raise HostRootError("host_root is denied: path contains .recertia")
+    roots = tuple(Path(item) for item in settings.workspace_roots)
+    if not roots:
+        if settings.deployment_mode == "multi_node":
+            raise HostRootError("RECERTIA_WORKSPACE_ROOTS is required in multi_node")
+        return str(resolved)
+    for root in roots:
+        try:
+            base = root.resolve()
+        except OSError as exc:
+            raise HostRootError(f"workspace root could not be resolved: {exc}") from exc
+        try:
+            resolved.relative_to(base)
+        except ValueError:
+            continue
+        return str(resolved)
+    raise HostRootError("host_root is outside RECERTIA_WORKSPACE_ROOTS")
+
+
+def tenant_skills_root(*, control_root: Path, shared: Path, tenant_id: str) -> Path:
+    """Per-tenant skill library when the flag or ``multi_node`` asks for one.
+
+    ``single_node`` keeps the shared ``skills/`` directory until
+    ``RECERTIA_TENANT_SKILLS`` is on, so existing checkouts keep working.
+    """
+
+    from recertia.ports.identity import tenant_id as parse_tenant
+    from recertia.settings import load_settings
+
+    ident = str(parse_tenant(tenant_id))
+    settings = load_settings()
+    if settings.deployment_mode != "multi_node" and not settings.tenant_skills:
+        return Path(shared)
+    path = Path(control_root) / "tenants" / ident / "skills"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def resolve_under_host_root(host_root: str, subpath: str | None) -> Path:

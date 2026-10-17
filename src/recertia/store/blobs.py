@@ -47,11 +47,15 @@ class FilesystemBlobStore:
 
     def put(self, data: bytes, *, content_type: str = "application/octet-stream") -> str:
         digest = "sha256:" + hashlib.sha256(data).hexdigest()
+        from recertia.fsutil import atomic_write_text, durability_from_settings, write_once_bytes
+        from recertia.settings import load_settings
+
         path = self._path(digest)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists():
-            path.write_bytes(data)
-            (path.parent / (path.name + ".type")).write_text(content_type, encoding="utf-8")
+        durability = durability_from_settings(load_settings())
+        write_once_bytes(path, data, durability=durability)
+        type_path = path.parent / (path.name + ".type")
+        if not type_path.exists():
+            atomic_write_text(type_path, content_type, durability=durability)
         return digest
 
     def get(self, digest: str) -> bytes:

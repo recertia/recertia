@@ -20,6 +20,7 @@ from recertia.config import load_model_config
 from recertia.graph.engine import GraphOrchestrator
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.ledger import HashChainLedger, LedgerVerificationError
+from recertia.runtime.errors import LedgerUnavailable
 from recertia.solver.container import ensure_execution_ready, execution_backend_override
 from recertia.solver.factory import ModelConfigError
 from recertia.solver.sandbox import SandboxError
@@ -352,17 +353,104 @@ def runs_show(
         orchestrator.close()
 
 
+def _ledger_path(runs_root: Path, tenant: str | None) -> Path:
+    if tenant:
+        from recertia.persistence.layout import RuntimeLayout
+
+        return RuntimeLayout(runs_root).tenant(tenant).ledger_path
+    return runs_root / "ledger.jsonl"
+
+
 @ledger_app.command("verify")
 def ledger_verify(
     runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
+    tenant: Optional[str] = typer.Option(None, "--tenant"),
+    check_sig: bool = typer.Option(
+        False,
+        "--check-sig",
+        help="Verify HMAC signatures. Unsigned entries are allowed until the first signed one.",
+    ),
+    check_anchor: bool = typer.Option(
+        False,
+        "--check-anchor",
+        help="Reserved. Skipped until a tip anchor is configured.",
+    ),
 ) -> None:
-    ledger = HashChainLedger(runs_root / "ledger.jsonl")
+    ledger = HashChainLedger(_ledger_path(runs_root, tenant))
     try:
-        ledger.verify()
+        report = ledger.verify(check_sig=check_sig)
     except LedgerVerificationError as exc:
         typer.echo(f"LEDGER INVALID: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    typer.echo(f"ledger OK: {len(ledger.entries())} entries verified")
+        raise typer.Exit(code=2) from exc
+    except LedgerUnavailable as exc:
+        typer.echo(f"LEDGER INVALID: {exc}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    anchor = " (anchor check skipped)" if check_anchor else ""
+    typer.echo(f"ledger OK: {report.entries} entries verified{anchor}")
+
+
+@ledger_app.command("rekey")
+def ledger_rekey(
+    runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
+    tenant: Optional[str] = typer.Option(None, "--tenant"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Count unsigned and signed lines. Does not rewrite the ledger.",
+    ),
+) -> None:
+    """Report unsigned vs signed lines. Historical lines are not rewritten."""
+
+    if not dry_run:
+        typer.echo("pass --dry-run; rekey does not rewrite historical lines", err=True)
+        raise typer.Exit(code=2)
+    from recertia.ledger.signer import SIG_FIELD
+
+    ledger = HashChainLedger(_ledger_path(runs_root, tenant))
+    try:
+        rows = ledger.entries()
+    except LedgerVerificationError as exc:
+        typer.echo(f"LEDGER INVALID: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    except LedgerUnavailable as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    unsigned = sum(1 for entry in rows if entry.evidence.get(SIG_FIELD) is None)
+    signed = len(rows) - unsigned
+    typer.echo(f"unsigned={unsigned} signed={signed}")
+
+
+@ledger_app.command("repair")
+def ledger_repair(
+    ctx: typer.Context,
+    truncate_torn_tail: bool = typer.Option(False, "--truncate-torn-tail"),
+    runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
+    tenant: Optional[str] = typer.Option(None, "--tenant"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """Truncate a partial EOF and record ``ledger_repaired``. Mid-chain damage is refused."""
+
+    principal = (ctx.obj or {}).get("principal") if isinstance(ctx.obj, dict) else None
+    if principal is None:
+        from recertia.ports.identity import Principal
+
+        principal = Principal.local_operator()
+    if not principal.has_role("platform_admin"):
+        typer.echo("forbidden: ledger repair requires platform_admin", err=True)
+        raise typer.Exit(code=3)
+    if not truncate_torn_tail:
+        typer.echo("pass --truncate-torn-tail to repair a torn tail", err=True)
+        raise typer.Exit(code=2)
+    ledger = HashChainLedger(_ledger_path(runs_root, tenant))
+    try:
+        report = ledger.repair_torn_tail(actor=principal.subject, dry_run=dry_run)
+    except LedgerUnavailable as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    if report.status == "dry_run":
+        typer.echo(f"would drop {report.dropped_bytes} bytes")
+        return
+    typer.echo(f"{report.status} dropped_bytes={report.dropped_bytes}")
 
 
 @goal_app.command("compile")

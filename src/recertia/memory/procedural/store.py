@@ -79,6 +79,9 @@ class SkillStore:
             ) from exc
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(payload)
+        from recertia.memory.procedural.seeds.signature import stamp_seed
+
+        stamp_seed(dest, version.skill_id)
         record = getattr(self.lineage_index, "record", None)
         if callable(record):
             record(version)
@@ -203,6 +206,9 @@ class SkillStore:
 
     def get_version(self, skill_id: str, version: int) -> SkillVersion:
         path = self.version_dir(skill_id, version) / "version.json"
+        from recertia.memory.procedural.seeds.signature import verify_seed
+
+        verify_seed(path, skill_id)
         return SkillVersion.model_validate_json(path.read_text(encoding="utf-8"))
 
     def get_status(self, skill_id: str, version: int) -> SkillStatus:

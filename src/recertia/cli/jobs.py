@@ -104,20 +104,13 @@ def jobs_run(
         correction_miner_from_reviewer_edits,
         curator_active_set_and_dedup,
         enqueue_mined_candidate,
-        load_one_off_reasons,
         load_reviewer_edits,
         mine_from_arxiv,
         mine_from_repo_hints,
-        practice_from_fail_clusters,
-        practice_from_one_offs,
-        propose_compress,
         propose_hex_search,
         propose_parallelise,
         propose_serialise,
-        recertify_with_revokes,
-        schedule_shadow_evaluations,
     )
-    from recertia.memory.episodic import EpisodicStore
     from recertia.memory.procedural.lineage import LineageServices
     from recertia.memory.procedural.store import SkillStore
     from recertia.policy_load import load_policy
@@ -137,7 +130,9 @@ def jobs_run(
         skills_root=skills_root,
     )
     budget = JobBudget(max_proposals=max_proposals, max_tokens=max_tokens)
-    name = job.strip().lower()
+    from recertia.app.jobs import JobDispatch, canonical_job, run_named_job
+
+    name = canonical_job(job) or ""
     traj_store = TrajectoryStore(runs_root / "trajectories")
 
     def _run(job_name: str, fn, *, budget=budget):
@@ -206,54 +201,25 @@ def jobs_run(
             )
         finally:
             eval_store.close()
-    elif name == "practice":
-        explicit = list(one_off) if one_off else None
-        episodic = EpisodicStore(runs_root / "episodic")
-        eligible = (
-            episodic.clusters.eligible()
-            if policy.improvement.fail_cluster_curriculum and not explicit
-            else []
+    elif name in {"practice", "recertify", "shadow", "compress"}:
+        dispatched = run_named_job(
+            name,
+            JobDispatch(
+                store=store,
+                runner=runner,
+                budget=budget,
+                policy=policy,
+                runs_root=runs_root,
+                lineage=lineage,
+                dry_run=dry_run,
+                one_off=list(one_off) if one_off else None,
+                tool_upgraded=tool_upgraded,
+            ),
         )
-        if eligible:
-            curriculum = None if dry_run else runs_root / "practice-curriculum"
-            result = _run(
-                "fail_cluster_author",
-                lambda: practice_from_fail_clusters(eligible, curriculum_dir=curriculum),
-                budget=budget,
-            )
-        else:
-            reasons = explicit if explicit else load_one_off_reasons(runs_root / "one_off_log.jsonl")
-            if not reasons:
-                reasons = ["unsolved one-off cluster"]
-            curriculum = None if dry_run else runs_root / "practice-curriculum"
-            result = _run(
-                "practice",
-                lambda: practice_from_one_offs(reasons, curriculum_dir=curriculum),
-                budget=budget,
-            )
-    elif name == "recertify":
-        eval_store = EvalStore(runs_root / "evals.db")
-        try:
-            result = _run(
-                "recertify",
-                lambda: recertify_with_revokes(
-                    store,
-                    lineage_index=lineage.index,
-                    revoke_queue=lineage.queue,
-                    max_writes=runner.quota.max_status_writes_per_tick,
-                    tool_upgraded=tool_upgraded,
-                    eval_store=eval_store,
-                ),
-                budget=budget,
-            )
-        finally:
-            eval_store.close()
-    elif name == "shadow":
-        result = _run(
-            "shadow",
-            lambda: schedule_shadow_evaluations(store),
-            budget=budget,
-        )
+        if dispatched is None:
+            typer.echo(f"unknown job {job!r}", err=True)
+            raise typer.Exit(code=2)
+        result = dispatched
     elif name in {"parallelise", "parallelize"}:
         if not skill_id:
             typer.echo("--skill-id is required for parallelise", err=True)
@@ -285,8 +251,6 @@ def jobs_run(
         )
     elif name in {"hex", "practice_hex"}:
         result = _run("practice_hex", propose_hex_search, budget=budget)
-    elif name == "compress":
-        result = _run("compress", propose_compress, budget=budget)
     else:
         typer.echo(
             "unknown job "

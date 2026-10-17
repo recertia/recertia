@@ -30,6 +30,7 @@ LedgerAction = Literal[
     "applicability_reject",
     "mea_activation_fallback",
     "close_receipt",
+    "ledger_repaired",
 ]
 
 

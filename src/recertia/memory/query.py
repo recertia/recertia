@@ -22,6 +22,14 @@ class IndexStaleError(RuntimeError):
     """Debug query refused because the on-disk index does not match the library."""
 
 
+def _under_tenant(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return path.resolve() == root.resolve()
+    return True
+
+
 def federated_query(
     query: str,
     *,
@@ -33,8 +41,27 @@ def federated_query(
     env_fingerprint: dict[str, str] | None = None,
     limit: int = 8,
     affordance_path: Path | str | None = None,
+    tenant_id: str | None = None,
+    tenant_root: Path | str | None = None,
 ) -> dict[str, Any]:
-    """Score + drop reasons across planes. Does not start a run. Does not mutate the index."""
+    """Score + drop reasons across planes. Does not start a run. Does not mutate the index.
+
+    When ``tenant_id`` and ``tenant_root`` are set, facts, cases, the index, and
+    affordances must sit under that tenant root. The shared skill library may not.
+    """
+
+    if tenant_id is not None and tenant_root is not None:
+        root = Path(tenant_root)
+        scoped = {
+            "facts": Path(facts_root),
+            "episodic": Path(episodic_root),
+            "index": Path(index_path),
+        }
+        if affordance_path is not None:
+            scoped["affordances"] = Path(affordance_path)
+        for label, path in scoped.items():
+            if not _under_tenant(path, root):
+                raise ValueError(f"{label} is outside tenant {tenant_id}")
 
     store = SkillStore(skills_root)
     index = SkillIndex(index_path)

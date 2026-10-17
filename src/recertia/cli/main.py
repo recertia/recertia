@@ -21,6 +21,7 @@ from recertia.cli.keys import keys_issue, keys_list, keys_revoke, register_keys_
 from recertia.cli.lift import lift_cmd, register_lift_commands
 from recertia.cli.memory_cmd import register_memory_commands
 from recertia.cli.metrics_cmd import metrics_cmd, register_metrics_commands
+from recertia.cli.migrate_cmd import register_migrate_commands
 from recertia.cli.policy_cmd import register_policy_commands
 from recertia.cli.probes import register_probes_commands
 from recertia.cli.proposals_cmd import register_proposals_commands
@@ -42,10 +43,31 @@ from recertia.cli.soak_cmd import register_soak_commands
 from recertia.cli.systems_cmd import register_systems_commands
 from recertia.cli.tabletop_cmd import register_tabletop_commands
 from recertia.cli.task_state_cmd import register_task_state_commands
+from recertia.cli.tenant_cmd import register_tenant_commands
 from recertia.cli.trajectory_cmd import register_trajectory_commands
+from recertia.cli.worker_cmd import register_worker_commands
 from recertia.cli.workspaces import register_workspaces_commands
 
 app = typer.Typer(help="Recertia: a self-improving agent system.")
+
+
+@app.callback()
+def _load_process_settings(ctx: typer.Context) -> None:
+    """Composition root: load Settings once and bind the local operator principal."""
+
+    from recertia.errors import RecertiaError
+    from recertia.ports.identity import Principal
+    from recertia.settings import load_settings
+
+    try:
+        settings = load_settings()
+        settings.validate_deployment(role="cli")
+    except RecertiaError as exc:
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    ctx.obj = {"settings": settings, "principal": Principal.local_operator()}
+
+
 register_run_commands(app)
 register_skills_commands(app)
 register_keys_commands(app)
@@ -56,6 +78,7 @@ register_eval_commands(app)
 register_faithfulness_commands(app)
 register_policy_commands(app)
 register_memory_commands(app)
+register_migrate_commands(app)
 register_review_commands(app)
 register_facts_commands(app)
 register_cases_commands(app)
@@ -65,11 +88,13 @@ register_gc_commands(app)
 register_workspaces_commands(app)
 register_backup_commands(app)
 register_tabletop_commands(app)
+register_tenant_commands(app)
 register_canary_commands(app)
 register_soak_commands(app)
 register_systems_commands(app)
 register_task_state_commands(app)
 register_trajectory_commands(app)
+register_worker_commands(app)
 
 __all__ = [
     "app",

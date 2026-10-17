@@ -13,15 +13,15 @@ from typing import TYPE_CHECKING
 
 from contracts.eval import BinomialSample
 from contracts.status import SkillStatus
-from recertia.evals.store import EvalStore
+from recertia.autonomy import DEFAULT_AUTONOMY, AutonomyConfig
 from recertia.memory.procedural.contribution import (
     estimate_contribution,
     estimate_retrieval_ablation,
 )
+from recertia.memory.procedural.evidence import EvidenceSource
 from recertia.memory.procedural.live_mix import live_mix_eligible
 from recertia.memory.procedural.portfolio import rank_skills, select_active
 from recertia.memory.procedural.store import SkillStore
-from recertia.review.autonomy_config import DEFAULT_AUTONOMY, AutonomyConfig
 
 if TYPE_CHECKING:
     from contracts.skill import SkillVersion
@@ -99,7 +99,7 @@ def recompute_active_set(
     store: SkillStore,
     *,
     config: AutonomyConfig = DEFAULT_AUTONOMY,
-    eval_store: EvalStore | None = None,
+    eval_store: EvidenceSource | None = None,
 ) -> tuple[list[SkillStatus], dict[str, float]]:
     """Cap approved actives using persisted non-judge treatment/control evidence.
 
@@ -135,7 +135,7 @@ def _pool_for_class(
     rows: list[tuple],
     *,
     task_class: str,
-    eval_store: EvalStore | None,
+    eval_store: EvidenceSource | None,
 ) -> tuple[list[tuple], list[tuple], dict[tuple[str, int], object]]:
     """Refresh contribution and split approved rows into a live-mix ranking pool.
 

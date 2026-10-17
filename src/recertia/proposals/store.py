@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
+from recertia.persistence.db import open_db
+
 ProposalStatus = Literal[
     "pending", "approved", "rejected", "request_changes", "superseded"
 ]
@@ -41,7 +43,7 @@ class ProposalStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
+        self._conn = open_db(self.path)
         self._conn.row_factory = sqlite3.Row
         with self._conn:
             self._conn.execute(

@@ -12,7 +12,6 @@ Default is host-side optional extract. Missing ``pypdf`` yields empty text, not 
 
 from __future__ import annotations
 
-import os
 import textwrap
 import urllib.error
 import urllib.request
@@ -164,12 +163,9 @@ def fetch_and_extract(
 ) -> PdfExtractResult:
     """Download PDF; optionally extract text (host or sandbox)."""
 
-    enabled = os.environ.get("RECERTIA_PDF_EXTRACT", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
+    from recertia.settings import load_settings
+
+    enabled = load_settings().pdf_extract
     pdf_path = download_pdf(paper, dest_dir)
     if not extract or not enabled:
         return PdfExtractResult(

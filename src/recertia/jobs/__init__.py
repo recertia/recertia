@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Callable, Literal
 
 from contracts.policy import JOB_PRIORITY_ORDER, JobPriority, JobQuota, Policy
 from contracts.skill import SkillVersion
+from recertia.jobs.quota_repo import JobQuotaRepository
 from recertia.memory.procedural.store import SkillStore
 from recertia.review import ReviewService
 
@@ -109,6 +110,12 @@ class JobRunner:
             self.quota = quota
         else:
             self.quota = JobQuota()
+        self.quota_repo: JobQuotaRepository | None = None
+        if self.quota_path is not None:
+            self.quota_repo = JobQuotaRepository(self.quota_path.with_suffix(".sqlite"))
+            self.quota_repo.import_sidecar(self.quota_path, self.quota)
+            self.quota_repo.seed_open_week(self.quota)
+            self.quota = self.quota_repo.snapshot(self.quota)
 
     def admit(self, job: JobPriority, *, task_class: str | None = None, tokens: int = 0) -> bool:
         return self.quota.can_admit(job, task_class=task_class, tokens=tokens)
@@ -123,6 +130,9 @@ class JobRunner:
     ) -> JobResult:
         priority = resolve_job_priority(job_name)
         tokens = budget.max_tokens
+        if self.quota_repo is not None:
+            self.quota_repo.release_expired()
+            self.quota = self.quota_repo.snapshot(self.quota)
         if priority in {"practice_hex", "compress"}:
             from recertia.jobs.enablement import hex_compress_skip_reason
 
@@ -138,13 +148,47 @@ class JobRunner:
             priority, tokens=tokens, task_class=task_class
         ):
             return JobResult(job=job_name, proposals=[], skipped=f"quota refused {job_name}")
-        proposals = fn()
+        reservation_id: str | None = None
+        if self.quota_repo is not None and priority is not None and tokens:
+            from recertia.errors import QuotaExceeded
+            from recertia.faults import fault_point
+
+            try:
+                reservation_id = self.quota_repo.reserve(
+                    self.quota,
+                    job=job_name,
+                    priority=priority,
+                    tokens=tokens,
+                    task_class=task_class,
+                )
+            except QuotaExceeded:
+                return JobResult(job=job_name, proposals=[], skipped=f"quota refused {job_name}")
+            fault_point("quota.after_reserve")
+        try:
+            proposals = fn()
+        except Exception:
+            self._release_reservation(reservation_id)
+            raise
         if len(proposals) > budget.max_proposals:
+            self._release_reservation(reservation_id)
             raise JobError(f"job {job_name} exceeded max_proposals={budget.max_proposals}")
-        if priority is not None and tokens:
+        if reservation_id is not None and self.quota_repo is not None:
+            self.quota_repo.settle(reservation_id)
+            self.quota = self.quota_repo.snapshot(self.quota)
+            if self.quota_path is not None:
+                self.quota_repo.publish(self.quota_path, self.quota)
+        elif priority is not None and tokens:
             self.quota = self.quota.charge(priority, tokens, task_class=task_class)
             self._persist_quota()
         return JobResult(job=job_name, proposals=proposals[: budget.max_proposals])
+
+    def _release_reservation(self, reservation_id: str | None) -> None:
+        if reservation_id is None or self.quota_repo is None:
+            return
+        self.quota_repo.release(reservation_id)
+        self.quota = self.quota_repo.snapshot(self.quota)
+        if self.quota_path is not None:
+            self.quota_repo.publish(self.quota_path, self.quota)
 
     def _persist_quota(self) -> None:
         if self.quota_path is None:

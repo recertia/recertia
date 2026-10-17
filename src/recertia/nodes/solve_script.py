@@ -95,7 +95,11 @@ def solve_script_via_tools(
             if writer:
                 writer.event("tool", tool="shell", command=cmd)
             result = ctx.tools.invoke(  # type: ignore[union-attr]
-                "shell", {"command": cmd}, workdir=ctx.workdir, step_id=f"script-{seq}"
+                "shell",
+                {"command": cmd},
+                workdir=ctx.workdir,
+                step_id=f"script-{seq}",
+                origin="script",
             )
             return {
                 "returncode": result.exit_code,

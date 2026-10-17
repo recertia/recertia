@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,10 +9,11 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
-from recertia.api.console_auth import ConsoleUser, SessionStore
+from recertia.api.console_auth import ConsoleUser, SessionStore, console_session
 from recertia.api.events import RunEventLog
 from recertia.api.jobs_store import JobRunStore
 from recertia.api.quotas import QuotaStore
+from recertia.ports.identity import ledger_actor
 from recertia.programs.store import ProgramStore
 from recertia.proposals.store import ProposalStore
 
@@ -39,6 +39,8 @@ class ConsoleContext:
         require_scope: Any,
         validate_run_id: Any,
         workspace_registry: Any = None,
+        run_service: Any = None,
+        pdp: Any = None,
     ) -> None:
         self.root = root
         self.skills_root = skills_root
@@ -57,27 +59,39 @@ class ConsoleContext:
         self.require_scope = require_scope
         self.validate_run_id = validate_run_id
         self.workspace_registry = workspace_registry
-        self.sessions = SessionStore()
+        self.run_service = run_service
+        if pdp is None:
+            from recertia.app.authz import PolicyDecisionPoint
+
+            pdp = PolicyDecisionPoint.load(surface="api")
+        self.pdp = pdp
+        self.sessions = SessionStore(path=root / "console_sessions.sqlite")
         self.proposals = ProposalStore(root / "proposals.sqlite")
         self.programs = ProgramStore(root / "programs.sqlite")
         self.job_runs = JobRunStore(root / "job_runs.sqlite")
         self._program_idempotency: dict[str, str] = {}
+        from recertia.workers.embedded import EmbeddedQueueWorker
+        from recertia.workers.queue import open_run_queue
         from recertia.workers.run_worker import AsyncRunWorker
 
         self.events = RunEventLog(root)
+        self.queue = open_run_queue(root)
+        self.queue.reconcile_orphans()
         self.worker = AsyncRunWorker(
             events=self.events,
             on_complete=self._on_async_complete,
             on_failed=self._on_async_failed,
         )
+        self.worker.attach_queue(self.queue)
+        self.embedded = EmbeddedQueueWorker(self.worker, self.queue)
         self._cancel_flags: set[str] = set()
 
     def tenant_skills_root(self, tenant_id: str) -> Path:
-        if os.environ.get("RECERTIA_TENANT_SKILLS", "").strip() in {"1", "true", "yes"}:
-            path = self.root / "tenants" / tenant_id / "skills"
-            path.mkdir(parents=True, exist_ok=True)
-            return path
-        return self.skills_root
+        from recertia.paths import tenant_skills_root
+
+        return tenant_skills_root(
+            control_root=self.root, shared=self.skills_root, tenant_id=tenant_id
+        )
 
     def tenant_runs_root(self, tenant_id: str) -> Path:
         return self.root / "runs" / tenant_id
@@ -97,10 +111,16 @@ class ConsoleContext:
         self.runs[(tenant_id, run_id)] = rec.model_copy(
             update={"cost_usd": cost, "mode": "async"}
         )
-        self.quota_store.complete(tenant_id, cost_usd=cost)
+        if self.run_service is not None:
+            self.run_service.complete(tenant_id, cost_usd=cost)
+        else:
+            self.quota_store.complete(tenant_id, cost_usd=cost)
 
     def _on_async_failed(self, tenant_id: str, run_id: str, *, cancelled: bool = False) -> None:
-        self.quota_store.release_inflight(tenant_id)
+        if self.run_service is not None:
+            self.run_service.release(tenant_id)
+        else:
+            self.quota_store.release_inflight(tenant_id)
         existing = self.runs.get((tenant_id, run_id))
         if existing is None:
             return
@@ -120,10 +140,7 @@ class RouteState:
         self.require_metrics = ctx.require_scope("metrics", ctx.key_store)
 
     def optional_console_user(self, request: Request) -> ConsoleUser | None:
-        token = request.headers.get("X-Recertia-Session") or request.cookies.get(
-            "recertia_session"
-        )
-        return self.ctx.sessions.parse(token)
+        return console_session(self.ctx.sessions, request)
 
     def resolve_tenant(
         self,
@@ -146,15 +163,25 @@ class RouteState:
             return user.active_tenant
         return principal.tenant_id
 
-    def require_workspace_admin(self, request: Request, principal: Any) -> str:
-        """Admin API key or console role admin may mutate the registry."""
+    def require_host_admin(self, request: Request, principal: Any) -> str:
+        """Binding a host directory requires platform_admin, not tenant admin."""
 
         user = self.optional_console_user(request)
-        if user is not None and user.may("admin"):
-            return user.user_id
-        if "admin" in principal.scopes:
-            return principal.key_id
-        raise HTTPException(status_code=403, detail="admin required to register workspace")
+        roles = user.roles if user is not None else None
+        if self.ctx.pdp.may_admin_host(principal, console_roles=roles):
+            return user.user_id if user is not None else ledger_actor(principal)
+        raise HTTPException(
+            status_code=403, detail="platform_admin required to register a host root"
+        )
+
+    def require_workspace_admin(self, request: Request, principal: Any) -> str:
+        """Tenant admin may patch or disable a workspace. Host registration is separate."""
+
+        user = self.optional_console_user(request)
+        console_is_admin = user.may("admin") if user is not None else None
+        if self.ctx.pdp.may_admin_registry(principal, console_is_admin=console_is_admin):
+            return user.user_id if user is not None else ledger_actor(principal)
+        raise HTTPException(status_code=403, detail="admin required to update workspace")
 
     def require_library_write(
         self, request: Request, principal: Any, *, scope: str, min_role: str = "reviewer"

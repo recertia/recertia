@@ -18,13 +18,9 @@ from recertia.solver.transcript import TranscriptWriter
 
 
 def scratch_max_steps() -> int:
-    import os
+    from recertia.settings import load_settings
 
-    raw = os.environ.get("RECERTIA_SCRATCH_MAX_STEPS", "5")
-    try:
-        return max(1, min(20, int(raw)))
-    except ValueError:
-        return 5
+    return max(1, min(20, load_settings().scratch_max_steps))
 
 
 def solve_scratch_observe_act(
@@ -33,7 +29,7 @@ def solve_scratch_observe_act(
     """Bounded observe–act loop: model proposes → shell runs → model sees output."""
 
     assert ctx.model is not None and ctx.tools is not None
-    from recertia.solver.command_policy import CommandPolicyError, assert_command_allowed
+    from recertia.solver.command_policy import CommandPolicyError, enforce_model_shell
 
     writer = (
         TranscriptWriter(ctx.transcripts, ctx.run_id, attempt_no)
@@ -100,7 +96,7 @@ def solve_scratch_observe_act(
             last_error = "empty command from model"
             continue
         try:
-            command = assert_command_allowed(command)
+            command = enforce_model_shell(command)
         except CommandPolicyError as exc:
             last_error = str(exc)
             history.append(f"$ {command}\n[refused] {exc}")
@@ -114,7 +110,11 @@ def solve_scratch_observe_act(
             if writer:
                 writer.event("tool", tool="shell", command=cmd, step=seq)
             result = ctx.tools.invoke(  # type: ignore[union-attr]
-                "shell", {"command": cmd}, workdir=ctx.workdir, step_id=f"scratch-{seq}"
+                "shell",
+                {"command": cmd},
+                workdir=ctx.workdir,
+                step_id=f"scratch-{seq}",
+                origin="model",
             )
             return {
                 "returncode": result.exit_code,

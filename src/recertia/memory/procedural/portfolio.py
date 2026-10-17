@@ -30,8 +30,8 @@ from typing import Literal
 from contracts.skill import SkillVersion
 from contracts.stats import SkillStats
 from contracts.status import SkillStatus
+from recertia.autonomy import AutonomyConfig
 from recertia.memory.procedural.retirement import retirement_decision
-from recertia.review.autonomy_config import AutonomyConfig
 
 _NEG_INF = float("-inf")
 

@@ -11,36 +11,46 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, model_validator
-from starlette.exceptions import HTTPException as StarletteHTTPException
-
-from contracts.budget import Budget
-from contracts.common import Arm
 from contracts.criteria import TaskCriterion
-from contracts.goal import Goal
-from contracts.run import Task
-from recertia.api.auth import ApiKeyStore, Principal, require_scope, validate_tenant_id
-from recertia.api.console_routes import ConsoleContext, register_console_routes
-from recertia.api.errors import V1HTTPError, envelope_http_exception, v1_error
+
+# FastAPI is an optional extra. Importing this package (which ``api.events`` and
+# ``api.auth`` do on the way to the core CLI) must succeed without it.
+try:
+    from fastapi import Depends, FastAPI, HTTPException
+    from fastapi.responses import FileResponse, JSONResponse
+    from fastapi.staticfiles import StaticFiles
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+except ImportError:  # pragma: no cover - bare wheel has no [api] extra
+    Depends = None  # type: ignore[assignment,misc]
+    FastAPI = None  # type: ignore[assignment,misc]
+    HTTPException = None  # type: ignore[assignment,misc]
+    FileResponse = None  # type: ignore[assignment,misc]
+    JSONResponse = None  # type: ignore[assignment,misc]
+    StaticFiles = None  # type: ignore[assignment,misc]
+    StarletteHTTPException = None  # type: ignore[assignment,misc]
+else:
+    from recertia.api.auth import ApiKeyStore, Principal, require_scope, validate_tenant_id
+    from recertia.api.console_routes import ConsoleContext, register_console_routes
+    from recertia.api.errors import V1HTTPError, envelope_http_exception, v1_error
+    from recertia.api.remaining_routes import register_remaining_routes
+
 from recertia.api.quotas import QuotaExceeded, QuotaStore
-from recertia.api.remaining_routes import register_remaining_routes
-from recertia.bootstrap import build_default_orchestrator, resolve_task_class
+from recertia.api.runs_models import RunCreate as RunCreate
+from recertia.api.runs_models import RunRecord
+from recertia.bootstrap import build_default_orchestrator as build_default_orchestrator
 from recertia.config import ModelConfig
-from recertia.graph.engine import GraphOrchestrator, RunIdExistsError
+from recertia.graph.engine import GraphOrchestrator
 from recertia.graph.store import CheckpointStore
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.paths import HostRootError, looks_absolute, resolve_under_host_root
-from recertia.solver.container import configured_backend, ensure_api_execution_ready
-from recertia.solver.sandbox import SandboxError
 from recertia.store.blobs import FilesystemBlobStore, normalize_blob_digest
 from recertia.telemetry import get_telemetry, render_dashboard
 from recertia.workspaces.registry import WorkspaceRegistry
@@ -48,9 +58,72 @@ from recertia.workspaces.registry import WorkspaceRegistry
 _log = logging.getLogger("recertia.api")
 
 DEFAULT_ROOT = Path(".recertia")
-_MAX_BLOB_BYTES = int(os.environ.get("RECERTIA_MAX_BLOB_BYTES", str(16 * 1024 * 1024)))
-_API_MAX_CRITERION_TIMEOUT_S = int(os.environ.get("RECERTIA_API_MAX_CRITERION_TIMEOUT_S", "300"))
-_MAX_IN_FLIGHT_RUNS = int(os.environ.get("RECERTIA_API_MAX_IN_FLIGHT_RUNS", "4"))
+
+
+def _max_blob_bytes() -> int:
+    from recertia.settings import load_settings
+
+    return load_settings().max_blob_bytes
+
+
+def _api_max_criterion_timeout_s() -> int:
+    from recertia.settings import load_settings
+
+    return load_settings().api_max_criterion_timeout_s
+
+
+def _max_in_flight_runs() -> int:
+    from recertia.settings import load_settings
+
+    return load_settings().api_max_in_flight_runs
+
+
+def _readiness(root: Path) -> tuple[bool, dict[str, object]]:
+    """SQLite writability, free disk, and an optional worker heartbeat.
+
+    A missing heartbeat is ignored. A present file older than 60s is not ready.
+    """
+
+    checks: dict[str, object] = {}
+    ok = True
+    try:
+        from recertia.persistence.db import open_db
+
+        conn = open_db(root / "quotas.sqlite")
+        try:
+            conn.execute("SELECT 1")
+        finally:
+            conn.close()
+        checks["sqlite"] = "ok"
+    except Exception:
+        _log.exception("readiness sqlite check failed")
+        ok = False
+        checks["sqlite"] = "error"
+    try:
+        free = shutil.disk_usage(root).free
+        checks["disk_free_bytes"] = free
+        if free < 4096:
+            ok = False
+            checks["disk"] = "low"
+        else:
+            checks["disk"] = "ok"
+    except OSError:
+        ok = False
+        checks["disk"] = "error"
+        checks["disk_free_bytes"] = 0
+    heartbeat = root / "worker.heartbeat"
+    if not heartbeat.is_file():
+        checks["worker"] = "absent"
+    else:
+        age = time.time() - heartbeat.stat().st_mtime
+        checks["worker_heartbeat_age_s"] = round(age, 3)
+        if age > 60:
+            ok = False
+            checks["worker"] = "stale"
+        else:
+            checks["worker"] = "ok"
+    checks["status"] = "ok" if ok else "not_ready"
+    return ok, checks
 
 
 def _validate_run_id(run_id: str) -> str:
@@ -76,9 +149,9 @@ def _tenant_has_checkpoints(root: Path, tenant_id: str, run_id: str) -> bool:
 def _clamp_criteria_for_api(criteria: list[TaskCriterion]) -> list[TaskCriterion]:
     clamped: list[TaskCriterion] = []
     for criterion in criteria:
-        if criterion.timeout_s > _API_MAX_CRITERION_TIMEOUT_S:
+        if criterion.timeout_s > _api_max_criterion_timeout_s():
             clamped.append(
-                criterion.model_copy(update={"timeout_s": _API_MAX_CRITERION_TIMEOUT_S})
+                criterion.model_copy(update={"timeout_s": _api_max_criterion_timeout_s()})
             )
         else:
             clamped.append(criterion)
@@ -274,57 +347,34 @@ def _model_config_for_run(model: str | None) -> ModelConfig | None:
         raise V1HTTPError(400, code="invalid_model", message=str(exc)) from exc
 
 
-class RunCreate(BaseModel):
-    goal: Goal | None = None
-    request: str | None = None
-    task_class: str | None = None
-    criteria: list[dict[str, Any]] | None = None
-    script: list[str] | None = None
-    budget: dict[str, Any] | None = None
-    workdir: str | None = None
-    workspace_id: str | None = None
-    run_id: str | None = None
-    arm: Arm = "treatment"
-    mode: str = "sync"  # sync | async (console C2)
-    model: str | None = None  # console-selected provider:slug; omitted → process env
-
-    @model_validator(mode="after")
-    def _require_goal_or_request(self) -> "RunCreate":
-        if self.goal is None and (self.request is None or not self.request.strip()):
-            raise ValueError("Provide goal or non-empty request")
-        if self.mode not in {"sync", "async"}:
-            raise ValueError("mode must be sync or async")
-        return self
-
-
-class RunRecord(BaseModel):
-    run_id: str
-    request: str | None = None
-    task_class: str
-    status: str
-    created_at: datetime
-    tenant_id: str
-    terminal: str | None = None
-    failure_class: str | None = None
-    attempt_no: int | None = None
-    arm: str | None = None
-    route_log: list[dict[str, Any]] | None = None
-    has_goal: bool = False
-    cost_usd: float | None = None
-    mode: str | None = None
-    criteria_hash: str | None = None
-    workspace_id: str | None = None
-    workdir: str | None = None
-
-
 def create_app(
     *,
     root: Path | None = None,
     skills_root: Path | None = None,
     facts_root: Path | None = None,
+    settings: object | None = None,
 ) -> FastAPI:
+    from recertia.settings import Settings, load_settings
+
+    loaded = settings if isinstance(settings, Settings) else load_settings()
+    loaded.validate_deployment(role="api")
+    from recertia.observability.logging import (
+        bind_log_context,
+        configure_logging,
+        reset_log_context,
+    )
+
+    configure_logging(loaded)
+    os.umask(0o077)
     root = root or DEFAULT_ROOT
     root.mkdir(parents=True, exist_ok=True)
+    from recertia.persistence.root_lock import RootLock
+
+    root_lock = RootLock(root / ".lock")
+    root_lock.acquire_shared()
+    from recertia.persistence.migrate_run_events import migrate_run_events
+
+    migrate_run_events(root)
     skills_root = Path(skills_root) if skills_root is not None else Path("skills")
     facts_root = Path(facts_root) if facts_root is not None else Path("facts")
     key_store = ApiKeyStore(root / "api_keys.sqlite")
@@ -335,8 +385,35 @@ def create_app(
     blobs_by_tenant: dict[str, FilesystemBlobStore] = {}
     # Keyed by (tenant_id, run_id) so tenants cannot collide on run_id.
     runs: dict[tuple[str, str], RunRecord] = {}
-    run_slots = threading.Semaphore(_MAX_IN_FLIGHT_RUNS)
-    app = FastAPI(title="Recertia", version="0.1.0")
+    from recertia.app.runs import RunService
+
+    run_service = RunService(
+        quota_store,
+        runs,
+        lambda tenant_id, run_id: _load_from_checkpoints(root, tenant_id, run_id),
+    )
+    run_slots = threading.Semaphore(_max_in_flight_runs())
+    expose_docs = loaded.env != "prod"
+    app = FastAPI(
+        title="Recertia",
+        version="0.1.0",
+        docs_url="/docs" if expose_docs else None,
+        redoc_url="/redoc" if expose_docs else None,
+        openapi_url="/openapi.json" if expose_docs else None,
+    )
+
+    @app.middleware("http")
+    async def _request_log_context(request: Any, call_next: Any) -> Any:
+        raw = str(request.headers.get("x-request-id", ""))
+        safe = raw and len(raw) <= 128 and raw.isascii() and "\n" not in raw and "\r" not in raw
+        request_id = raw if safe else uuid4().hex
+        tokens = bind_log_context(request_id=request_id)
+        try:
+            response = await call_next(request)
+        finally:
+            reset_log_context(tokens)
+        response.headers["x-request-id"] = request_id
+        return response
 
     console_ctx = ConsoleContext(
         root=root,
@@ -356,6 +433,7 @@ def create_app(
         require_scope=require_scope,
         validate_run_id=_validate_run_id,
         workspace_registry=workspace_registry,
+        run_service=run_service,
     )
     register_console_routes(app, console_ctx)
     register_remaining_routes(app, console_ctx)
@@ -367,6 +445,11 @@ def create_app(
     @app.exception_handler(StarletteHTTPException)
     async def _http_exception(request: Any, exc: StarletteHTTPException) -> Any:
         return envelope_http_exception(request, exc)
+
+    @app.exception_handler(Exception)
+    async def _unhandled(_request: Any, exc: Exception) -> JSONResponse:
+        _log.error("unhandled error", exc_info=exc)
+        return JSONResponse(status_code=500, content={"error": "internal error"})
 
     console_dir = Path(__file__).resolve().parents[3] / "console" / "static"
     if console_dir.is_dir():
@@ -381,303 +464,15 @@ def create_app(
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.post("/v1/runs", response_model=None)
-    def create_run(
-        body: RunCreate, principal: Principal = Depends(require_scope("runs", key_store))
-    ) -> Any:
-        try:
-            ensure_api_execution_ready()
-        except SandboxError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+    @app.get("/ready")
+    def ready() -> JSONResponse:
+        ok, body = _readiness(root)
+        return JSONResponse(status_code=200 if ok else 503, content=body)
 
-        if body.script and not _principal_may_exec(principal):
-            raise HTTPException(
-                status_code=403,
-                detail="script requires the 'exec' scope (or admin)",
-            )
+    from recertia.api.runs_routes import register_run_routes
 
-        model_config = _model_config_for_run(body.model)
+    register_run_routes(app, console_ctx)
 
-        run_id = _validate_run_id(body.run_id or f"run-{uuid4().hex[:12]}")
-        run_key = (principal.tenant_id, run_id)
-        if run_key in runs or _tenant_has_checkpoints(root, principal.tenant_id, run_id):
-            raise HTTPException(status_code=409, detail="run_id already exists")
-
-        workdir, wd_meta = _resolve_create_workdir(
-            root,
-            principal.tenant_id,
-            run_id,
-            body.workdir,
-            workspace_id=body.workspace_id,
-            registry=workspace_registry,
-        )
-        if wd_meta.get("kind") != "registered":
-            workdir.mkdir(parents=True, exist_ok=True)
-        _persist_workdir(root, principal.tenant_id, run_id, workdir, meta=wd_meta)
-
-        request = body.request
-        if body.goal is not None and body.goal.context and not request:
-            request = body.goal.context
-
-        task_class = resolve_task_class(
-            explicit=body.task_class,
-            goal_task_class=body.goal.task_class if body.goal else None,
-        )
-        criteria = _clamp_criteria_for_api(
-            [TaskCriterion.model_validate(c) for c in (body.criteria or [])]
-        )
-        budget = Budget.model_validate(body.budget) if body.budget else Budget()
-        approve_tools = _principal_may_exec(principal) or configured_backend() == "container"
-
-        # ----- async path (console C2) -----
-        if body.mode == "async":
-            try:
-                quota_store.admit(principal.tenant_id)
-            except QuotaExceeded as exc:
-                return _quota_error(exc, run_id=run_id)
-            placeholder = RunRecord(
-                run_id=run_id,
-                request=request,
-                task_class=task_class,
-                status="queued",
-                created_at=datetime.now(timezone.utc),
-                tenant_id=principal.tenant_id,
-                terminal=None,
-                has_goal=body.goal is not None,
-                mode="async",
-                workspace_id=body.workspace_id,
-                workdir=str(workdir),
-            )
-            from recertia.workers.run_worker import AsyncRunRequest
-
-            runs[run_key] = placeholder
-            console_ctx.worker.submit(
-                AsyncRunRequest(
-                    run_id=run_id,
-                    tenant_id=principal.tenant_id,
-                    goal=body.goal,
-                    request=request,
-                    task_class=body.task_class,
-                    criteria=criteria,
-                    budget=budget,
-                    workdir=workdir,
-                    script=body.script,
-                    arm=body.arm,
-                    approve_tools=approve_tools,
-                    skills_root=skills_root,
-                    facts_root=facts_root,
-                    runs_root=root / "runs" / principal.tenant_id,
-                    index_path=root / "runs" / principal.tenant_id / "skill_index.db",
-                    model_config=model_config,
-                    max_criterion_timeout_s=_API_MAX_CRITERION_TIMEOUT_S,
-                )
-            )
-            from fastapi.responses import JSONResponse
-
-            return JSONResponse(
-                status_code=202,
-                content={
-                    "run_id": run_id,
-                    "status": "queued",
-                    "mode": "async",
-                    "tenant_id": principal.tenant_id,
-                    "task_class": task_class,
-                    "workspace_id": body.workspace_id,
-                    "workdir": str(workdir),
-                },
-            )
-
-        task = Task(
-            task_id=run_id,
-            goal=body.goal,
-            request=request,
-            task_class=task_class,
-            submitted_at=datetime.now(timezone.utc),
-            submitted_by=principal.key_id,
-        )
-
-        get_telemetry().emit(
-            "run.started",
-            tenant_id=principal.tenant_id,
-            run_id=run_id,
-            task_class=task_class,
-        )
-
-        try:
-            quota_store.admit(principal.tenant_id)
-        except QuotaExceeded as exc:
-            return _quota_error(exc, run_id=run_id)
-
-        if not run_slots.acquire(blocking=False):
-            quota_store.release_inflight(principal.tenant_id)
-            return v1_error(
-                429,
-                code="worker_busy",
-                message="too many in-flight runs",
-                run_id=run_id,
-                retryable=True,
-            )
-
-        # Container backend isolates tools; local API requires exec (or admin) for grants.
-        bundle = build_default_orchestrator(
-            root / "runs" / principal.tenant_id,
-            skills_root=skills_root,
-            facts_root=facts_root,
-            index_path=root / "runs" / principal.tenant_id / "skill_index.db",
-            approve_default_tools=approve_tools,
-            model_config=model_config,
-        )
-        bundle.orchestrator.max_criterion_timeout_s = _API_MAX_CRITERION_TIMEOUT_S
-        cost_usd = 0.0
-        succeeded = False
-        try:
-            state = bundle.orchestrator.start(
-                run_id,
-                task,
-                criteria,
-                budget=budget,
-                workdir=workdir,
-                script=body.script,
-                arm=body.arm,
-                manifest=bundle.run_manifest(),
-            )
-            cost_usd = float(state.spent.cost_usd or 0.0)
-            succeeded = True
-        except RunIdExistsError as exc:
-            raise HTTPException(status_code=409, detail="run_id already exists") from exc
-        except Exception as exc:
-            get_telemetry().emit(
-                "run.finished",
-                tenant_id=principal.tenant_id,
-                run_id=run_id,
-                terminal="error",
-            )
-            _log.exception(
-                "create_run failed tenant_id=%s run_id=%s",
-                principal.tenant_id,
-                run_id,
-            )
-            raise HTTPException(status_code=500, detail="internal server error") from exc
-        finally:
-            bundle.close()
-            run_slots.release()
-            if succeeded:
-                quota_store.complete(principal.tenant_id, cost_usd=cost_usd)
-            else:
-                quota_store.release_inflight(principal.tenant_id)
-
-        rec = _record_from_state(
-            run_id=run_id,
-            request=request,
-            task_class=task_class,
-            tenant_id=principal.tenant_id,
-            state=state,
-            created_at=datetime.now(timezone.utc),
-            has_goal=body.goal is not None,
-        )
-        rec = rec.model_copy(
-            update={
-                "cost_usd": cost_usd,
-                "mode": "sync",
-                "workspace_id": body.workspace_id,
-                "workdir": str(workdir),
-            }
-        )
-        runs[run_key] = rec
-        get_telemetry().emit(
-            "run.finished",
-            tenant_id=principal.tenant_id,
-            run_id=run_id,
-            terminal=state.terminal,
-        )
-        return rec
-
-    @app.get("/v1/runs/{run_id}", response_model=RunRecord)
-    def get_run(run_id: str, principal: Principal = Depends(require_scope("runs", key_store))) -> RunRecord:
-        run_id = _validate_run_id(run_id)
-        run_key = (principal.tenant_id, run_id)
-        if run_key in runs:
-            return runs[run_key]
-        loaded = _load_from_checkpoints(root, principal.tenant_id, run_id)
-        if loaded is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        runs[run_key] = loaded
-        return loaded
-
-    @app.post("/v1/runs/{run_id}/resume", response_model=None)
-    def resume_run(
-        run_id: str, principal: Principal = Depends(require_scope("runs", key_store))
-    ) -> Any:
-        try:
-            ensure_api_execution_ready()
-        except SandboxError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-        run_id = _validate_run_id(run_id)
-        run_key = (principal.tenant_id, run_id)
-        # Resume MUST reuse the persisted create workdir — never invent a new path.
-        workdir = _load_persisted_workdir(
-            root, principal.tenant_id, run_id, registry=workspace_registry
-        )
-        if workdir is None:
-            workdir = _canonical_run_workdir(root, principal.tenant_id, run_id)
-        if not workdir.exists():
-            raise HTTPException(status_code=404, detail="run workdir not found")
-        try:
-            quota_store.admit(principal.tenant_id)
-        except QuotaExceeded as exc:
-            return _quota_error(exc, run_id=run_id)
-        if not run_slots.acquire(blocking=False):
-            quota_store.release_inflight(principal.tenant_id)
-            return v1_error(
-                429,
-                code="worker_busy",
-                message="too many in-flight runs",
-                run_id=run_id,
-                retryable=True,
-            )
-        bundle = None
-        try:
-            bundle = build_default_orchestrator(
-                root / "runs" / principal.tenant_id,
-                skills_root=skills_root,
-                facts_root=facts_root,
-                index_path=root / "runs" / principal.tenant_id / "skill_index.db",
-                approve_default_tools=(
-                    _principal_may_exec(principal) or configured_backend() == "container"
-                ),
-            )
-            bundle.orchestrator.max_criterion_timeout_s = _API_MAX_CRITERION_TIMEOUT_S
-            state = bundle.orchestrator.resume(run_id, workdir=workdir)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except Exception as exc:
-            _log.exception(
-                "resume_run failed tenant_id=%s run_id=%s",
-                principal.tenant_id,
-                run_id,
-            )
-            raise HTTPException(status_code=500, detail="internal server error") from exc
-        finally:
-            if bundle is not None:
-                bundle.close()
-            run_slots.release()
-            # Resume admits a concurrency slot only. Daily spend stays on create's
-            # successful complete(); releasing here avoids charging the day twice.
-            quota_store.release_inflight(principal.tenant_id)
-
-        existing = runs.get(run_key)
-        rec = _record_from_state(
-            run_id=run_id,
-            request=existing.request if existing else state.task.request,
-            task_class=(existing.task_class if existing else (state.task.task_class or "repo-chore")),
-            tenant_id=principal.tenant_id,
-            state=state,
-            created_at=existing.created_at if existing else datetime.now(timezone.utc),
-            has_goal=existing.has_goal if existing else (state.task.goal is not None),
-        )
-        runs[run_key] = rec
-        return rec
 
     @app.post("/v1/blobs")
     def put_blob(
@@ -688,10 +483,10 @@ def create_app(
             principal.tenant_id, FilesystemBlobStore(_tenant_blob_root(root, principal.tenant_id))
         )
         data = str(payload.get("data", "")).encode()
-        if len(data) > _MAX_BLOB_BYTES:
+        if len(data) > _max_blob_bytes():
             raise HTTPException(
                 status_code=413,
-                detail=f"blob exceeds max size of {_MAX_BLOB_BYTES} bytes",
+                detail=f"blob exceeds max size of {_max_blob_bytes()} bytes",
             )
         digest = blobs.put(data, content_type=str(payload.get("content_type", "text/plain")))
         return {"digest": digest}
@@ -728,6 +523,7 @@ def create_app(
         return payload
 
     app.state.root = root
+    app.state.root_lock = root_lock
     app.state.skills_root = skills_root
     app.state.facts_root = facts_root
     app.state.api_keys = key_store
