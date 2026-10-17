@@ -120,7 +120,9 @@ class ModelClient(ABC):
             started = time.monotonic()
             if deadline is None:
                 deadline = started + budget
-            remaining = deadline - started
+                remaining = budget
+            else:
+                remaining = deadline - started
             if remaining <= 0:
                 raise ModelUnavailable(
                     "model call exceeded deadline",
