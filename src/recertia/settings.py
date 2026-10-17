@@ -43,6 +43,7 @@ KNOWN_ENV_KEYS = frozenset(
         "RECERTIA_FAULTS",
         "RECERTIA_TENANT_ENCRYPTION",
         "RECERTIA_API_DEFAULT_ASYNC",
+        "RECERTIA_API_SYNC_WAIT_S",
         "RECERTIA_EXECUTION_BACKEND",
         "RECERTIA_CONTAINER_RUNTIME",
         "RECERTIA_CONTAINER_IMAGE",
@@ -238,6 +239,7 @@ class Settings:
     # Stays false until one deprecation release. Omit-mode still sync-waits on
     # the queue (the worker thread runs the graph). Do not flip this default.
     api_default_async: bool = False
+    api_sync_wait_s: float = 60.0
 
     execution_backend: ExecutionBackend = "container"
     execution_backend_was_set: bool = False
@@ -482,6 +484,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         faults=_raw(env, "RECERTIA_FAULTS").strip(),
         tenant_encryption=_choice(env, "RECERTIA_TENANT_ENCRYPTION", {"off", "required"}, "off"),  # type: ignore[arg-type]
         api_default_async=_bool(env, "RECERTIA_API_DEFAULT_ASYNC"),
+        api_sync_wait_s=_float(env, "RECERTIA_API_SYNC_WAIT_S", 60.0),
         execution_backend=backend,  # type: ignore[arg-type]
         execution_backend_was_set=bool(env.get("RECERTIA_EXECUTION_BACKEND", "").strip()),
         container_runtime=runtime,

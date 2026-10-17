@@ -40,7 +40,8 @@ the `[api]` extra.
 
 **HTTP API.** Default `POST /v1/runs` is still sync.
 `RECERTIA_API_DEFAULT_ASYNC` stays false. Sync create and resume enqueue and
-wait up to 60s for the worker thread; a timeout returns `202`. `mode=async`
+wait for the worker thread (`RECERTIA_API_SYNC_WAIT_S`, default 60); a timeout
+returns `202`. `mode=async`
 enqueues and returns `202 {run_id, status: queued}` unless a wait is requested.
 Optional wait (async only): `?wait=<seconds>`, `X-Recertia-Wait`, or
 `Prefer: wait` / `Prefer: wait=<seconds>` (cap 30s; timeout still returns 202).

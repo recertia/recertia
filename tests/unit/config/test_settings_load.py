@@ -15,6 +15,16 @@ def test_api_default_async_stays_off(monkeypatch: pytest.MonkeyPatch) -> None:
     assert load_settings().api_default_async is False
 
 
+def test_api_sync_wait_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RECERTIA_API_SYNC_WAIT_S", raising=False)
+    assert load_settings().api_sync_wait_s == 60.0
+    monkeypatch.setenv("RECERTIA_API_SYNC_WAIT_S", "12.5")
+    assert load_settings().api_sync_wait_s == 12.5
+    monkeypatch.setenv("RECERTIA_API_SYNC_WAIT_S", "nope")
+    with pytest.raises(ConfigError, match="RECERTIA_API_SYNC_WAIT_S"):
+        load_settings()
+
+
 def test_bool_flags_accept_1_true_yes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RECERTIA_API_ALLOW_LOCAL_EXEC", "yes")
     monkeypatch.setenv("RECERTIA_API_DEFAULT_ASYNC", "true")

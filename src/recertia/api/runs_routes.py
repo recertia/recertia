@@ -22,7 +22,12 @@ from recertia.solver.sandbox import SandboxError
 from recertia.telemetry import get_telemetry
 
 _WAIT_CAP_S = 30.0
-_SYNC_WAIT_S = 60.0
+
+
+def _sync_wait_s() -> float:
+    from recertia.settings import load_settings
+
+    return load_settings().api_sync_wait_s
 
 
 def _wait_seconds(
@@ -258,7 +263,7 @@ def register_run_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         approve_tools = ctx.principal_may_exec(principal)
 
         sync = body.mode != "async"
-        wait_s = _SYNC_WAIT_S if sync else _wait_seconds(wait, x_recertia_wait, prefer)
+        wait_s = _sync_wait_s() if sync else _wait_seconds(wait, x_recertia_wait, prefer)
         try:
             run_service.admit(principal.tenant_id)
         except QuotaExceeded as exc:
@@ -339,7 +344,7 @@ def register_run_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         try:
             return _dispatch_queued(
                 mode="sync",
-                wait_s=_SYNC_WAIT_S,
+                wait_s=_sync_wait_s(),
                 resume_only=True,
                 settle_quota=False,
                 run_id=run_id,
