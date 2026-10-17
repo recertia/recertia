@@ -212,13 +212,12 @@ def build_default_orchestrator(
         if state.terminal is None:
             return
         try:
-            from recertia.evals.store import EvalStore, ObservationError
+            from recertia.evals.outbox import drain_eval_outbox
+            from recertia.evals.store import EvalStore
 
             eval_store = EvalStore(runs_root / "evals.db")
             try:
-                eval_store.append_run(state)
-            except ObservationError:
-                return
+                drain_eval_outbox(persistence.checkpoints, eval_store)
             finally:
                 eval_store.close()
         except Exception:  # noqa: BLE001 — eval recording must not fail runs

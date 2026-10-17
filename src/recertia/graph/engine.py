@@ -33,6 +33,7 @@ from recertia.graph.hooks import (
 )
 from recertia.graph.lease import RunLease
 from recertia.graph.persistence import RunPersistence, open_run_persistence
+from recertia.graph.store import EvalOutboxWrite
 from recertia.memory.procedural.capability import CandidateSkillStoreAdapter
 from recertia.nodes import NODE_FUNCS, NodeContext, NodeOutcome
 from recertia.nodes.capabilities import undeclared_capabilities
@@ -57,6 +58,20 @@ MAX_GRAPH_STEPS = 500
 legitimately needs this many node-hops has a routing bug, not a slow task."""
 
 _log = logging.getLogger("recertia.graph.engine")
+
+
+def _eval_outbox(tenant_id: str, state: RunState) -> EvalOutboxWrite | None:
+    """Enqueue key for a terminal finalize. None until the run has a terminal status."""
+
+    if state.terminal is None:
+        return None
+    return EvalOutboxWrite(
+        observation_key=f"{tenant_id}/{state.run_id}/{state.attempt_no}",
+        tenant_id=tenant_id,
+        run_id=state.run_id,
+        attempt_no=state.attempt_no,
+        payload_json=state.model_dump_json(),
+    )
 
 
 class RoutingError(RuntimeError):
@@ -434,6 +449,7 @@ class GraphOrchestrator:
                     None,
                     new_state,
                     fencing_token=self._fencing_token,
+                    eval_outbox=_eval_outbox(self.tenant_id, new_state),
                 )
                 self._record_eval_observation(new_state)
                 from recertia.telemetry import emit_in_run, telemetry_run

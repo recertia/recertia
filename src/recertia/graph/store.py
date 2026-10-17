@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 from contracts.run import RunState
@@ -17,6 +18,24 @@ from recertia.persistence.db import open_db
 
 class CheckpointConflict(RuntimeError):
     """A checkpoint ``(run_id, seq)`` was inserted twice. Sequences are write-once."""
+
+
+@dataclass(frozen=True)
+class EvalOutboxWrite:
+    """One eval observation to enqueue in the same transaction as its checkpoint."""
+
+    observation_key: str
+    tenant_id: str
+    run_id: str
+    attempt_no: int
+    payload_json: str
+
+
+@dataclass(frozen=True)
+class EvalOutboxPending:
+    observation_key: str
+    payload_json: str
+    attempts: int
 
 
 class CheckpointStore:
@@ -43,6 +62,21 @@ class CheckpointStore:
         )
         self._conn.commit()
         _ensure_column(self._conn, "checkpoints", "fencing_token", "INTEGER")
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS eval_outbox (
+                observation_key TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                attempt_no INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -56,6 +90,7 @@ class CheckpointStore:
         state: RunState,
         *,
         fencing_token: int | None = None,
+        eval_outbox: EvalOutboxWrite | None = None,
     ) -> None:
         with self._lock:
             try:
@@ -65,12 +100,56 @@ class CheckpointStore:
                     ") VALUES (?, ?, ?, ?, ?, datetime('now'), ?)",
                     (run_id, seq, node, next_node, state.model_dump_json(), fencing_token),
                 )
+                if eval_outbox is not None:
+                    self._conn.execute(
+                        """
+                        INSERT INTO eval_outbox (
+                            observation_key, tenant_id, run_id, attempt_no,
+                            payload_json, status, attempts, created_at
+                        ) VALUES (?, ?, ?, ?, ?, 'pending', 0, datetime('now'))
+                        ON CONFLICT(observation_key) DO NOTHING
+                        """,
+                        (
+                            eval_outbox.observation_key,
+                            eval_outbox.tenant_id,
+                            eval_outbox.run_id,
+                            eval_outbox.attempt_no,
+                            eval_outbox.payload_json,
+                        ),
+                    )
                 self._conn.commit()
             except sqlite3.IntegrityError as exc:
                 self._conn.rollback()
                 raise CheckpointConflict(
                     f"checkpoint ({run_id!r}, seq={seq}) already exists"
                 ) from exc
+
+    def pending_eval_outbox(self) -> list[EvalOutboxPending]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT observation_key, payload_json, attempts
+                FROM eval_outbox
+                WHERE status = 'pending'
+                ORDER BY created_at, observation_key
+                """
+            ).fetchall()
+        return [
+            EvalOutboxPending(str(key), str(payload), int(attempts))
+            for key, payload, attempts in rows
+        ]
+
+    def mark_eval_outbox(self, observation_key: str, status: str, *, attempts: int) -> None:
+        with self._lock:
+            self._conn.execute(
+                """
+                UPDATE eval_outbox
+                SET status = ?, attempts = ?
+                WHERE observation_key = ?
+                """,
+                (status, attempts, observation_key),
+            )
+            self._conn.commit()
 
     def latest(self, run_id: str) -> tuple[int, str, str | None, RunState] | None:
         """Returns ``(seq, node, next_node, state)`` for the most recent checkpoint, or ``None``."""
