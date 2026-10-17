@@ -491,14 +491,23 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         principal=Depends(require_runs),
         status: str | None = None,
         kind: str | None = None,
-        limit: int = 50,
+        limit: int = Query(default=50, ge=1, le=100),
+        cursor: str | None = None,
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
-        items = ctx.proposals.list(
-            tenant_id=tenant_id, status=status, kind=kind, limit=limit
+        rows = ctx.proposals.list(
+            tenant_id=tenant_id,
+            status=status,
+            kind=kind,
+            limit=limit + 1,
+            cursor=cursor,
+            keyset=True,
         )
-        return {"items": [p.to_dict() for p in items]}
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        next_cursor = page[-1].proposal_id if page and has_more else None
+        return {"items": [rec.to_dict() for rec in page], "next_cursor": next_cursor}
 
     @app.get("/v1/proposals/{proposal_id}")
     def get_proposal(

@@ -105,6 +105,8 @@ class ProposalStore:
         status: str | None = None,
         kind: str | None = None,
         limit: int = 100,
+        cursor: str | None = None,
+        keyset: bool = False,
     ) -> list[ProposalRecord]:
         clauses = ["tenant_id = ?"]
         params: list[Any] = [tenant_id]
@@ -114,11 +116,20 @@ class ProposalStore:
         if kind:
             clauses.append("kind = ?")
             params.append(kind)
-        params.append(max(1, min(limit, 100)))
+        if keyset:
+            if cursor:
+                clauses.append("proposal_id > ?")
+                params.append(cursor)
+            order = "proposal_id ASC"
+            cap = 101
+        else:
+            order = "created_at DESC"
+            cap = 100
+        params.append(max(1, min(limit, cap)))
         sql = (
             "SELECT payload FROM proposals WHERE "
             + " AND ".join(clauses)
-            + " ORDER BY created_at DESC LIMIT ?"
+            + f" ORDER BY {order} LIMIT ?"
         )
         rows = self._conn.execute(sql, params).fetchall()
         return [ProposalRecord(**json.loads(r["payload"])) for r in rows]

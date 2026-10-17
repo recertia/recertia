@@ -6,12 +6,13 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Header, Query, Request
 from pydantic import BaseModel, Field, ValidationError
 
 from recertia.api.console_auth import console_session
 from recertia.api.console_routes import ConsoleContext
 from recertia.api.errors import V1HTTPError
+from recertia.api.pagination import keyset_page
 from recertia.evals.golden import run_eval_suite
 from recertia.evals.store import EvalStore
 from recertia.ledger import HashChainLedger
@@ -311,22 +312,40 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         request: Request,
         principal=Depends(require_runs),
         scope: str | None = None,
+        limit: int = Query(default=50, ge=1, le=100),
+        cursor: str | None = None,
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
         store = FactStore(ctx.tenant_runs_root(tenant_id) / "facts")
-        facts = store.list_facts(scope=scope)
-        return {"items": [f.model_dump(mode="json") for f in facts]}
+        page, next_cursor = keyset_page(
+            store.list_facts(scope=scope),
+            key=lambda fact: fact.fact_id,
+            limit=limit,
+            cursor=cursor,
+        )
+        return {
+            "items": [fact.model_dump(mode="json") for fact in page],
+            "next_cursor": next_cursor,
+        }
 
     @app.get("/v1/cases")
     def list_cases(
         request: Request,
         principal=Depends(require_runs),
+        limit: int = Query(default=50, ge=1, le=100),
+        cursor: str | None = None,
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
         store = EpisodicStore(ctx.tenant_runs_root(tenant_id) / "episodic")
-        return {"items": store.list_index()}
+        page, next_cursor = keyset_page(
+            store.list_index(),
+            key=lambda row: str(row.get("case_id") or ""),
+            limit=limit,
+            cursor=cursor,
+        )
+        return {"items": page, "next_cursor": next_cursor}
 
     @app.get("/v1/cases/{case_id}")
     def get_case(
