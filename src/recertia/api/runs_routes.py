@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from contracts.budget import Budget
@@ -26,6 +26,46 @@ from recertia.solver.sandbox import SandboxError
 from recertia.telemetry import get_telemetry
 
 _log = logging.getLogger("recertia.api")
+_WAIT_CAP_S = 30.0
+
+
+def _wait_seconds(
+    wait: str | None,
+    x_recertia_wait: str | None,
+    prefer: str | None,
+) -> float | None:
+    """Optional enqueue-and-wait budget. Absent means return 202 immediately.
+
+    ``?wait=<seconds>`` or ``X-Recertia-Wait`` is a timeout. ``Prefer: wait``
+    uses the cap. The value is never above ``_WAIT_CAP_S``.
+    """
+
+    raw: str | None = None
+    if wait is not None:
+        raw = wait
+    elif x_recertia_wait is not None:
+        raw = x_recertia_wait
+    else:
+        for part in (prefer or "").split(","):
+            token = part.strip()
+            lowered = token.lower()
+            if lowered == "wait":
+                return _WAIT_CAP_S
+            if lowered.startswith("wait="):
+                raw = token.split("=", 1)[1].strip()
+                break
+    if raw is None:
+        return None
+    text = raw.strip()
+    if text == "":
+        return _WAIT_CAP_S
+    try:
+        seconds = float(text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="wait must be seconds") from exc
+    if seconds < 0:
+        raise HTTPException(status_code=400, detail="wait must be seconds")
+    return min(seconds, _WAIT_CAP_S)
 
 
 def _build_orchestrator():
@@ -52,7 +92,13 @@ def register_run_routes(app: FastAPI, ctx: ConsoleContext) -> None:
     require_runs = ctx.require_scope("runs", ctx.key_store)
 
     @router.post("/v1/runs", response_model=None)
-    def create_run(body: RunCreate, principal: Principal = Depends(require_runs)) -> Any:
+    def create_run(
+        body: RunCreate,
+        wait: str | None = Query(None),
+        x_recertia_wait: str | None = Header(None),
+        prefer: str | None = Header(None),
+        principal: Principal = Depends(require_runs),
+    ) -> Any:
         try:
             ensure_api_execution_ready()
         except SandboxError as exc:
@@ -97,6 +143,7 @@ def register_run_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         approve_tools = ctx.principal_may_exec(principal)
 
         if body.mode == "async":
+            wait_s = _wait_seconds(wait, x_recertia_wait, prefer)
             try:
                 run_service.admit(principal.tenant_id)
             except QuotaExceeded as exc:
@@ -150,6 +197,12 @@ def register_run_routes(app: FastAPI, ctx: ConsoleContext) -> None:
                 run_service.release(principal.tenant_id)
                 raise
             ctx.embedded.ensure_started()
+            if wait_s is not None:
+                finished = ctx.queue.wait(principal.tenant_id, run_id, timeout_s=wait_s)
+                if finished is not None:
+                    loaded = run_service.get(principal.tenant_id, run_id)
+                    if loaded is not None and getattr(loaded, "terminal", None):
+                        return loaded
             return JSONResponse(
                 status_code=202,
                 content={
