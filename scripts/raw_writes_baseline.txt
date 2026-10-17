@@ -9,8 +9,8 @@ distill/failure_clusters.py	1
 evals/golden.py	1
 evals/probes.py	1
 jobs/arxiv_pdf.py	3
+jobs/practice.py	2
 jobs/proposals_log.py	1
-jobs/workers.py	2
 mea/store.py	1
 memory/episodic/__init__.py	2
 memory/episodic/clusters.py	1
