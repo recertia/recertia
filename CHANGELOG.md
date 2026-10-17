@@ -14,17 +14,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `workspace.register` / `skill.promote_seed` as `platform_admin`). First consumer
   is `POST /v1/runs` script/create. `eval.run` still accepts `metrics` or `evals`
   until a distinct evals key scope is issued.
-
+- **Store Receipts P1** — `{runs_root}/receipts.jsonl` dual-write next to the
+  ledger, `recertia receipt show/verify/close` (advisory verify; missing genesis
+  exits 0). Tabletop-from-tar and `backup --receipts` defaults unchanged.
 - **ADR-0020 Store Receipts (Proposed)** — `StoreReceipt` contract, `close_receipt`
   ledger action, `schema/store_receipt.schema.json`. Does not flip `recertia backup`
   or tabletop defaults. P4 may switch `backup --receipts` only after one counted
   soak week compares tar vs receipt restore. Plan:
   [`docs/plans/2026-09-23-store-receipts.md`](docs/plans/2026-09-23-store-receipts.md).
 
+- **F9 RunRegistry** — durable `(tenant_id, run_id)` reservation in
+  `runtime.db` via `RunRegistry.reserve`. `POST /v1/runs` rejects reuse with
+  HTTP 409 across process restarts (`run_id_exists`).
+
+- **F11 WorkspaceLock** — flock under `locks/workspaces/<sha256(workdir)>.lock`.
+  `create_run` and `resume_run` acquire after workdir resolve; a second holder
+  gets HTTP 409 `workspace_busy`.
+
 ### Fixed
 
 - **SEC-8 require_key** — `require_key` uses `Principal.has_scope`, so tenant
   `admin` no longer satisfies `platform_admin`.
+- **F7 live operation reclaim** — `OperationLedger.run_once` waits on a live
+  in-process owner instead of reclaiming a pending row after 5s. A crash-left
+  pending sentinel with no holder is still claimed immediately.
+- **F10 scratch resume** — `solve_scratch_observe_act` records the model command
+  inside `op_once`, so resume replays the stored command instead of asking the
+  model again.
 - **Windows `rss_bytes`** — `import resource` is POSIX-only. Catch `ImportError`
   so hop telemetry on native Windows returns `0` instead of aborting the graph
   (`ModuleNotFoundError: No module named 'resource'`).
@@ -36,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stock image does not ship it, so every Monday job failed.
 
 ### Changed
+
+- **Nightly lowest-deps floors** — raise direct floors so `pip install -e ".[dev]" -c lowest-direct.txt` can run the suite: `pydantic>=2.11,<3` (schema output), `typer>=0.13` (click 8.3+ secondary flags), `jsonschema>=4.0.1` (4.0.0 is yanked). Do not loosen the nightly lowest-deps job (#72).
 
 - **Console / registry / distill extract** — `register_console_routes` is a
   dispatcher over session / library / program modules (`console_deps.RouteState`
