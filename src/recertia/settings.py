@@ -327,7 +327,11 @@ class Settings:
     tenant_model_keys_file: str = ""
 
     def validate_deployment(self, *, role: ProcessRole) -> None:
-        """Refuse an unsafe ``multi_node`` process. ``single_node`` has no extra rules."""
+        """Refuse an unsafe ``multi_node`` process.
+
+        ``multi_node`` refuses sqlite and the local execution backend.
+        ``single_node`` has no extra rules.
+        """
 
         del role  # reserved for REL-10 role-specific checks
         if self.deployment_mode != "multi_node":
@@ -335,11 +339,11 @@ class Settings:
         if self.api_allow_local_exec:
             _log.warning("RECERTIA_API_ALLOW_LOCAL_EXEC is ignored in multi_node")
         if self.execution_backend == "local" or self.resolved_golden_backend() == "local":
-            raise ExecutionUnavailable(
-                "multi_node refuses the local execution backend"
-            )
+            raise ExecutionUnavailable("multi_node refuses the local execution backend")
         if self.db_backend != "postgres" or not (self.database_url or "").strip():
-            raise ConfigError("multi_node requires RECERTIA_DB_BACKEND=postgres and RECERTIA_DATABASE_URL")
+            raise ConfigError(
+                "multi_node refuses sqlite: set RECERTIA_DB_BACKEND=postgres and RECERTIA_DATABASE_URL"
+            )
         if self.blob_store != "s3":
             raise ConfigError("multi_node requires RECERTIA_BLOB_STORE=s3")
         if len(self.console_session_secret) < 32:

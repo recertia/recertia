@@ -38,7 +38,12 @@ class SqliteBackend:
 
 @dataclass
 class PostgresBackend:
-    """Applies the Postgres+pgvector dialect when ``psycopg`` and DSN are available."""
+    """Postgres store for ``multi_node``.
+
+    ``multi_node`` startup refuses sqlite and the local executor. This backend
+    is optional in tests: skip when ``RECERTIA_TEST_PG_DSN`` is unset. Do not
+    apply migrations from the default suite.
+    """
 
     dsn: str
     dialect: Dialect = "postgres"

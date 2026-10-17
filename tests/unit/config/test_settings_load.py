@@ -48,7 +48,7 @@ def test_multi_node_refuses_local_backend(monkeypatch: pytest.MonkeyPatch) -> No
 def test_multi_node_requires_postgres_s3_and_session_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RECERTIA_DEPLOYMENT_MODE", "multi_node")
     monkeypatch.setenv("RECERTIA_EXECUTION_BACKEND", "container")
-    with pytest.raises(ConfigError):
+    with pytest.raises(ConfigError, match="refuses sqlite"):
         load_settings().validate_deployment(role="cli")
 
 
