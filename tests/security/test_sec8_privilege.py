@@ -70,6 +70,7 @@ def test_multi_node_requires_tenant_skills_and_workspace_roots(
     monkeypatch.setenv("RECERTIA_DATABASE_URL", "postgres://db")
     monkeypatch.setenv("RECERTIA_BLOB_STORE", "s3")
     monkeypatch.setenv("RECERTIA_CONSOLE_SESSION_SECRET", "x" * 32)
+    monkeypatch.setenv("RECERTIA_CONSOLE_AUTH", "oidc")
     monkeypatch.setenv("RECERTIA_API_KEY_PEPPER", "pepper")
     with pytest.raises(ConfigError, match="RECERTIA_TENANT_SKILLS"):
         load_settings().validate_deployment(role="api")
