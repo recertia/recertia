@@ -32,13 +32,14 @@ jobs:
       - name: Install
         run: pip install -e ".[dev]"
 
+      - name: Pin ruff
+        run: pip install ruff==0.17.1
+
       - name: Ruff version
         run: ruff --version
 
       - name: Lint (ruff)
-        run: |
-          pip install ruff==0.17.1
-          ruff check contracts/ src/ scripts/ tests/ conftest.py
+        run: ruff check contracts/ src/ scripts/ tests/ conftest.py
 
       - name: Lint preview (report-only)
         continue-on-error: true

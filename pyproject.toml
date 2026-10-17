@@ -37,9 +37,8 @@ otel = [
 ]
 dev = [
     "pytest>=8",
-    # Floor is the wheel a clean CPython 3.12 resolve of `pip install -e ".[dev]"`
-    # installs today (ruff 0.17.1). CI pins ruff==0.17.1 for lint. Do not float
-    # this back to ruff>=0.6.
+    # Nightly lowest-deps requires a >= floor. 0.17.1 is the version CI lint
+    # pins; do not lower this floor to 0.6.
     "ruff>=0.17.1",
     "mypy>=1.11",
     "import-linter>=2.15",
