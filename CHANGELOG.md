@@ -45,7 +45,10 @@ enqueues and returns `202 {run_id, status: queued}` unless a wait is requested.
 Optional wait (async only): `?wait=<seconds>`, `X-Recertia-Wait`, or
 `Prefer: wait` / `Prefer: wait=<seconds>` (cap 30s; timeout still returns 202).
 `GET /metrics` returns Prometheus text and requires the `metrics` scope
-(`admin` is accepted). `GET /v1/runs` is tenant-scoped keyset pagination
+(`admin` is accepted). `GET /v1/runs/{id}/events` resumes from `Last-Event-ID`
+or `?offset=<bytes>`. `?follow=<seconds>` (cap 30) keeps the stream open for
+new lines; omit it and the response is the backlog. `GET /v1/runs` is
+tenant-scoped keyset pagination
 (`limit` 1–100, default 50,
 `cursor`; response `{items, next_cursor}`) from `run_summaries`. A second run
 whose resolved workdir is already held returns `409` `workspace_busy`.

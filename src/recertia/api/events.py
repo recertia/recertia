@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -77,13 +78,91 @@ class RunEventLog:
                 out.append(event)
         return out
 
-    def iter_sse(self, tenant_id: str, run_id: str, *, after: str | None = None) -> Iterator[str]:
-        """Yield SSE chunks for current backlog (caller may poll again)."""
+    def iter_sse(
+        self,
+        tenant_id: str,
+        run_id: str,
+        *,
+        after: str | None = None,
+        offset: int | None = None,
+        timeout_s: float = 0.0,
+        poll_s: float = 0.02,
+    ) -> Iterator[str]:
+        """Yield SSE from a byte offset or an exclusive event id, then follow.
 
-        events = self.list_after(tenant_id, run_id, after=after)
+        ``offset`` is a file position. ``after`` is an event id (the
+        ``Last-Event-ID``). ``timeout_s`` bounds the follow; ``0`` returns the
+        lines already on disk and stops. The tail comment carries the byte
+        offset to resume from.
+        """
+
+        path = self._path(tenant_id, run_id)
+        if offset is not None:
+            pos = max(0, int(offset))
+        elif after:
+            pos = self._offset_after_event(path, after)
+        else:
+            pos = 0
+        deadline = time.monotonic() + max(0.0, timeout_s)
         last_id = after
-        for event in events:
-            last_id = event["event_id"]
-            yield f"id: {event['event_id']}\nevent: {event['type']}\ndata: {json.dumps(event)}\n\n"
-        if last_id:
-            yield f": cursor {last_id}\n\n"
+        while True:
+            events, pos = self._read_events_from(path, pos)
+            for event in events:
+                last_id = str(event.get("event_id") or "")
+                yield (
+                    f"id: {event['event_id']}\n"
+                    f"event: {event['type']}\n"
+                    f"data: {json.dumps(event)}\n\n"
+                )
+            if time.monotonic() >= deadline:
+                if last_id:
+                    yield f": cursor {last_id}\n\n"
+                yield f": offset {pos}\n\n"
+                return
+            time.sleep(poll_s)
+
+    def _offset_after_event(self, path: Path, after: str) -> int:
+        """Byte position just past the line whose ``event_id`` is ``after``.
+
+        An unknown id sits at EOF so the backlog is not replayed.
+        """
+
+        if not path.is_file():
+            return 0
+        with path.open("rb") as handle:
+            while True:
+                line = handle.readline()
+                if not line:
+                    return handle.tell()
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    event = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("event_id") == after:
+                    return handle.tell()
+        return 0
+
+    def _read_events_from(self, path: Path, pos: int) -> tuple[list[dict[str, Any]], int]:
+        """Complete JSONL records at ``pos``. A partial tail stays unread."""
+
+        if not path.is_file():
+            return [], pos
+        with path.open("rb") as handle:
+            handle.seek(pos)
+            data = handle.read()
+        if not data:
+            return [], pos
+        if not data.endswith(b"\n"):
+            cut = data.rfind(b"\n")
+            if cut < 0:
+                return [], pos
+            data = data[: cut + 1]
+        events: list[dict[str, Any]] = []
+        for line in data.splitlines():
+            if not line.strip():
+                continue
+            events.append(json.loads(line))
+        return events, pos + len(data)

@@ -199,15 +199,25 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         request: Request,
         principal=Depends(require_runs),
         after: str | None = None,
+        offset: int | None = Query(default=None, ge=0),
+        follow: float = Query(default=0.0, ge=0, le=30),
+        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> StreamingResponse:
         run_id = ctx.validate_run_id(run_id)
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         if not _tenant_owns_run(ctx, tenant_id, run_id):
             raise HTTPException(status_code=404, detail="run not found")
+        cursor = after if after is not None else last_event_id
 
         def gen():
-            yield from ctx.events.iter_sse(tenant_id, run_id, after=after)
+            yield from ctx.events.iter_sse(
+                tenant_id,
+                run_id,
+                after=cursor,
+                offset=offset,
+                timeout_s=follow,
+            )
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
