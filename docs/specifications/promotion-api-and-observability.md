@@ -41,8 +41,8 @@ Versioned under `/v1`. JSON only. Auth: `X-API-Key` with scoped keys (`runs`, `b
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Liveness |
-| `POST` | `/v1/runs` | Execute a task via `GraphOrchestrator.start` (sync; optional `mode=async`). Body: `request` or `goal`, optional `task_class`, `criteria`, `script`, `budget`, `workdir`, `run_id`, `arm`, `model` (console slug; allowlisted server-side). Quota exhaustion and other `/v1` `HTTPException`s return the error envelope. |
-| `GET` | `/v1/runs` | List/filter runs (console C0) |
+| `POST` | `/v1/runs` | Execute a task via `GraphOrchestrator.start` (default **sync**; `RECERTIA_API_DEFAULT_ASYNC` stays false). `mode=async` enqueues (`202`). Optional wait (async only, cap 30s): `?wait=`, `X-Recertia-Wait`, `Prefer: wait`. Body: `request` or `goal`, optional `task_class`, `criteria`, `script`, `budget`, `workdir`, `run_id`, `arm`, `model` (console slug; allowlisted server-side). Quota exhaustion and other `/v1` `HTTPException`s return the error envelope. |
+| `GET` | `/v1/runs` | List/filter runs for the caller's tenant. Keyset pagination: `limit` (1–100, default 50), `cursor`; body `{items, next_cursor}` from `run_summaries`. |
 | `GET` | `/v1/runs/{run_id}` | Status / terminal / route log (memory + checkpoint fallback) |
 | `POST` | `/v1/runs/{run_id}/resume` | Resume from last checkpoint |
 | `GET` | `/v1/runs/{run_id}/transcript` | Structured transcript |
@@ -68,7 +68,7 @@ Versioned under `/v1`. JSON only. Auth: `X-API-Key` with scoped keys (`runs`, `b
 | `GET` | `/v1/me` · `POST` `/v1/auth/*` | Console session (dev login / OIDC). C5 tenant-switcher **UI** is not shipped. |
 | `POST` | `/v1/goals/*` · `/v1/programs/*` · `/v1/templates` | Goal packs / programs (GP0–GP2) |
 
-`POST /v1/runs` is **not** enqueue-only in sync mode: it drives the graph to a terminal (or error) before responding. Async mode returns 202 and streams via SSE.
+`POST /v1/runs` is **not** enqueue-only in sync mode: it drives the graph to a terminal (or error) before responding. Async mode returns 202 (or the terminal record if a wait completes) and streams via SSE. Drain with `recertia worker` or the API's embedded queue thread.
 
 Console-oriented behaviour is specified normatively in [`product-console.md`](product-console.md). **product-console.md wins on conflicts** for C0–C4.
 
@@ -96,7 +96,10 @@ recertia skills lint [--skills-root skills]
 recertia skills search "dependency bump" --explain
 recertia skills promote <skill_id> --version N --golden-dir PATH
 # or: --golden-root PATH [--require-task-class-gate]
-recertia ledger verify [--runs-root .recertia]
+recertia ledger verify [--runs-root .recertia] [--check-sig] [--check-anchor]
+recertia ledger rekey --dry-run
+recertia worker [--root .recertia] [--once] [--concurrency 1]
+recertia tenant export --tenant <id> [--execute --dest DIR]
 recertia lift --task-class repo-chore
 recertia keys issue|revoke|list
 recertia jobs run curator --dry-run
@@ -111,6 +114,7 @@ recertia policy
 recertia policy propose retrieval.min_score=0.60 --eval-compare "note"
 recertia memory query "dependency bump"
 recertia backup [--root .recertia] [--output backups/recertia.tar.gz]
+recertia backup verify backups/recertia.tar.gz
 recertia restore backups/recertia.tar.gz --dest .recertia-restore
 recertia tabletop <run_id> [--restore-from backups/recertia.tar.gz]
 recertia canary [--live]

@@ -1,6 +1,6 @@
 # Remediation plan
 
-**Status:** approved for implementation. This is the order of work. Item internals live in the workstream specs. This file is enough to see what ships, what it depends on, and what it breaks.
+**Status:** approved for implementation. The first operator-visible slice (tenant-keyed SQLite control plane, durable queue, HMAC ledger, backup, console cookie hardening) is on `cursor/remediation-implementation-d6c6`. Postgres RLS, KMS, Firecracker, JWKS signature verify, crypto-shred, and the async-by-default flip remain later work. Item internals live in the workstream specs. This file is enough to see what ships, what it depends on, and what it breaks. User-facing notes: [`CHANGELOG.md`](../../../CHANGELOG.md) Unreleased.
 
 **Decisions:** [ADR-0021](../../adr/0021-deployment-model.md) (D1–D5). D1 is accepted, so REL-10 is a committed phase.
 

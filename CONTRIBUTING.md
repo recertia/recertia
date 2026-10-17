@@ -41,6 +41,8 @@ pytest -v
 
 API `POST /v1/runs` refuses the local backend unless `RECERTIA_API_ALLOW_LOCAL_EXEC=1`
 is set (break-glass). Pytest already sets that in `tests/conftest.py`.
+`RECERTIA_DEPLOYMENT_MODE=multi_node` refuses SQLite and the local backend
+([ADR-0021](docs/adr/0021-deployment-model.md)); development stays `single_node`.
 
 ## Checks before you send a change
 
@@ -78,7 +80,8 @@ repo. Markdown notes and bibliography extracts in that tree are also plain git.
 - Keep diffs on-task. Do not rewrite archived Q3 plans or mark research assumptions
   in [`docs/assumptions.md`](docs/assumptions.md) `supported` from CI alone.
 - Default T2 policy is [`policy/default.json`](policy/default.json). Weekly job spend
-  belongs in `.recertia/job_quota.json`, not in that file.
+  belongs in `{runs_root}/jobs/job_quota.sqlite` (JSON sidecar
+  `{runs_root}/jobs/job_quota.json` is the operator export), not in that file.
 - HEX/compress flags stay off unless the enablement predicates in
   [`docs/architecture/remaining-work.md`](docs/architecture/remaining-work.md) hold.
 

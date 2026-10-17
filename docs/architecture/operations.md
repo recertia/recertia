@@ -15,6 +15,15 @@
 The v1 column lets one developer run everything locally with no services; the upgrade path is
 a driver swap rather than a data model change.
 
+Tenants are first-class on this tree: run state and events live at
+`root/runs/<tenant>/`, blobs at `root/blobs/<tenant>/`. The control queue is
+`root/control.db` (`recertia worker`). Backup (`recertia backup`) snapshots
+SQLite with the online backup API, writes `MANIFEST.json` (sha256 per file),
+and takes an exclusive root lock; the API holds that lock shared, so backup
+refuses while the API is up. Restore also takes the lock.
+[ADR-0021](../adr/0021-deployment-model.md) `multi_node` refuses SQLite; Postgres
+RLS is not in this release.
+
 ### 9.1 What consulting memory costs
 
 Recertia's premise is that the memory planes get bigger and runs get better because of it.

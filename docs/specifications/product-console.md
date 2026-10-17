@@ -83,8 +83,8 @@ Unless noted, JSON request/response. Error envelope target:
 
 | Method | Path | Purpose | Milestone |
 | --- | --- | --- | --- |
-| `GET` | `/v1/runs` | List runs for the caller's tenant. Query: `task_class`, `terminal`, `cursor`, `limit` (≤100) | C0 |
-| `POST` | `/v1/runs` | Create run. Body adds optional `mode`: `sync` (default, current behaviour) \| `async` | C2 for `async` |
+| `GET` | `/v1/runs` | List runs for the caller's tenant. Query: `task_class`, `terminal`, `cursor`, `limit` (1–100, default 50). Body `{items, next_cursor}` from `run_summaries` | C0 |
+| `POST` | `/v1/runs` | Create run. Body adds optional `mode`: `sync` (default; `RECERTIA_API_DEFAULT_ASYNC` stays false) \| `async`. Async wait (cap 30s): `?wait=`, `X-Recertia-Wait`, `Prefer: wait` | C2 for `async` |
 | `GET` | `/v1/runs/{run_id}` | Status, terminal, route_log, spend summary, manifest pins | exists; extend fields C0 |
 | `GET` | `/v1/runs/{run_id}/transcript` | Structured transcript (or signed blob redirect) | C0 |
 | `GET` | `/v1/runs/{run_id}/trajectory` | Trajectory header + event summary | C1 |
@@ -101,7 +101,7 @@ Async create response:
 { "run_id": "...", "status": "queued", "mode": "async" }
 ```
 
-HTTP status `202` when `mode=async`. Sync mode keeps today's blocking semantics and `200`.
+HTTP status `202` when `mode=async` and no wait completes. Sync mode keeps blocking semantics and `200`. A wait that finishes before the cap returns the terminal record.
 
 ### 3.2 Skills
 
@@ -163,9 +163,12 @@ constructs from `policy/default.json` plus the weekly quota sidecar.
 | --- | --- | --- |
 | `GET` | `/v1/me` | Human identity, roles, tenants |
 | `POST` | `/v1/auth/logout` | End session |
+| `POST` | `/v1/auth/switch-tenant` | Switch `active_tenant` within membership |
 
 OIDC login routes MAY live on the BFF (`/auth/login`, `/auth/callback`) rather than under
-`/v1`.
+`/v1`. Session cookies are ignored when `RECERTIA_CONSOLE_AUTH=off`. Cookie is v2,
+`SameSite=Strict`, CSRF double-submit (`X-Recertia-CSRF`). OIDC nonce + `jti`;
+JWKS signature verify is not shipped. C5 tenant-switcher **UI** is not shipped.
 
 ## 4. Run events (SSE)
 

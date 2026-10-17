@@ -87,6 +87,8 @@ the chapter text itself is inlined here so this file is readable offline.
 - [ADR-0017: Version-write budget is a first-class dimension](#ch-adr-0017-version-write-budget) — `adr/0017-version-write-budget.md`
 - [ADR-0018: Idle-state offloading for working-set residency](#ch-adr-0018-idle-state-offloading) — `adr/0018-idle-state-offloading.md`
 - [ADR-0019: External trajectories and optional computer-use backends](#ch-adr-0019-external-trajectories) — `adr/0019-external-trajectories.md`
+- [ADR-0020: Store Receipts — the published durability unit](#ch-adr-0020-store-receipts) — `adr/0020-store-receipts.md`
+- [ADR-0021: Multi-tenant service with pooled control plane and isolated execution](#ch-adr-0021-deployment-model) — `adr/0021-deployment-model.md`
 
 ### Part IV — Assumptions and references
 
@@ -873,9 +875,10 @@ The checked-in T2 document is [`policy/default.json`](../policy/default.json)
 (`RECERTIA_POLICY_PATH` overrides). It holds `ImprovementFlags`, `ImprovementLimits`, and
 the `JobQuota` **caps**. Flags MUST NOT grow `contracts.graph.NODES`.
 
-Weekly spend (`tokens_spent`, HEX counters) is a T0 sidecar next to the job runs root
-(`.recertia/job_quota.json` or `{runs_root}/jobs/job_quota.json`). ISO-week rollover in UTC
-resets spend. The policy file is never rewritten to record consumption.
+Weekly spend (`tokens_spent`, HEX counters) is reserved then settled in
+`job_quota.sqlite` next to the job runs root. `{runs_root}/jobs/job_quota.json`
+(or `.recertia/jobs/job_quota.json`) is the operator export. ISO-week rollover
+in UTC resets spend. The policy file is never rewritten to record consumption.
 
 Admit order: recertifier → curator retire → fail-cluster author → practice band →
 practice HEX (≤25% leftover) → compress. HEX and compress remain default-off.
@@ -973,6 +976,15 @@ Disable extract: `RECERTIA_PDF_EXTRACT=0`.
 
 The v1 column lets one developer run everything locally with no services; the upgrade path is
 a driver swap rather than a data model change.
+
+Tenants are first-class on this tree: run state and events live at
+`root/runs/<tenant>/`, blobs at `root/blobs/<tenant>/`. The control queue is
+`root/control.db` (`recertia worker`). Backup (`recertia backup`) snapshots
+SQLite with the online backup API, writes `MANIFEST.json` (sha256 per file),
+and takes an exclusive root lock; the API holds that lock shared, so backup
+refuses while the API is up. Restore also takes the lock.
+[ADR-0021](adr/0021-deployment-model.md) `multi_node` refuses SQLite; Postgres
+RLS is not in this release.
 
 ### 9.1 What consulting memory costs
 
@@ -1108,7 +1120,10 @@ python3 scripts/smoke_container.py
 ```
 
 Development escape hatch (no OCI): `recertia run --local-exec …` or
-`RECERTIA_EXECUTION_BACKEND=local`.
+`RECERTIA_EXECUTION_BACKEND=local`. `--local-exec` does not write process env.
+`RECERTIA_DEPLOYMENT_MODE=multi_node` refuses the local backend
+([ADR-0021](adr/0021-deployment-model.md)). The local executor drops provider
+and tenant secrets from the child environment.
 
 ## Runtime selection
 
@@ -1194,6 +1209,7 @@ and a lint-clean seed library.
 | OpenAI | `OPENAI_API_KEY`, `RECERTIA_MODEL_PROVIDER=openai`, `RECERTIA_MODEL_ID=gpt-…` |
 | Override key env | `RECERTIA_API_KEY_ENV=MY_KEY_VAR` |
 | Optional verifier | `RECERTIA_VERIFIER_MODEL_ID=…` (same provider family) |
+| Per-tenant keys | JSON object in `RECERTIA_TENANT_MODEL_KEYS`, or a mode-0600 file at `RECERTIA_TENANT_MODEL_KEYS_FILE`: `{"demo":{"anthropic":"…","openai":"…"}}`. The local executor drops those secrets from the child environment. |
 
 CLI shorthand:
 
@@ -1288,8 +1304,14 @@ opt in.
 | Dev login | `RECERTIA_CONSOLE_AUTH=dev` **and** `RECERTIA_CONSOLE_DEV_LOGIN=1`. Admin roles also need `RECERTIA_CONSOLE_DEV_ADMIN=1`. |
 | OIDC | `RECERTIA_CONSOLE_AUTH=oidc` plus issuer/client id/secret **and** `RECERTIA_CONSOLE_SESSION_SECRET` (≥32 chars). PKCE S256 + one-time `state`. |
 
-Cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` except in `dev`. The session
-token is not returned in JSON and is not stored in `localStorage`.
+Cookie `recertia_session` is v2, `HttpOnly`, `SameSite=Strict`, and `Secure`
+except in `dev`. When `RECERTIA_CONSOLE_AUTH=off`, session cookies and
+`X-Recertia-Session` are ignored (API keys only). Cookie POSTs send
+`X-Recertia-CSRF` matching the `recertia_csrf` cookie (double-submit). An
+`Origin` header, when present, must match `Host`. OIDC uses PKCE S256, a nonce,
+and rejects a reused `jti`. ID-token signature verification against JWKS is not
+shipped. The session token is not returned in JSON and is not stored in
+`localStorage`.
 
 Promote and improvement jobs require the `promote` / `jobs` API-key scopes (or
 `admin`), or a console reviewer session. A `runs` key cannot approve skills.
@@ -1297,7 +1319,10 @@ Promote and improvement jobs require the `promote` / `jobs` API-key scopes (or
 ## Jobs and retention
 
 Policy: [`policy/default.json`](../policy/default.json). Override with
-`RECERTIA_POLICY_PATH`. Weekly spend is `{runs-root}/jobs/job_quota.json` (T0 sidecar).
+`RECERTIA_POLICY_PATH`. Weekly spend is reserved then settled in
+`{runs-root}/jobs/job_quota.sqlite`. `{runs-root}/jobs/job_quota.json` is the
+operator export (do not write spend into the policy file).
+`RECERTIA_QUOTA_RESERVE_TTL_S` (default 86400) releases stale reservations.
 
 ```bash
 recertia jobs run curator --dry-run
@@ -1321,7 +1346,10 @@ export RECERTIA_EXECUTION_BACKEND=container
 # or: recertia run … --local-exec   # sets backend=local for this process
 ```
 
-See [container-sandbox.md](architecture/container-sandbox.md).
+`--local-exec` is a per-invocation override; it does not write
+`RECERTIA_EXECUTION_BACKEND`. `RECERTIA_DEPLOYMENT_MODE=multi_node` refuses the
+local backend (and SQLite). See [container-sandbox.md](architecture/container-sandbox.md)
+and [ADR-0021](adr/0021-deployment-model.md).
 
 ## Measurement pins
 
@@ -1384,7 +1412,7 @@ snapshots, transcripts, episodic, skill index, API keys).
 
 | Item | Guidance |
 | --- | --- |
-| Backup / RPO | Nightly `python3 scripts/backup_recertia.py` or `recertia backup`; target RPO ≤ 24h for single-operator |
+| Backup / RPO | Nightly `python3 scripts/backup_recertia.py` or `recertia backup`; `recertia backup verify` checks `MANIFEST.json` sha256. Backup/restore take the root lock and refuse if the API holds it. Target RPO ≤ 24h for single-operator |
 | Postgres soak | `docker compose -f docker-compose.soak.yml up -d` then `DATABASE_URL=postgresql://recertia:recertia@localhost:5432/recertia python3 scripts/soak_postgres.py --recertia-root .recertia` (weekly via `.github/workflows/weekly-ops.yml`) |
 | Dashboards | `GET /v1/metrics/dashboard` (scope `metrics`) or `recertia metrics`; OTel JSONL under the runs root |
 | Retention | `recertia gc --older-than-days 14` on a weekly cron |
@@ -1395,6 +1423,35 @@ Tabletop incident review: `recertia tabletop <run_id> --restore-from backups/…
 writes the ops log JSON. See [`incident-tabletop.md`](architecture/incident-tabletop.md).
 `recertia canary --live` scores planted failures with `RECERTIA_VERIFIER_MODEL_ID`
 and does not update assumption `a4`.
+
+## Tenancy, queue, and HTTP waits
+
+Development default is `RECERTIA_DEPLOYMENT_MODE=single_node` (SQLite + files under
+`.recertia/`). Tenants are still first-class: runs and events live at
+`root/runs/<tenant>/`, blobs at `root/blobs/<tenant>/`. Memberships are
+`tenant_admin` or `operator`. The CLI is `platform_admin`.
+
+```bash
+recertia tenant export --tenant default
+recertia tenant export --tenant default --execute --dest /tmp/default-export
+recertia worker --root .recertia --once
+recertia ledger verify --check-sig
+recertia ledger rekey --dry-run
+```
+
+`POST /v1/runs` default is still **sync**. `RECERTIA_API_DEFAULT_ASYNC` stays
+false. `mode=async` enqueues onto `control.db`; the API starts an embedded
+drainer, or run `recertia worker`. Optional wait (async only, cap 30s):
+`?wait=<seconds>`, `X-Recertia-Wait`, or `Prefer: wait` / `Prefer: wait=<seconds>`.
+Timeout returns `202`. `GET /v1/runs` pages with `limit` (1–100) and `cursor`;
+the body is `{items, next_cursor}`.
+
+`RECERTIA_ENV=prod` turns off `/docs`, `/redoc`, and `/openapi.json`. The API
+sets umask `077`. Optional `RECERTIA_LEDGER_HMAC_KEY` signs new ledger lines
+(and seed `version.hmac`); unsigned history still verifies until the first
+signed line.
+
+Operator release notes: [`CHANGELOG.md`](../CHANGELOG.md) Unreleased.
 
 <a id="ch-architecture-openai-compat-gateways"></a>
 
@@ -2172,7 +2229,7 @@ the golden gate, or the offline improvement plane.
 | Two tempos | **Pilot** (run) vs **Tower** (library / jobs / review) |
 | Git as source of truth for library | `skills/`, `facts/`, `policy/` remain reviewable artifacts |
 | Buy observability | Grafana / OTel for deep dashboards; console shows operational summaries |
-| Single-operator first | Multi-tenant UX deferred to Phase-4 gate |
+| Single-operator first | Control-plane tenancy is shipped; C5 console chrome stays gated |
 | Honest unavailable | Metrics panels reuse `MetricReport.unavailable` reasons (B7) |
 
 ## 3. Surfaces
@@ -2249,8 +2306,8 @@ quota and identity, not necessarily self-serve key minting.
 
 | Mode | When | Behaviour |
 | --- | --- | --- |
-| Sync (today) | Short chores, CLI/API scripts | `POST /v1/runs` blocks until terminal |
-| Async (console default) | Pilot live UX | `POST /v1/runs` with `Prefer: respond-async` (or `mode=async`) returns `202` + `run_id`; worker drives graph; clients subscribe to `/v1/runs/{id}/events` |
+| Sync (default) | Short chores, CLI/API scripts | `POST /v1/runs` blocks until terminal. `RECERTIA_API_DEFAULT_ASYNC` stays false |
+| Async | Pilot live UX, `mode=async` | Enqueues on `control.db`, returns `202` + `run_id` unless a wait is set (`?wait=`, `X-Recertia-Wait`, `Prefer: wait`, cap 30s). Drain with the embedded API worker or `recertia worker`. Clients subscribe to `/v1/runs/{id}/events` |
 
 Both modes share `GraphOrchestrator`, checkpoints, manifests, and ledgers. Async is an
 admission and transport change, not a second graph.
@@ -2285,12 +2342,13 @@ split — not a third store ([ADR-0015](adr/0015-improvement-plane-search.md)).
 
 | Actor | Mechanism | Console role |
 | --- | --- | --- |
-| Human operator / reviewer | OIDC (or SSO proxy injecting identity); default auth is off | Session cookie (`HttpOnly`, `SameSite=Lax`, `Secure` outside dev); roles `operator`, `reviewer`, `admin` |
-| Automation / CI | Existing `X-API-Key` scopes | Unchanged |
-| Browser → API | BFF holds session; exchanges for scoped service credentials or passes user JWT with audience=recertia-api | Never embed long-lived API keys in SPA |
+| Human operator / reviewer | OIDC (or SSO proxy injecting identity); default auth is off | Session cookie v2 (`HttpOnly`, `SameSite=Strict`, `Secure` outside `dev`); CSRF double-submit (`recertia_csrf` + `X-Recertia-CSRF`); Origin must match Host when present; roles `operator`, `reviewer`, `admin`. OIDC nonce + `jti`; JWKS signature verify is not shipped |
+| Automation / CI | Existing `X-API-Key` scopes (HMAC-SHA256) | Unchanged |
+| Browser → API | BFF holds session; exchanges for scoped service credentials or passes user JWT with audience=recertia-api | Never embed long-lived API keys in SPA. Sessions are ignored when `RECERTIA_CONSOLE_AUTH=off` |
 
-Tenant binding: human identity maps to one or more `tenant_id`s. Until Phase 4, default is a
-single tenant.
+Tenant binding: human identity maps to one or more `tenant_id`s. Memberships are
+`tenant_admin` or `operator`. API keys stay single-tenant. C5 console chrome
+(Phase-4 gate) is not shipped; `GET /v1/me` and `POST /v1/auth/switch-tenant` exist.
 
 ## 5. Out-of-band integrations (preferred over reimplementation)
 
@@ -3019,8 +3077,8 @@ Versioned under `/v1`. JSON only. Auth: `X-API-Key` with scoped keys (`runs`, `b
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Liveness |
-| `POST` | `/v1/runs` | Execute a task via `GraphOrchestrator.start` (sync; optional `mode=async`). Body: `request` or `goal`, optional `task_class`, `criteria`, `script`, `budget`, `workdir`, `run_id`, `arm`, `model` (console slug; allowlisted server-side). Quota exhaustion and other `/v1` `HTTPException`s return the error envelope. |
-| `GET` | `/v1/runs` | List/filter runs (console C0) |
+| `POST` | `/v1/runs` | Execute a task via `GraphOrchestrator.start` (default **sync**; `RECERTIA_API_DEFAULT_ASYNC` stays false). `mode=async` enqueues (`202`). Optional wait (async only, cap 30s): `?wait=`, `X-Recertia-Wait`, `Prefer: wait`. Body: `request` or `goal`, optional `task_class`, `criteria`, `script`, `budget`, `workdir`, `run_id`, `arm`, `model` (console slug; allowlisted server-side). Quota exhaustion and other `/v1` `HTTPException`s return the error envelope. |
+| `GET` | `/v1/runs` | List/filter runs for the caller's tenant. Keyset pagination: `limit` (1–100, default 50), `cursor`; body `{items, next_cursor}` from `run_summaries`. |
 | `GET` | `/v1/runs/{run_id}` | Status / terminal / route log (memory + checkpoint fallback) |
 | `POST` | `/v1/runs/{run_id}/resume` | Resume from last checkpoint |
 | `GET` | `/v1/runs/{run_id}/transcript` | Structured transcript |
@@ -3046,7 +3104,7 @@ Versioned under `/v1`. JSON only. Auth: `X-API-Key` with scoped keys (`runs`, `b
 | `GET` | `/v1/me` · `POST` `/v1/auth/*` | Console session (dev login / OIDC). C5 tenant-switcher **UI** is not shipped. |
 | `POST` | `/v1/goals/*` · `/v1/programs/*` · `/v1/templates` | Goal packs / programs (GP0–GP2) |
 
-`POST /v1/runs` is **not** enqueue-only in sync mode: it drives the graph to a terminal (or error) before responding. Async mode returns 202 and streams via SSE.
+`POST /v1/runs` is **not** enqueue-only in sync mode: it drives the graph to a terminal (or error) before responding. Async mode returns 202 (or the terminal record if a wait completes) and streams via SSE. Drain with `recertia worker` or the API's embedded queue thread.
 
 Console-oriented behaviour is specified normatively in [`product-console.md`](specifications/product-console.md). **product-console.md wins on conflicts** for C0–C4.
 
@@ -3074,7 +3132,10 @@ recertia skills lint [--skills-root skills]
 recertia skills search "dependency bump" --explain
 recertia skills promote <skill_id> --version N --golden-dir PATH
 # or: --golden-root PATH [--require-task-class-gate]
-recertia ledger verify [--runs-root .recertia]
+recertia ledger verify [--runs-root .recertia] [--check-sig] [--check-anchor]
+recertia ledger rekey --dry-run
+recertia worker [--root .recertia] [--once] [--concurrency 1]
+recertia tenant export --tenant <id> [--execute --dest DIR]
 recertia lift --task-class repo-chore
 recertia keys issue|revoke|list
 recertia jobs run curator --dry-run
@@ -3089,6 +3150,7 @@ recertia policy
 recertia policy propose retrieval.min_score=0.60 --eval-compare "note"
 recertia memory query "dependency bump"
 recertia backup [--root .recertia] [--output backups/recertia.tar.gz]
+recertia backup verify backups/recertia.tar.gz
 recertia restore backups/recertia.tar.gz --dest .recertia-restore
 recertia tabletop <run_id> [--restore-from backups/recertia.tar.gz]
 recertia canary [--live]
@@ -3241,8 +3303,8 @@ Unless noted, JSON request/response. Error envelope target:
 
 | Method | Path | Purpose | Milestone |
 | --- | --- | --- | --- |
-| `GET` | `/v1/runs` | List runs for the caller's tenant. Query: `task_class`, `terminal`, `cursor`, `limit` (≤100) | C0 |
-| `POST` | `/v1/runs` | Create run. Body adds optional `mode`: `sync` (default, current behaviour) \| `async` | C2 for `async` |
+| `GET` | `/v1/runs` | List runs for the caller's tenant. Query: `task_class`, `terminal`, `cursor`, `limit` (1–100, default 50). Body `{items, next_cursor}` from `run_summaries` | C0 |
+| `POST` | `/v1/runs` | Create run. Body adds optional `mode`: `sync` (default; `RECERTIA_API_DEFAULT_ASYNC` stays false) \| `async`. Async wait (cap 30s): `?wait=`, `X-Recertia-Wait`, `Prefer: wait` | C2 for `async` |
 | `GET` | `/v1/runs/{run_id}` | Status, terminal, route_log, spend summary, manifest pins | exists; extend fields C0 |
 | `GET` | `/v1/runs/{run_id}/transcript` | Structured transcript (or signed blob redirect) | C0 |
 | `GET` | `/v1/runs/{run_id}/trajectory` | Trajectory header + event summary | C1 |
@@ -3259,7 +3321,7 @@ Async create response:
 { "run_id": "...", "status": "queued", "mode": "async" }
 ```
 
-HTTP status `202` when `mode=async`. Sync mode keeps today's blocking semantics and `200`.
+HTTP status `202` when `mode=async` and no wait completes. Sync mode keeps blocking semantics and `200`. A wait that finishes before the cap returns the terminal record.
 
 ### 3.2 Skills
 
@@ -3321,9 +3383,12 @@ constructs from `policy/default.json` plus the weekly quota sidecar.
 | --- | --- | --- |
 | `GET` | `/v1/me` | Human identity, roles, tenants |
 | `POST` | `/v1/auth/logout` | End session |
+| `POST` | `/v1/auth/switch-tenant` | Switch `active_tenant` within membership |
 
 OIDC login routes MAY live on the BFF (`/auth/login`, `/auth/callback`) rather than under
-`/v1`.
+`/v1`. Session cookies are ignored when `RECERTIA_CONSOLE_AUTH=off`. Cookie is v2,
+`SameSite=Strict`, CSRF double-submit (`X-Recertia-CSRF`). OIDC nonce + `jti`;
+JWKS signature verify is not shipped. C5 tenant-switcher **UI** is not shipped.
 
 ## 4. Run events (SSE)
 
@@ -4170,8 +4235,10 @@ latency regression it causes: correctness outranks the parallelism metric.
 [`policy/default.json`](../policy/default.json) is the versioned T2 `Policy` document
 (`RECERTIA_POLICY_PATH` overrides). `ImprovementFlags` (including `deterministic_guide`,
 `practice_hex_search`, `curator_compress`) MUST NOT change graph topology. Caps live on
-`Policy.job_quota`; weekly spend lives on a T0 sidecar and MUST NOT be written back into the
-policy file. ISO week in UTC is the rollover key.
+`Policy.job_quota`; weekly spend is reserved then settled in `job_quota.sqlite`
+and MUST NOT be written back into the policy file. The JSON sidecar
+(`job_quota.json`) is the operator export of settled spend. ISO week in UTC is
+the rollover key.
 
 Priority for `can_admit`: `recertifier` → `curator_retire` → `fail_cluster_author` →
 `practice_band` → `practice_hex` (≤ `hex_share` of leftover) → `compress`. Operator names
@@ -4219,8 +4286,12 @@ class LedgerEntry(BaseModel):
     at: datetime
 ```
 
-`GET /v1/ledger/verify` recomputes the chain. Because the system writes its own memory,
-"who wrote this and on what evidence" must be tamper-evident rather than merely logged.
+`GET /v1/ledger/verify` recomputes the chain. `recertia ledger verify --check-sig`
+verifies HMAC signatures when `RECERTIA_LEDGER_HMAC_KEY` is set; unsigned entries
+are allowed until the first signed one. `--check-anchor` is reserved and skipped.
+`recertia ledger rekey --dry-run` counts unsigned vs signed lines and does not
+rewrite history. Because the system writes its own memory, "who wrote this and on
+what evidence" must be tamper-evident rather than merely logged.
 
 ## 22. Governance of mutable surfaces
 
@@ -6210,6 +6281,203 @@ A draft on closed PR #33 duplicated `TrajectoryImport`, used kebab task-class na
 ## Rollback
 
 Any promotion that cannot be reversed, any control-arm that cannot be executed, any relaxation of default isolation, or any surface that looks like a standing Bot.
+
+<a id="ch-adr-0020-store-receipts"></a>
+
+> Source: [`adr/0020-store-receipts.md`](adr/0020-store-receipts.md)
+
+# ADR-0020: Store Receipts — the published durability unit
+
+- **Status:** proposed
+- **Date:** 2026-09-23
+- **Related:** [ADR-0004](adr/0004-offline-improvement-plane.md), [ADR-0007](adr/0007-skill-identity-status-and-stats-split.md), [ADR-0009](adr/0009-contracts-as-code.md), [ADR-0011](adr/0011-trajectory-and-counterfactual-replay.md), [ADR-0017](adr/0017-version-write-budget.md), [ADR-0018](adr/0018-idle-state-offloading.md)
+- **Plan:** [docs/plans/2026-09-23-store-receipts.md](plans/2026-09-23-store-receipts.md)
+- **Inventory:** RW-SR in [remaining-work.md](architecture/remaining-work.md)
+
+## Context
+
+Operator docs currently treat the durability unit as the entire `.recertia/` tree.
+`recertia backup` / `scripts/backup_recertia.py` tar that tree. `recertia tabletop --restore-from` unpacks it.
+The live tree is also the working set: loose JSON cases, hash-addressed blobs, and `WorkspaceManager.snapshot` `copy2` directories.
+A file is treated as durable because it exists. That is why backups accumulate many small files, and why restore copies isolation state that ADR-0018 already classified as residency, not memory.
+
+ADR-0007 already split immutable `SkillVersion` (JSON in git) from rebuildable `SkillStatus` / `SkillStats`.
+[operations.md](architecture/operations.md) already names SQLite for status, stats, and cases.
+ADR-0004 already named the offline closer (Curator / sleep).
+ADR-0011 already named tabletop replay.
+None of those ADRs change what `backup` is allowed to drop.
+
+## Decision
+
+1. The published durability unit is a `close_receipt` ledger entry plus the objects it names (`reviewed_git`, `fold_digest`, `residue_cid`).
+2. `.recertia/` is a checkout of that receipt. Presence of a file does not make it durable.
+3. Runs do not close receipts. Curator, sleep, or `recertia receipt close` do. Empty `compression_moves` is valid.
+4. Hash mismatch on restore is `RoutingError`. Genesis after upgrade must inventory the existing tree.
+
+Promote this ADR to **accepted** only before Phase 4 flips `backup --receipts` to default, or before GC may delete uncited loose files. Those two acts change what a restore is allowed to drop.
+
+## What this does not decide
+
+Pack codec, dual-read windows, `VACUUM INTO` versus the SQLite backup API, when to delete loose files, validity-window column layout, provenance-unit split, ACE-shaped skill diffs. Those live in remaining-work and `contracts/receipt.py` (ADR-0009).
+
+Do not re-decide ADR-0007 (fold rows), ADR-0004 (sleep is the closer), ADR-0011 (tabletop restores named state), ADR-0017 (no per-hop receipt), or ADR-0018 (offload remains residency, default-off).
+
+## Alternatives considered
+
+- **Keep tar-of-tree.** Rejected as the long-term unit: it backups working-set leftovers and scales with inode count.
+- **Finish ADR-0007 SQLite and leave backup as a directory copy.** Necessary but insufficient; the published unit would still be the tree.
+- **Pack blobs but keep "the tree is the backup."** Relocates the metadata tax; restore still copies what was never folded.
+- **Close a receipt per run or hop.** Fights ADR-0017 and explodes the ledger.
+
+## Consequences by phase
+
+Phases are engineering increments, not new decisions. Full done-whens: [the plan](plans/2026-09-23-store-receipts.md).
+
+| Phase | What lands | Durability unit | ADR status |
+| --- | --- | --- | --- |
+| P0 | This ADR + `StoreReceipt` + `close_receipt` | unchanged (tree) | proposed |
+| P1 | Receipt index inside the existing tar | unchanged (tree + receipts.jsonl) | proposed |
+| P2 | Fold SQLite (ADR-0007 debt) | unchanged | proposed |
+| P3 | Residue packs; readers accept pack or loose | unchanged | proposed |
+| P4 | `backup --receipts`; tabletop-from-receipt | **flips** after one soak week compares both | **accepted** in the same PR |
+| P5 | Sleep closer; spectrum moves; validity windows | receipt spine | accepted; HEX/`curator_compress` still gated |
+
+### P0
+
+`contracts/receipt.py` is the structural source. `LedgerAction` gains `close_receipt`.
+Do not hand-edit `schema/`.
+
+### P1
+
+Append `close_receipt` on existing `store` / Curator paths. Embed `receipts.jsonl` in the current tar.
+`fold_digest` may be null. `residue_cid` may be a path-and-hash manifest. Dual-write makes disk use go *up*.
+Do not advertise inode wins. RW-GA tabletop-from-tar stays the ops gate.
+
+### P2
+
+`SkillStatus` event log, `SkillStats`, `CaseRecord`, and an `edges` table move into one `.db`.
+Dual-read. `fold_digest` becomes the hash of a SQLite backup snapshot taken at close.
+JSON dirs are not deleted in this phase.
+
+### P3
+
+New writes from transcript / blob / workspace snapshot land in a packfile.
+`snapshot_ref` becomes a CID. Windows needs no reflink. ADR-0018 stays default-off.
+A CID mismatch is `RoutingError`.
+
+### P4
+
+`backup_tree --receipts` copies ledger + git bundle of reviewed memory + fold snapshot + residue packs.
+Tabletop accepts a receipt directory as well as a tar.
+Flip the default only after one counted soak week restores both ways with recorded TTR.
+Then this ADR becomes accepted, and go-live / backup / tabletop sentences that name the tree as the unit are amended in the same PR.
+RPO stays ≤ 24h.
+
+### P5
+
+Curator becomes the receipt closer. `compression_moves` only with faithfulness / control-arm evidence.
+Sleep never writes `SkillVersion`. Distill → review → store remains the only path into `reviewed_git`.
+`valid_from` / `valid_to` on fact and case rows; retrieve defaults to current.
+Demotion is a `close_receipt` with `compression_moves.delta = -1`; the git object is superseded, not deleted.
+`curator_compress` and HEX stay false until existing RW-HEX predicates fire.
+
+## Non-goals
+
+Neo4j, Graphiti extraction, A-MEM neighbor rewrite, KV-cache persistence, weight updates, ReFS requirement, retrieve ranking rewrite, enabling idle offload, enabling HEX/compress, a sixteenth graph node.
+
+<a id="ch-adr-0021-deployment-model"></a>
+
+> Source: [`adr/0021-deployment-model.md`](adr/0021-deployment-model.md)
+
+# ADR-0021: Multi-tenant service with pooled control plane and isolated execution
+
+- **Status:** accepted
+- **Date:** 2026-10-16
+- **Decides:** D1. D2–D5 are recorded in this ADR so later specs do not re-litigate them.
+- **Related:** [ADR-0001](adr/0001-graph-with-loops.md), [ADR-0009](adr/0009-contracts-as-code.md), [ADR-0018](adr/0018-idle-state-offloading.md), [ADR-0020](adr/0020-store-receipts.md), [threat-model deltas](architecture/threat-model-deltas.md), [operations](architecture/operations.md)
+- **Plan:** [docs/plans/remediation/README.md](plans/remediation/README.md)
+
+## Context
+
+Recertia persists as a single operator tree: SQLite files and JSON under a gitignored `.recertia/` directory, opened by the process that is serving the request. That is the shape [operations](architecture/operations.md) documents, and it is the shape the test suite and the local executor assume.
+
+The product surface has already moved past a single operator. API keys carry a `tenant_id`. Quotas are counted per tenant. The console speaks OIDC and has a tenant switcher. Run identifiers are stored as `(tenant_id, run_id)`. None of that is a deployment model. Two API replicas would fork the ledger, share one container runtime, and read each other's session state.
+
+The owner decision is that Recertia is a multi-tenant service. The single-operator tree remains a supported mode for development and for an operator who runs one node on purpose.
+
+## Decision
+
+D1. Recertia is a multi-tenant service with two planes.
+
+1. **Control plane, pooled.** Stateless API replicas. Postgres is the system of record: every tenant-owned row carries `tenant_id`, and row-level security is on. Blobs, transcripts, snapshots, and the other large objects live in object storage under a `tenants/<tenant_id>/` prefix. Any replica can serve any tenant. A replica stores nothing that another replica must read from its local disk.
+2. **Execution plane, isolated per tenant.** An executor service runs commands and containers for one tenant. The API process never holds a container runtime socket in `multi_node`. There is no local execution backend in `multi_node`.
+3. **Tenants stay first-class in `single_node`.** Development, CI, and a self-hosted single node keep the SQLite-and-files tree. They still authenticate a tenant, still apply quotas, and still refuse a cross-tenant read. That is defence in depth, so a bug in path joining is caught before it depends on Postgres RLS. `single_node` is the default for development.
+
+`Settings.deployment_mode` is `single_node` or `multi_node`. Startup of every process role (API, worker, CLI, executor client) refuses a `multi_node` configuration that is unsafe. The refused set is in Consequences. `RECERTIA_API_ALLOW_LOCAL_EXEC` has no effect in `multi_node`.
+
+REL-10 (pooled control plane) and REL-11 (tenant lifecycle and fairness) are in scope. This ADR is already accepted, so REL-10 is not waiting on a later acceptance flip.
+
+## Related decisions
+
+These are part of this ADR. Specs cite them by id.
+
+### D2 — `runs` may run commands; `exec` is for a raw script; local is single-node only
+
+The `runs` scope may submit caller-supplied commands. Those commands run on the container backend. In `single_node` they may also run on the local backend, and only behind the existing API break-glass (`RECERTIA_API_ALLOW_LOCAL_EXEC=1`). The `exec` scope (or `admin`) is required only for a raw `script` body.
+
+`multi_node` refuses the local backend at startup with `execution_unavailable` (CLI exit 7). An explicit golden-gate backend of `local` is refused the same way. The golden gate defaults to `inherit`, which resolves to the configured non-local backend.
+
+Compiling a goal into criteria does not promote those criteria to `exec`. `file_exists` and `file_contains` paths are still quoted and confined to the workdir. See the remediation plan, hotfix 0.2.
+
+### D3 — durability default is `normal`
+
+`Settings.durability` is `strict`, `normal`, or `fast`. The default is `normal`: atomic replaces fsync the file and its directory, the ledger fsyncs every append, SQLite runs `synchronous=NORMAL` in WAL, and Postgres runs `synchronous_commit=on`. `fast` is for benchmarks and selected tests. Startup refuses `fast` when `deployment_mode=multi_node`.
+
+### D4 — `/v1/runs` is async by default after one release
+
+The release that ships the durable queue keeps `RECERTIA_API_DEFAULT_ASYNC=0`. Callers who want the new shape use enqueue-and-wait: the API enqueues, holds the request, and returns the terminal record. The following release flips the default to `1`. A client that omits `mode` then receives `202` and polls. `mode=sync` remains available through that release for callers that need the old body.
+
+### D5 — the CLI is the local operator principal
+
+Every CLI command builds `Principal.local_operator()`. That principal carries `platform_admin` and the actor `cli:<os user>@<host>`. It is the actor on ledger appends, cancel requests, tenant administration, ledger repair, and backup. A CLI command that touches one tenant takes `--tenant`. The legacy `--runs-root` layout, where the runs root is the process root, does not.
+
+## Alternatives considered
+
+- **Silo per customer.** One database, one object bucket, and one API deployment per tenant. Isolation is the process boundary, which is easy to explain and expensive to operate: migrations, backups, and the console fan out with tenant count. The tenant switcher and the shared key store would be lying about a boundary the deployment did not have. A customer who needs a silo runs `single_node` (or a dedicated `multi_node` cell with one tenant). That is a deployment choice, not the service model.
+- **Fully pooled, including execution.** API replicas run containers themselves and share a runtime socket. One stuck runtime, one breakout, or one tenant's image pull then stalls every tenant, and the API holds the socket this decision forbids. Rejected.
+- **Hybrid, this ADR.** Pool the control plane, where stateless replicas and RLS match the existing tenant keying. Isolate execution, where a container is a tenant boundary the database cannot express. `single_node` keeps today's tree so development does not require Postgres, object storage, or an executor fleet.
+
+## Consequences
+
+**In scope now**
+
+- REL-10 and REL-11 ship in the remediation train. REL-10 is not gated on a further ADR.
+- In `multi_node`, SEC-1, SEC-10, SEC-4c, SEC-6, SEC-8, and SEC-13 are the strict form of those controls: an unbound tenant fails closed, dev-login and the unsigned session fallback are off, the API holds no container socket, a tenant scope cannot repair the ledger, `platform_admin` is not implied by tenant `admin`, and per-tenant secrets are envelope-encrypted. RLS and the object-storage prefix are REL-10. Per-tenant admission caps fail closed under REL-11; changing a cap is SEC-8.
+- SEC-2 is D2. Container execution of `runs`-scope commands is the normal path. Local execution of those commands exists only in `single_node` with the break-glass. Raw `script` stays on `exec`.
+
+**Startup refuses `multi_node` when any of these hold**
+
+| Condition | Error |
+| --- | --- |
+| Execution backend is `local`, or the golden gate resolves to `local` | `execution_unavailable`, exit 7 |
+| `RECERTIA_DB_BACKEND` is not `postgres`, or `RECERTIA_DATABASE_URL` is missing, or the URL uses the owner role | `ConfigError`, exit 2 |
+| `RECERTIA_BLOB_STORE` is not `s3` | `ConfigError`, exit 2 |
+| `RECERTIA_CONSOLE_SESSION_SECRET` is unset | `ConfigError`, exit 2 |
+| `RECERTIA_DURABILITY=fast` | `ConfigError`, exit 2 |
+| `RECERTIA_ALLOW_FAULTS=1` | `ConfigError`, exit 2 |
+| `RECERTIA_TENANT_ENCRYPTION` is not `required` | `ConfigError`, exit 2 |
+
+`single_node` keeps the current local backend behind the API break-glass. The random session-secret fallback stays available only in that mode.
+
+**Trade-offs**
+
+- Two stores to migrate (SQLite files to Postgres, loose blobs to object storage) and a process boundary between the API and the executor.
+- RLS is defence in depth on top of application checks, not a replacement for them. `single_node` has no RLS and must still pass the same tenant tests.
+- Enqueue-and-wait (D4) holds a request thread for one release. That is the compatible bridge, and it is removed as the default in the following release.
+
+## What this does not decide
+
+The receipt as the durability unit ([ADR-0020](adr/0020-store-receipts.md)), idle-state residency ([ADR-0018](adr/0018-idle-state-offloading.md)), and the cyclic graph ([ADR-0001](adr/0001-graph-with-loops.md)) stand. This ADR does not pick a Postgres major version, an object-store vendor beyond an S3 API, or a KMS vendor. Envelope encryption is SEC-13. REL-11 crypto-shreds those keys. Dependency review is SEC-11 and SEC-12. Schema and repository shape are ARCH-7 and REL-10, specified in the remediation plan.
 
 ---
 

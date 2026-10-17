@@ -18,7 +18,7 @@ the golden gate, or the offline improvement plane.
 | Two tempos | **Pilot** (run) vs **Tower** (library / jobs / review) |
 | Git as source of truth for library | `skills/`, `facts/`, `policy/` remain reviewable artifacts |
 | Buy observability | Grafana / OTel for deep dashboards; console shows operational summaries |
-| Single-operator first | Multi-tenant UX deferred to Phase-4 gate |
+| Single-operator first | Control-plane tenancy is shipped; C5 console chrome stays gated |
 | Honest unavailable | Metrics panels reuse `MetricReport.unavailable` reasons (B7) |
 
 ## 3. Surfaces
@@ -95,8 +95,8 @@ quota and identity, not necessarily self-serve key minting.
 
 | Mode | When | Behaviour |
 | --- | --- | --- |
-| Sync (today) | Short chores, CLI/API scripts | `POST /v1/runs` blocks until terminal |
-| Async (console default) | Pilot live UX | `POST /v1/runs` with `Prefer: respond-async` (or `mode=async`) returns `202` + `run_id`; worker drives graph; clients subscribe to `/v1/runs/{id}/events` |
+| Sync (default) | Short chores, CLI/API scripts | `POST /v1/runs` blocks until terminal. `RECERTIA_API_DEFAULT_ASYNC` stays false |
+| Async | Pilot live UX, `mode=async` | Enqueues on `control.db`, returns `202` + `run_id` unless a wait is set (`?wait=`, `X-Recertia-Wait`, `Prefer: wait`, cap 30s). Drain with the embedded API worker or `recertia worker`. Clients subscribe to `/v1/runs/{id}/events` |
 
 Both modes share `GraphOrchestrator`, checkpoints, manifests, and ledgers. Async is an
 admission and transport change, not a second graph.
@@ -131,12 +131,13 @@ split — not a third store ([ADR-0015](../adr/0015-improvement-plane-search.md)
 
 | Actor | Mechanism | Console role |
 | --- | --- | --- |
-| Human operator / reviewer | OIDC (or SSO proxy injecting identity); default auth is off | Session cookie (`HttpOnly`, `SameSite=Lax`, `Secure` outside dev); roles `operator`, `reviewer`, `admin` |
-| Automation / CI | Existing `X-API-Key` scopes | Unchanged |
-| Browser → API | BFF holds session; exchanges for scoped service credentials or passes user JWT with audience=recertia-api | Never embed long-lived API keys in SPA |
+| Human operator / reviewer | OIDC (or SSO proxy injecting identity); default auth is off | Session cookie v2 (`HttpOnly`, `SameSite=Strict`, `Secure` outside `dev`); CSRF double-submit (`recertia_csrf` + `X-Recertia-CSRF`); Origin must match Host when present; roles `operator`, `reviewer`, `admin`. OIDC nonce + `jti`; JWKS signature verify is not shipped |
+| Automation / CI | Existing `X-API-Key` scopes (HMAC-SHA256) | Unchanged |
+| Browser → API | BFF holds session; exchanges for scoped service credentials or passes user JWT with audience=recertia-api | Never embed long-lived API keys in SPA. Sessions are ignored when `RECERTIA_CONSOLE_AUTH=off` |
 
-Tenant binding: human identity maps to one or more `tenant_id`s. Until Phase 4, default is a
-single tenant.
+Tenant binding: human identity maps to one or more `tenant_id`s. Memberships are
+`tenant_admin` or `operator`. API keys stay single-tenant. C5 console chrome
+(Phase-4 gate) is not shipped; `GET /v1/me` and `POST /v1/auth/switch-tenant` exist.
 
 ## 5. Out-of-band integrations (preferred over reimplementation)
 

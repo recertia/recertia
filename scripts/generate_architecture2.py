@@ -93,6 +93,8 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "adr/0017-version-write-budget.md",
             "adr/0018-idle-state-offloading.md",
             "adr/0019-external-trajectories.md",
+            "adr/0020-store-receipts.md",
+            "adr/0021-deployment-model.md",
         ),
     ),
     (

@@ -56,8 +56,10 @@ latency regression it causes: correctness outranks the parallelism metric.
 [`policy/default.json`](../../policy/default.json) is the versioned T2 `Policy` document
 (`RECERTIA_POLICY_PATH` overrides). `ImprovementFlags` (including `deterministic_guide`,
 `practice_hex_search`, `curator_compress`) MUST NOT change graph topology. Caps live on
-`Policy.job_quota`; weekly spend lives on a T0 sidecar and MUST NOT be written back into the
-policy file. ISO week in UTC is the rollover key.
+`Policy.job_quota`; weekly spend is reserved then settled in `job_quota.sqlite`
+and MUST NOT be written back into the policy file. The JSON sidecar
+(`job_quota.json`) is the operator export of settled spend. ISO week in UTC is
+the rollover key.
 
 Priority for `can_admit`: `recertifier` → `curator_retire` → `fail_cluster_author` →
 `practice_band` → `practice_hex` (≤ `hex_share` of leftover) → `compress`. Operator names
@@ -105,8 +107,12 @@ class LedgerEntry(BaseModel):
     at: datetime
 ```
 
-`GET /v1/ledger/verify` recomputes the chain. Because the system writes its own memory,
-"who wrote this and on what evidence" must be tamper-evident rather than merely logged.
+`GET /v1/ledger/verify` recomputes the chain. `recertia ledger verify --check-sig`
+verifies HMAC signatures when `RECERTIA_LEDGER_HMAC_KEY` is set; unsigned entries
+are allowed until the first signed one. `--check-anchor` is reserved and skipped.
+`recertia ledger rekey --dry-run` counts unsigned vs signed lines and does not
+rewrite history. Because the system writes its own memory, "who wrote this and on
+what evidence" must be tamper-evident rather than merely logged.
 
 ## 22. Governance of mutable surfaces
 

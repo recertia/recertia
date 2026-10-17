@@ -30,6 +30,17 @@ coordinate a fix on `main` before any public write-up.
 ## Hardening notes
 
 Production solves should use `RECERTIA_EXECUTION_BACKEND=container`. The local
-executor and API break-glass flags are development-only. See
+executor and API break-glass flags are development-only. `RECERTIA_DEPLOYMENT_MODE=multi_node`
+refuses SQLite and the local backend. See
 [`docs/architecture/container-sandbox.md`](docs/architecture/container-sandbox.md)
 and [`docs/architecture/go-live.md`](docs/architecture/go-live.md).
+
+Security-relevant defaults that are **optional or off** until you set them:
+
+- Ledger HMAC (`RECERTIA_LEDGER_HMAC_KEY`) — unsigned ledgers still verify until
+  the first signed line
+- Console sessions — ignored when `RECERTIA_CONSOLE_AUTH=off` (default)
+- Interactive OpenAPI docs — off when `RECERTIA_ENV=prod`
+- API process umask `077`
+- API-key pepper — auto-written under `.recertia/api_key_pepper` in `single_node`;
+  `multi_node` requires `RECERTIA_API_KEY_PEPPER`

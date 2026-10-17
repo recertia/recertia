@@ -76,7 +76,46 @@ recertia skills lint
 recertia skills promote <skill_id>
 ```
 
-HTTP API: `POST /v1/runs` (install with `pip install -e ".[api]"`). Issue keys with `recertia keys`.
+HTTP API: `POST /v1/runs` (install with `pip install -e ".[api]"`). The core CLI
+(`recertia --help`) does not need that extra. Issue keys with `recertia keys`.
+Default create is still **sync** (`RECERTIA_API_DEFAULT_ASYNC` stays false).
+`mode=async` enqueues; optional wait via `?wait=`, `X-Recertia-Wait`, or
+`Prefer: wait` (cap 30s). `GET /v1/runs` is tenant-scoped keyset pagination
+(`cursor` / `next_cursor`).
+
+**Tenancy.** Runs and events are keyed by tenant. Memberships are `tenant_admin`
+or `operator`. The CLI is the local operator (`platform_admin`). Export one
+tenant (dry-run default):
+
+```bash
+recertia tenant export --tenant demo
+recertia tenant export --tenant demo --execute --dest /tmp/demo-export
+```
+
+Drain the SQLite run queue (async API runs; sync `POST /v1/runs` stays inline):
+
+```bash
+recertia worker --root .recertia --once
+```
+
+Backup the `.recertia/` tree (takes the root lock; refuses if the API holds it):
+
+```bash
+recertia backup --root .recertia
+recertia backup verify backups/recertia-….tar.gz
+```
+
+Ledger HMAC is optional (`RECERTIA_LEDGER_HMAC_KEY`). Unsigned ledgers still
+verify until the first signed line:
+
+```bash
+recertia ledger verify --check-sig
+recertia ledger rekey --dry-run
+```
+
+Operator details: [`CHANGELOG.md`](CHANGELOG.md) (Unreleased operator notes) and
+[`docs/architecture/go-live.md`](docs/architecture/go-live.md). Deployment model:
+[ADR-0021](docs/adr/0021-deployment-model.md).
 
 **Execution backend.** Production solves default to an OCI container (`RECERTIA_EXECUTION_BACKEND=container`). Install Docker or Podman, then:
 
@@ -165,7 +204,7 @@ Built and under test:
 - Graph runtime with budgeted loops and explicit failure signals
 - Plural memory planes, promotion gates, and control-arm lift measurement
 - Container sandbox for production solves; `--local-exec` for development
-- CLI (`recertia`) and optional FastAPI surface
+- CLI (`recertia`; FastAPI is an optional `[api]` extra) and tenant-keyed HTTP API
 - CI on every push
 
 Research outcomes that are still open are listed in [`docs/assumptions.md`](docs/assumptions.md), separate from engineering acceptance gates.

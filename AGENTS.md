@@ -38,11 +38,14 @@ files under a gitignored `.recertia/` dir; no external database is required for 
 - Lint + types: `ruff check contracts/ src/ scripts/ tests/ conftest.py` and
   `mypy contracts/ src/recertia/`. Main CI fails closed on mypy (see #8).
 - Default T2 policy is `policy/default.json` (`RECERTIA_POLICY_PATH` overrides). Do not
-  write weekly `JobQuota` spend back into that file — spend is
-  `{runs_root}/jobs/job_quota.json` (CLI default `.recertia/jobs/job_quota.json`;
-  the API writes `.recertia/runs/<tenant>/jobs/job_quota.json`).
-- Console auth defaults **off**. Dev login needs `RECERTIA_CONSOLE_AUTH=dev` and
-  `RECERTIA_CONSOLE_DEV_LOGIN=1`. OIDC requires `RECERTIA_CONSOLE_SESSION_SECRET`.
+  write weekly `JobQuota` spend back into that file — spend is reserved/settled in
+  `{runs_root}/jobs/job_quota.sqlite`. `{runs_root}/jobs/job_quota.json` is the operator
+  export (CLI default `.recertia/jobs/job_quota.json`; the API writes
+  `.recertia/runs/<tenant>/jobs/job_quota.json`).
+- Console auth defaults **off** (`RECERTIA_CONSOLE_AUTH=off` ignores session cookies).
+  Dev login needs `RECERTIA_CONSOLE_AUTH=dev` and `RECERTIA_CONSOLE_DEV_LOGIN=1`.
+  OIDC requires `RECERTIA_CONSOLE_SESSION_SECRET`. Session cookie is `SameSite=Strict`
+  with CSRF double-submit (`X-Recertia-CSRF`).
 - Drift/hygiene checks (part of CI): the `--check` scripts under `scripts/`
   (`generate_schemas.py`, `export_examples.py`, `generate_architecture2.py`, `check_cross_refs.py`,
   `check_milestone_deps.py`, `check_assumptions_hygiene.py`, `security_review.py`). `schema/` is
@@ -59,6 +62,8 @@ files under a gitignored `.recertia/` dir; no external database is required for 
   --local-exec --runs-root .recertia --workdir .recertia/ws`. Inspect with
   `recertia runs show <run_id> --route-log` and `recertia ledger verify`.
 - HTTP API: `RECERTIA_EXECUTION_BACKEND=local uvicorn recertia.api.app:app --host 127.0.0.1 --port 8000`
-  (default port 8000; interactive docs at `/docs`). Endpoints under `/v1/*` require an
-  `X-API-Key` header. Issue a key that writes to the same root the server uses
-  (`.recertia/api_keys.sqlite`): `recertia keys issue --tenant demo --scopes runs,metrics --actor dev`.
+  (default port 8000; interactive docs at `/docs` unless `RECERTIA_ENV=prod`).
+  Endpoints under `/v1/*` require an `X-API-Key` header. Issue a key that writes to
+  the same root the server uses (`.recertia/api_keys.sqlite`):
+  `recertia keys issue --tenant demo --scopes runs,metrics --actor dev`.
+  Default `POST /v1/runs` is sync; `mode=async` enqueues for `recertia worker`.

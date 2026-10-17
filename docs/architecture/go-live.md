@@ -11,6 +11,7 @@ and a lint-clean seed library.
 | OpenAI | `OPENAI_API_KEY`, `RECERTIA_MODEL_PROVIDER=openai`, `RECERTIA_MODEL_ID=gpt-…` |
 | Override key env | `RECERTIA_API_KEY_ENV=MY_KEY_VAR` |
 | Optional verifier | `RECERTIA_VERIFIER_MODEL_ID=…` (same provider family) |
+| Per-tenant keys | JSON object in `RECERTIA_TENANT_MODEL_KEYS`, or a mode-0600 file at `RECERTIA_TENANT_MODEL_KEYS_FILE`: `{"demo":{"anthropic":"…","openai":"…"}}`. The local executor drops those secrets from the child environment. |
 
 CLI shorthand:
 
@@ -105,8 +106,14 @@ opt in.
 | Dev login | `RECERTIA_CONSOLE_AUTH=dev` **and** `RECERTIA_CONSOLE_DEV_LOGIN=1`. Admin roles also need `RECERTIA_CONSOLE_DEV_ADMIN=1`. |
 | OIDC | `RECERTIA_CONSOLE_AUTH=oidc` plus issuer/client id/secret **and** `RECERTIA_CONSOLE_SESSION_SECRET` (≥32 chars). PKCE S256 + one-time `state`. |
 
-Cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` except in `dev`. The session
-token is not returned in JSON and is not stored in `localStorage`.
+Cookie `recertia_session` is v2, `HttpOnly`, `SameSite=Strict`, and `Secure`
+except in `dev`. When `RECERTIA_CONSOLE_AUTH=off`, session cookies and
+`X-Recertia-Session` are ignored (API keys only). Cookie POSTs send
+`X-Recertia-CSRF` matching the `recertia_csrf` cookie (double-submit). An
+`Origin` header, when present, must match `Host`. OIDC uses PKCE S256, a nonce,
+and rejects a reused `jti`. ID-token signature verification against JWKS is not
+shipped. The session token is not returned in JSON and is not stored in
+`localStorage`.
 
 Promote and improvement jobs require the `promote` / `jobs` API-key scopes (or
 `admin`), or a console reviewer session. A `runs` key cannot approve skills.
@@ -114,7 +121,10 @@ Promote and improvement jobs require the `promote` / `jobs` API-key scopes (or
 ## Jobs and retention
 
 Policy: [`policy/default.json`](../../policy/default.json). Override with
-`RECERTIA_POLICY_PATH`. Weekly spend is `{runs-root}/jobs/job_quota.json` (T0 sidecar).
+`RECERTIA_POLICY_PATH`. Weekly spend is reserved then settled in
+`{runs-root}/jobs/job_quota.sqlite`. `{runs-root}/jobs/job_quota.json` is the
+operator export (do not write spend into the policy file).
+`RECERTIA_QUOTA_RESERVE_TTL_S` (default 86400) releases stale reservations.
 
 ```bash
 recertia jobs run curator --dry-run
@@ -138,7 +148,10 @@ export RECERTIA_EXECUTION_BACKEND=container
 # or: recertia run … --local-exec   # sets backend=local for this process
 ```
 
-See [container-sandbox.md](container-sandbox.md).
+`--local-exec` is a per-invocation override; it does not write
+`RECERTIA_EXECUTION_BACKEND`. `RECERTIA_DEPLOYMENT_MODE=multi_node` refuses the
+local backend (and SQLite). See [container-sandbox.md](container-sandbox.md)
+and [ADR-0021](../adr/0021-deployment-model.md).
 
 ## Measurement pins
 
@@ -201,7 +214,7 @@ snapshots, transcripts, episodic, skill index, API keys).
 
 | Item | Guidance |
 | --- | --- |
-| Backup / RPO | Nightly `python3 scripts/backup_recertia.py` or `recertia backup`; target RPO ≤ 24h for single-operator |
+| Backup / RPO | Nightly `python3 scripts/backup_recertia.py` or `recertia backup`; `recertia backup verify` checks `MANIFEST.json` sha256. Backup/restore take the root lock and refuse if the API holds it. Target RPO ≤ 24h for single-operator |
 | Postgres soak | `docker compose -f docker-compose.soak.yml up -d` then `DATABASE_URL=postgresql://recertia:recertia@localhost:5432/recertia python3 scripts/soak_postgres.py --recertia-root .recertia` (weekly via `.github/workflows/weekly-ops.yml`) |
 | Dashboards | `GET /v1/metrics/dashboard` (scope `metrics`) or `recertia metrics`; OTel JSONL under the runs root |
 | Retention | `recertia gc --older-than-days 14` on a weekly cron |
@@ -212,3 +225,32 @@ Tabletop incident review: `recertia tabletop <run_id> --restore-from backups/…
 writes the ops log JSON. See [`incident-tabletop.md`](incident-tabletop.md).
 `recertia canary --live` scores planted failures with `RECERTIA_VERIFIER_MODEL_ID`
 and does not update assumption `a4`.
+
+## Tenancy, queue, and HTTP waits
+
+Development default is `RECERTIA_DEPLOYMENT_MODE=single_node` (SQLite + files under
+`.recertia/`). Tenants are still first-class: runs and events live at
+`root/runs/<tenant>/`, blobs at `root/blobs/<tenant>/`. Memberships are
+`tenant_admin` or `operator`. The CLI is `platform_admin`.
+
+```bash
+recertia tenant export --tenant default
+recertia tenant export --tenant default --execute --dest /tmp/default-export
+recertia worker --root .recertia --once
+recertia ledger verify --check-sig
+recertia ledger rekey --dry-run
+```
+
+`POST /v1/runs` default is still **sync**. `RECERTIA_API_DEFAULT_ASYNC` stays
+false. `mode=async` enqueues onto `control.db`; the API starts an embedded
+drainer, or run `recertia worker`. Optional wait (async only, cap 30s):
+`?wait=<seconds>`, `X-Recertia-Wait`, or `Prefer: wait` / `Prefer: wait=<seconds>`.
+Timeout returns `202`. `GET /v1/runs` pages with `limit` (1–100) and `cursor`;
+the body is `{items, next_cursor}`.
+
+`RECERTIA_ENV=prod` turns off `/docs`, `/redoc`, and `/openapi.json`. The API
+sets umask `077`. Optional `RECERTIA_LEDGER_HMAC_KEY` signs new ledger lines
+(and seed `version.hmac`); unsigned history still verifies until the first
+signed line.
+
+Operator release notes: [`CHANGELOG.md`](../../CHANGELOG.md) Unreleased.

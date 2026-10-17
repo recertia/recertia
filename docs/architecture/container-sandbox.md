@@ -23,7 +23,10 @@ python3 scripts/smoke_container.py
 ```
 
 Development escape hatch (no OCI): `recertia run --local-exec …` or
-`RECERTIA_EXECUTION_BACKEND=local`.
+`RECERTIA_EXECUTION_BACKEND=local`. `--local-exec` does not write process env.
+`RECERTIA_DEPLOYMENT_MODE=multi_node` refuses the local backend
+([ADR-0021](../adr/0021-deployment-model.md)). The local executor drops provider
+and tenant secrets from the child environment.
 
 ## Runtime selection
 

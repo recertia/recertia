@@ -7,7 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Operator notes
+
+Tenant-keyed control plane on the existing SQLite-and-files tree. Development
+default is still `RECERTIA_DEPLOYMENT_MODE=single_node`. Production solves still
+default to the container executor. `multi_node` refuses SQLite and the local
+backend; it does not yet run Postgres RLS, object storage, or a remote executor.
+
+**Tenancy.** Runs, events, and blobs live under `root/runs/<tenant>/` and
+`root/blobs/<tenant>/`. Memberships are `tenant_admin` or `operator`. The CLI is
+the local operator (`platform_admin`, actor `cli:<user>@<host>`). Tenant-scoped
+commands take `--tenant`. `recertia tenant export --tenant <id>` lists paths
+(dry-run default). Copy with `--execute --dest <dir>` (`--dest` must sit under
+the runs root or the system temp directory). No crypto-shred.
+
+**CLI.** `--local-exec` on `run` / `resume` is a per-invocation override; it does
+not write `RECERTIA_EXECUTION_BACKEND`. `recertia worker [--root .recertia]
+[--once] [--concurrency 1]` drains the SQLite run queue (`control.db`). Sync
+`POST /v1/runs` does not wait on that process. `recertia backup` / `backup create`
+writes a `.tar.gz` with `MANIFEST.json` (sha256 per file). `recertia backup verify
+<archive>` recomputes checksums. Backup and restore take the root lock and refuse
+if the API holds it. `recertia ledger verify [--check-sig] [--check-anchor]`:
+`--check-sig` verifies HMAC signatures (unsigned entries are allowed until the
+first signed one); `--check-anchor` is reserved and skipped.
+`recertia ledger rekey --dry-run` counts unsigned vs signed lines and does not
+rewrite the ledger. The core CLI (`recertia --help`) does not require FastAPI or
+the `[api]` extra.
+
+**HTTP API.** Default `POST /v1/runs` is still sync (blocks until terminal).
+`RECERTIA_API_DEFAULT_ASYNC` stays false. `mode=async` enqueues and returns
+`202 {run_id, status: queued}` unless a wait is requested. Optional wait (async
+only): `?wait=<seconds>`, `X-Recertia-Wait`, or `Prefer: wait` /
+`Prefer: wait=<seconds>` (cap 30s; timeout still returns 202). `GET /v1/runs` is
+tenant-scoped keyset pagination (`limit` 1–100, default 50, `cursor`; response
+`{items, next_cursor}`) from `run_summaries`. `RECERTIA_ENV=prod` turns off
+`/docs`, `/redoc`, and `/openapi.json`. The API process sets umask `077`.
+
+**Auth and console.** API keys are HMAC-SHA256 with a pepper. Existing PBKDF2
+rows stay valid and rehash on the next successful authenticate. `multi_node`
+requires `RECERTIA_API_KEY_PEPPER`. `RECERTIA_CONSOLE_AUTH=off` (default)
+ignores session cookies and `X-Recertia-Session` (API keys only). Session cookie
+`recertia_session` is v2, `HttpOnly`, `SameSite=Strict`, and `Secure` except in
+`dev`. CSRF is double-submit (`recertia_csrf` plus `X-Recertia-CSRF`). Cookie
+POSTs with an `Origin` must match `Host`. OIDC sends a nonce and rejects a
+reused `jti`. ID-token signature verification against JWKS is not in this
+release.
+
+**Quota, secrets, durability.** Weekly job spend is reserved then settled in
+`job_quota.sqlite` beside the JSON sidecar. `{runs_root}/jobs/job_quota.json`
+remains the operator export. Caps stay in `policy/default.json`; do not write
+spend there. `RECERTIA_QUOTA_RESERVE_TTL_S` (default 86400) releases stale
+reservations. Ledger HMAC when `RECERTIA_LEDGER_HMAC_KEY` is set. Existing
+unsigned ledgers still verify until the first signed line. The same key HMACs
+seed `version.hmac` files; unsigned seeds still load while the key is empty.
+Per-tenant model keys: JSON object in `RECERTIA_TENANT_MODEL_KEYS` or a
+mode-0600 file at `RECERTIA_TENANT_MODEL_KEYS_FILE`
+(`{"tenant":{"anthropic":"…","openai":"…"}}`). The local executor drops those
+secrets from the child environment.
+
+**Compatibility.** Default `POST /v1/runs` remains sync. FastAPI remains an
+optional `[api]` extra. Unsigned ledgers still verify until the first signed
+line. `--local-exec` is unchanged for development. Container backend remains the
+production default.
+
+**Not in this release.** Postgres RLS, KMS envelope encryption, Firecracker /
+remote executor, OIDC JWKS signature verify, ledger contract-level sig/key_id
+rotation, async-by-default (`RECERTIA_API_DEFAULT_ASYNC=1`), crypto-shred tenant
+delete, delta checkpoints.
+
 ### Added
+
+- **Tenant-keyed control plane** — runs/events/blobs under `runs/<tenant>/`;
+  memberships `tenant_admin`/`operator`; CLI local operator is `platform_admin`.
+  `recertia tenant export` (dry-run default; `--execute --dest`).
+  [ADR-0021](docs/adr/0021-deployment-model.md).
+- **`recertia worker`** — drains the SQLite run queue. `POST /v1/runs`
+  `mode=async` enqueues; optional wait (`?wait=`, `X-Recertia-Wait`,
+  `Prefer: wait`, cap 30s). `RECERTIA_API_DEFAULT_ASYNC` stays false.
+- **`recertia backup verify`** — `MANIFEST.json` sha256. Backup/restore take the
+  root lock and refuse while the API holds it.
+- **Ledger HMAC** — optional `RECERTIA_LEDGER_HMAC_KEY`. `ledger verify
+  --check-sig` / `--check-anchor` (anchor skipped). `ledger rekey --dry-run`
+  only. Seed `version.hmac` when the same key is set.
+- **Job quota reserve/settle** — `job_quota.sqlite`; JSON sidecar is the
+  operator export.
+- **Per-tenant model keys** — `RECERTIA_TENANT_MODEL_KEYS` or mode-0600
+  `RECERTIA_TENANT_MODEL_KEYS_FILE`. Local executor drops those secrets.
+- **`GET /v1/runs` keyset pagination** — `cursor` / `next_cursor` from
+  `run_summaries`.
+- **Eval outbox** — observation row commits with the checkpoint; drain is
+  at-least-once.
 
 - **ADR-0020 Store Receipts (Proposed)** — `StoreReceipt` contract, `close_receipt`
   ledger action, `schema/store_receipt.schema.json`. Does not flip `recertia backup`
@@ -28,6 +117,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stock image does not ship it, so every Monday job failed.
 
 ### Changed
+
+- **API keys** — stored as HMAC-SHA256 with a pepper. Existing PBKDF2 rows
+  rehash on the next successful authenticate. `multi_node` requires
+  `RECERTIA_API_KEY_PEPPER`.
+- **Console sessions** — ignored when `RECERTIA_CONSOLE_AUTH=off`. Cookie v2,
+  `SameSite=Strict`, CSRF double-submit, Origin check. OIDC nonce + `jti`
+  (signature verify not landed).
+- **Settings** — `RECERTIA_DEPLOYMENT_MODE=single_node|multi_node`. `multi_node`
+  refuses SQLite and the local execution backend. `--local-exec` does not write
+  process env. API `docs_url` off when `RECERTIA_ENV=prod`. API umask `077`.
+- **Bare wheel** — `recertia --help` does not import FastAPI.
 
 - **Console / registry / distill extract** — `register_console_routes` is a
   dispatcher over session / library / program modules (`console_deps.RouteState`
