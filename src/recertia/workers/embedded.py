@@ -1,8 +1,7 @@
 """In-process drainer for the SQLite run queue.
 
-``POST /v1/runs`` with ``mode=sync`` does not use this. ``mode=async`` enqueues
-and starts the thread on the first queued item. ``AsyncRunWorker`` still runs
-the graph so existing completion callbacks keep working.
+Sync and async ``POST /v1/runs`` both enqueue. Sync waits on this thread.
+``AsyncRunWorker`` runs the graph off the request thread.
 """
 
 from __future__ import annotations
@@ -12,6 +11,7 @@ import threading
 import time
 from dataclasses import replace
 
+from recertia.graph.lease import RunBusy, WorkspaceBusy
 from recertia.workers.queue import Claim, RunQueue
 from recertia.workers.run_worker import AsyncRunWorker, load_async_request
 
@@ -69,17 +69,31 @@ class EmbeddedQueueWorker:
 
     def _execute(self, claim: Claim) -> None:
         self.queue.mark_running(claim)
-        req = load_async_request(claim.payload)
+        try:
+            req = load_async_request(claim.payload)
+        except Exception:
+            if self.worker.on_failed is not None:
+                self.worker.on_failed(claim.tenant_id, claim.run_id, cancelled=False)
+            self.queue.finish(claim, status="failed", error_code="run_failed")
+            return
         if not req.run_id:
             req = replace(req, run_id=claim.run_id, tenant_id=claim.tenant_id)
         req.cancel_check = lambda: self.queue.cancel_requested(claim.tenant_id, claim.run_id)
         try:
             outcome = self.worker._run(req)
+        except WorkspaceBusy:
+            self.queue.finish(claim, status="failed", error_code="workspace_busy")
+            return
+        except RunBusy:
+            self.queue.finish(claim, status="failed", error_code="run_busy")
+            return
         except Exception:
             self.queue.finish(claim, status="failed", error_code="run_failed")
             return
         if outcome == "cancelled":
             self.queue.finish(claim, status="cancelled")
+        elif outcome == "not_found":
+            self.queue.finish(claim, status="failed", error_code="not_found")
         elif outcome == "failed":
             self.queue.finish(claim, status="failed", error_code="run_failed")
         else:

@@ -96,7 +96,9 @@ class ConsoleContext:
     def tenant_runs_root(self, tenant_id: str) -> Path:
         return self.root / "runs" / tenant_id
 
-    def _on_async_complete(self, tenant_id: str, run_id: str, state: Any) -> None:
+    def _on_async_complete(
+        self, tenant_id: str, run_id: str, state: Any, settle_quota: bool = True
+    ) -> None:
         cost = float(state.spent.cost_usd or 0.0)
         existing = self.runs.get((tenant_id, run_id))
         rec = self.record_from_state(
@@ -111,6 +113,12 @@ class ConsoleContext:
         self.runs[(tenant_id, run_id)] = rec.model_copy(
             update={"cost_usd": cost, "mode": "async"}
         )
+        if not settle_quota:
+            if self.run_service is not None:
+                self.run_service.release(tenant_id)
+            else:
+                self.quota_store.release_inflight(tenant_id)
+            return
         if self.run_service is not None:
             self.run_service.complete(tenant_id, cost_usd=cost)
         else:

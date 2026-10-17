@@ -1,7 +1,8 @@
 """SQLite ``run_queue`` with deficit-round-robin claim.
 
-Sync ``POST /v1/runs`` still executes on the request thread. This queue is what
-``recertia worker`` drains. ``RECERTIA_API_DEFAULT_ASYNC`` stays off.
+Create and resume enqueue here. The embedded worker or ``recertia worker``
+drains the queue. ``RECERTIA_API_DEFAULT_ASYNC`` stays off. A terminal row for
+the same key can be requeued (resume).
 """
 
 from __future__ import annotations
@@ -111,12 +112,46 @@ class RunQueue:
                 self._conn.execute("COMMIT")
             except sqlite3.IntegrityError as exc:
                 self._conn.execute("ROLLBACK")
+                if self._requeue_terminal(item, tenant, stamp, due):
+                    return
                 raise ValueError(
                     f"queue item {(tenant, item.run_id, item.kind)} already exists"
                 ) from exc
             except Exception:
                 self._conn.execute("ROLLBACK")
                 raise
+
+    def _requeue_terminal(self, item: QueueItem, tenant: str, stamp: str, due: str) -> bool:
+        """Replace a finished row so resume can run again. Caller holds ``_lock``."""
+
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = self._conn.execute(
+                """
+                UPDATE run_queue
+                SET status='queued', priority=?, enqueued_at=?, not_before=?,
+                    claimed_by=NULL, heartbeat_at=NULL, attempt=0, max_attempts=?,
+                    payload_json=?, error_code=NULL, finished_at=NULL,
+                    cancel_requested=0
+                WHERE tenant_id=? AND run_id=? AND kind=?
+                  AND status IN ('succeeded', 'failed', 'cancelled', 'dead')
+                """,
+                (
+                    item.priority,
+                    stamp,
+                    due,
+                    item.max_attempts,
+                    json.dumps(item.payload),
+                    tenant,
+                    item.run_id,
+                    item.kind,
+                ),
+            )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+        return cur.rowcount == 1
 
     def claim(self, worker_id: str, *, limit: int = 1) -> list[Claim]:
         claimed: list[Claim] = []

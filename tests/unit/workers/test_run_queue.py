@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from recertia.cli.main import app
@@ -119,3 +120,20 @@ def test_worker_once_runs_queued_item(tmp_path: Path) -> None:
     empty = runner.invoke(app, ["worker", "--root", str(root), "--once"])
     assert empty.exit_code == 0, empty.output
     assert "claimed=0" in empty.output
+
+
+def test_terminal_row_can_be_requeued(tmp_path: Path) -> None:
+    queue = open_run_queue(tmp_path)
+    try:
+        queue.enqueue(QueueItem(tenant_id="t1", run_id="r1", kind="run", payload={"n": 1}))
+        claim = queue.claim("worker-a", limit=1)
+        assert len(claim) == 1
+        queue.finish(claim[0], status="succeeded")
+        queue.enqueue(QueueItem(tenant_id="t1", run_id="r1", kind="run", payload={"n": 2}))
+        again = queue.claim("worker-a", limit=1)
+        assert len(again) == 1
+        assert again[0].payload == {"n": 2}
+        with pytest.raises(ValueError, match="already exists"):
+            queue.enqueue(QueueItem(tenant_id="t1", run_id="r1", kind="run", payload={"n": 3}))
+    finally:
+        queue.close()

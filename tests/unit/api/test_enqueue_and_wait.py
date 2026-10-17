@@ -1,7 +1,8 @@
-"""Optional wait on mode=async. The default async flag stays off."""
+"""Enqueue-and-wait. The default async flag stays off."""
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -64,3 +65,36 @@ def test_async_wait_timeout_returns_202(tmp_path: Path) -> None:
     row = app.state.console_ctx.queue.get("t1", "wait-slow")
     assert row is not None
     assert row.status == "queued"
+
+
+def test_sync_mode_does_not_run_on_request_thread(tmp_path: Path) -> None:
+    client, secret, app = _client(tmp_path)
+    ctx = app.state.console_ctx
+    threads: dict[str, int] = {}
+    real_enqueue = ctx.queue.enqueue
+    real_run = ctx.worker._run
+
+    def _enqueue(item):
+        threads["request"] = threading.get_ident()
+        return real_enqueue(item)
+
+    def _run(req):
+        threads["worker"] = threading.get_ident()
+        return real_run(req)
+
+    ctx.queue.enqueue = _enqueue
+    ctx.worker._run = _run
+    created = client.post(
+        "/v1/runs",
+        headers={"X-API-Key": secret},
+        json={
+            "request": "sync chore",
+            "task_class": "repo-chore",
+            "run_id": "sync-off-thread",
+            "budget": {"max_attempts": 1},
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["terminal"] in {"solved", "unsolved", "abstained"}
+    assert created.json()["mode"] == "sync"
+    assert threads["request"] != threads["worker"]

@@ -235,9 +235,8 @@ class Settings:
     allow_faults: bool = False
     faults: str = ""
     tenant_encryption: Literal["off", "required"] = "off"
-    # Stays false until one deprecation release. ``POST /v1/runs`` still runs
-    # on the request thread unless the body sets ``mode=async``. Enqueue-and-wait
-    # is not wired, so this flag must not become the production default.
+    # Stays false until one deprecation release. Omit-mode still sync-waits on
+    # the queue (the worker thread runs the graph). Do not flip this default.
     api_default_async: bool = False
 
     execution_backend: ExecutionBackend = "container"

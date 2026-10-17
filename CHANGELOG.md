@@ -34,13 +34,16 @@ first signed one); `--check-anchor` is reserved and skipped.
 rewrite the ledger. The core CLI (`recertia --help`) does not require FastAPI or
 the `[api]` extra.
 
-**HTTP API.** Default `POST /v1/runs` is still sync (blocks until terminal).
-`RECERTIA_API_DEFAULT_ASYNC` stays false. `mode=async` enqueues and returns
-`202 {run_id, status: queued}` unless a wait is requested. Optional wait (async
-only): `?wait=<seconds>`, `X-Recertia-Wait`, or `Prefer: wait` /
-`Prefer: wait=<seconds>` (cap 30s; timeout still returns 202). `GET /v1/runs` is
-tenant-scoped keyset pagination (`limit` 1–100, default 50, `cursor`; response
-`{items, next_cursor}`) from `run_summaries`. `RECERTIA_ENV=prod` turns off
+**HTTP API.** Default `POST /v1/runs` is still sync.
+`RECERTIA_API_DEFAULT_ASYNC` stays false. Sync create and resume enqueue and
+wait up to 60s for the worker thread; a timeout returns `202`. `mode=async`
+enqueues and returns `202 {run_id, status: queued}` unless a wait is requested.
+Optional wait (async only): `?wait=<seconds>`, `X-Recertia-Wait`, or
+`Prefer: wait` / `Prefer: wait=<seconds>` (cap 30s; timeout still returns 202).
+`GET /v1/runs` is tenant-scoped keyset pagination (`limit` 1–100, default 50,
+`cursor`; response `{items, next_cursor}`) from `run_summaries`. A second run
+whose resolved workdir is already held returns `409` `workspace_busy`.
+`RECERTIA_ENV=prod` turns off
 `/docs`, `/redoc`, and `/openapi.json`. The API process sets umask `077`.
 
 **Auth and console.** API keys are HMAC-SHA256 with a pepper. Existing PBKDF2
