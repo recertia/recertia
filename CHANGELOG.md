@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SEC-7 PDP.require** — `PolicyDecisionPoint.decide` / `require` implement the
+  action table (`runs.create`, `runs.script`, `runs.cancel` other-tenant → 404,
+  `workspace.register` / `skill.promote_seed` as `platform_admin`). First consumer
+  is `POST /v1/runs` script/create. `eval.run` still accepts `metrics` or `evals`
+  until a distinct evals key scope is issued.
+
 - **ADR-0020 Store Receipts (Proposed)** — `StoreReceipt` contract, `close_receipt`
   ledger action, `schema/store_receipt.schema.json`. Does not flip `recertia backup`
   or tabletop defaults. P4 may switch `backup --receipts` only after one counted
@@ -17,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SEC-8 require_key** — `require_key` uses `Principal.has_scope`, so tenant
+  `admin` no longer satisfies `platform_admin`.
 - **Windows `rss_bytes`** — `import resource` is POSIX-only. Catch `ImportError`
   so hop telemetry on native Windows returns `0` instead of aborting the graph
   (`ModuleNotFoundError: No module named 'resource'`).

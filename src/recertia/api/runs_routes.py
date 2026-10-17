@@ -18,7 +18,9 @@ from recertia.api.console_deps import ConsoleContext
 from recertia.api.errors import v1_error
 from recertia.api.quotas import QuotaExceeded
 from recertia.api.runs_models import RunCreate, RunRecord
+from recertia.app.authz import Resource
 from recertia.bootstrap import resolve_task_class
+from recertia.errors import Forbidden
 from recertia.graph.engine import RunIdExistsError
 from recertia.graph.lease import RunBusy
 from recertia.solver.container import ensure_api_execution_ready
@@ -104,11 +106,16 @@ def register_run_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         except SandboxError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-        if body.script and not ctx.principal_may_exec(principal):
-            raise HTTPException(
-                status_code=403,
-                detail="script requires the 'exec' scope (or admin)",
+        try:
+            ctx.pdp.require(
+                principal, "runs.create", Resource(tenant_id=principal.tenant_id)
             )
+            if body.script:
+                ctx.pdp.require(
+                    principal, "runs.script", Resource(tenant_id=principal.tenant_id)
+                )
+        except Forbidden as exc:
+            raise HTTPException(status_code=403, detail=exc.message) from exc
 
         model_config = _model_config_for_run(body.model)
         run_id = ctx.validate_run_id(body.run_id or f"run-{uuid4().hex[:12]}")
