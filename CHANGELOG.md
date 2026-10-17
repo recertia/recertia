@@ -15,8 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   soak week compares tar vs receipt restore. Plan:
   [`docs/plans/2026-09-23-store-receipts.md`](docs/plans/2026-09-23-store-receipts.md).
 
+- **F9 RunRegistry** — durable `(tenant_id, run_id)` reservation in
+  `runtime.db` via `RunRegistry.reserve`. `POST /v1/runs` rejects reuse with
+  HTTP 409 across process restarts (`run_id_exists`).
+
+- **F11 WorkspaceLock** — flock under `locks/workspaces/<sha256(workdir)>.lock`.
+  `create_run` and `resume_run` acquire after workdir resolve; a second holder
+  gets HTTP 409 `workspace_busy`.
+
 ### Fixed
 
+- **F7 live operation reclaim** — `OperationLedger.run_once` waits on a live
+  in-process owner instead of reclaiming a pending row after 5s. A crash-left
+  pending sentinel with no holder is still claimed immediately.
+- **F10 scratch resume** — `solve_scratch_observe_act` records the model command
+  inside `op_once`, so resume replays the stored command instead of asking the
+  model again.
 - **Windows `rss_bytes`** — `import resource` is POSIX-only. Catch `ImportError`
   so hop telemetry on native Windows returns `0` instead of aborting the graph
   (`ModuleNotFoundError: No module named 'resource'`).
