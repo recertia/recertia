@@ -108,3 +108,9 @@ class Principal:
             scopes=frozenset(scopes),
             roles=frozenset(roles),
         )
+
+
+def ledger_actor(principal: Principal) -> str:
+    """Ledger actor for a service call that already has a principal."""
+
+    return principal.subject

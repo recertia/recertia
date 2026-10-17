@@ -13,6 +13,7 @@ from recertia.api.console_auth import ConsoleUser, SessionStore
 from recertia.api.events import RunEventLog
 from recertia.api.jobs_store import JobRunStore
 from recertia.api.quotas import QuotaStore
+from recertia.ports.identity import ledger_actor
 from recertia.programs.store import ProgramStore
 from recertia.proposals.store import ProposalStore
 
@@ -171,7 +172,7 @@ class RouteState:
         user = self.optional_console_user(request)
         roles = user.roles if user is not None else None
         if self.ctx.pdp.may_admin_host(principal, console_roles=roles):
-            return user.user_id if user is not None else principal.key_id
+            return user.user_id if user is not None else ledger_actor(principal)
         raise HTTPException(
             status_code=403, detail="platform_admin required to register a host root"
         )
@@ -182,7 +183,7 @@ class RouteState:
         user = self.optional_console_user(request)
         console_is_admin = user.may("admin") if user is not None else None
         if self.ctx.pdp.may_admin_registry(principal, console_is_admin=console_is_admin):
-            return user.user_id if user is not None else principal.key_id
+            return user.user_id if user is not None else ledger_actor(principal)
         raise HTTPException(status_code=403, detail="admin required to update workspace")
 
     def require_library_write(

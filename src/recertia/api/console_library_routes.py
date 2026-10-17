@@ -42,6 +42,7 @@ from recertia.memory.procedural.active_set import recompute_active_set
 from recertia.memory.procedural.composition import mean_composition_depth
 from recertia.memory.procedural.promote import PromotionError, promote_to_approved
 from recertia.memory.procedural.store import SkillStore
+from recertia.ports.identity import ledger_actor
 from recertia.proposals.store import ProposalRecord
 from recertia.review.autonomy_config import DEFAULT_AUTONOMY
 from recertia.solver.transcript import TranscriptStore
@@ -401,7 +402,7 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         ctx.job_runs.save(job)
         ledger = HashChainLedger(runs_root / "ledger.jsonl")
         ledger.append(
-            actor=(user.user_id if user else principal.key_id),
+            actor=(user.user_id if user else ledger_actor(principal)),
             action="policy_change",
             target=f"skill:{skill_id}@v{version}",
             evidence={"kind": "console_promote", "job_run_id": job.job_run_id},
@@ -524,7 +525,7 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
             if user is not None:
                 raise HTTPException(status_code=403, detail="T2 requires reviewer")
             raise HTTPException(status_code=403, detail="T2 requires admin key or reviewer")
-        actor = user.user_id if user else principal.key_id
+        actor = user.user_id if user else ledger_actor(principal)
         try:
             updated = ctx.proposals.decide(
                 proposal_id,

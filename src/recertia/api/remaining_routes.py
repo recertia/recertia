@@ -20,6 +20,7 @@ from recertia.memory.query import federated_query
 from recertia.memory.semantic import FactStore
 from recertia.paths import PathEscapeError, contained_path, looks_absolute
 from recertia.policy_load import load_policy
+from recertia.ports.identity import ledger_actor
 from recertia.proposals.store import ProposalRecord
 from recertia.trajectory.import_store import ImportRejected, ingest_trajectory
 
@@ -219,7 +220,7 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
             "recertia_session"
         )
         user = ctx.sessions.parse(token)
-        actor = user.user_id if user else principal.key_id
+        actor = user.user_id if user else ledger_actor(principal)
         rec = ProposalRecord(
             proposal_id=uuid4().hex[:12],
             kind="policy",
@@ -272,7 +273,7 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
             "recertia_session"
         )
         user = ctx.sessions.parse(token)
-        actor = user.user_id if user else principal.key_id
+        actor = user.user_id if user else ledger_actor(principal)
         rec = ctx.proposals.get(decision_id, tenant_id=tenant_id)
         if rec is None:
             raise V1HTTPError(404, code="not_found", message="review not found")

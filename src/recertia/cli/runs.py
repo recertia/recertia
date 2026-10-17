@@ -370,6 +370,11 @@ def ledger_verify(
         "--check-sig",
         help="Verify HMAC signatures. Unsigned entries are allowed until the first signed one.",
     ),
+    check_anchor: bool = typer.Option(
+        False,
+        "--check-anchor",
+        help="Reserved. Skipped until a tip anchor is configured.",
+    ),
 ) -> None:
     ledger = HashChainLedger(_ledger_path(runs_root, tenant))
     try:
@@ -380,7 +385,8 @@ def ledger_verify(
     except LedgerUnavailable as exc:
         typer.echo(f"LEDGER INVALID: {exc}", err=True)
         raise typer.Exit(code=exc.exit_code) from exc
-    typer.echo(f"ledger OK: {report.entries} entries verified")
+    anchor = " (anchor check skipped)" if check_anchor else ""
+    typer.echo(f"ledger OK: {report.entries} entries verified{anchor}")
 
 
 @ledger_app.command("repair")

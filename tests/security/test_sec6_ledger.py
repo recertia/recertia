@@ -28,6 +28,26 @@ def _rehash(path: Path) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def test_check_anchor_is_a_skip(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from recertia.cli.main import app
+
+    result = CliRunner().invoke(
+        app, ["ledger", "verify", "--runs-root", str(tmp_path), "--check-anchor"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "anchor check skipped" in result.output
+
+
+def test_ledger_actor_is_the_principal_subject() -> None:
+    from recertia.ports.identity import Principal, ledger_actor
+
+    principal = Principal.local_operator(actor="ada")
+    assert ledger_actor(principal) == "ada"
+    assert ledger_actor(principal) == principal.subject
+
+
 def test_unsigned_legacy_verifies_without_a_key(tmp_path: Path) -> None:
     ledger = HashChainLedger(tmp_path / "ledger.jsonl")
     ledger.append(actor="a", action="write", target="skill", at=datetime.now(timezone.utc))
