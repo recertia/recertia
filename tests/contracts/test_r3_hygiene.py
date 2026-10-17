@@ -38,6 +38,11 @@ def test_assumptions_hygiene_script_passes() -> None:
     assert result.returncode == 0, result.stderr or result.stdout
 
 
+def test_raw_writes_inventory_matches_baseline() -> None:
+    result = _run("check_raw_writes.py")
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
 def test_assumptions_hygiene_flags_unmarked_gate(tmp_path: Path) -> None:
     assumptions = tmp_path / "assumptions.md"
     assumptions.write_text(

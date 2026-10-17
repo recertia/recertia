@@ -168,16 +168,24 @@ class RevokeQueue:
             ).append(line)
 
     def drain(self, limit: int) -> list[dict]:
-        if not self.path.exists() or limit <= 0:
+        if limit <= 0:
             return []
-        from recertia.fsutil import JsonlRewriter, durability_from_settings
+        from recertia.fsutil import (
+            JsonlRewriter,
+            durability_from_settings,
+            file_lock,
+            iter_complete_lines,
+        )
         from recertia.settings import load_settings
 
-        with self._lock:
-            lines = [ln for ln in self.path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        with file_lock(lock_path):
+            if not self.path.exists():
+                return []
+            lines = [ln.decode("utf-8") for ln in iter_complete_lines(self.path)]
             taken = lines[:limit]
             rest = lines[limit:]
-            JsonlRewriter().rewrite(
+            JsonlRewriter().rewrite_unlocked(
                 self.path,
                 [ln.encode("utf-8") for ln in rest],
                 durability=durability_from_settings(load_settings()),

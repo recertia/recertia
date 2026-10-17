@@ -112,6 +112,18 @@ class JsonlRewriter:
 
     def rewrite(self, path: Path, lines: Sequence[bytes], *, durability: Durability) -> None:
         lock_path = path.with_suffix(path.suffix + ".lock")
-        body = b"".join(line if line.endswith(b"\n") else line + b"\n" for line in lines)
         with file_lock(lock_path):
-            atomic_write_bytes(path, body, durability=durability)
+            self.rewrite_unlocked(path, lines, durability=durability)
+
+    def rewrite_unlocked(
+        self, path: Path, lines: Sequence[bytes], *, durability: Durability
+    ) -> None:
+        """Rewrite while the caller already holds the JSONL lock.
+
+        ``file_lock`` is not reentrant. ``RevokeQueue.drain`` holds the lock
+        across the read and this rewrite so a concurrent append cannot land
+        in the window between them.
+        """
+
+        body = b"".join(line if line.endswith(b"\n") else line + b"\n" for line in lines)
+        atomic_write_bytes(path, body, durability=durability)

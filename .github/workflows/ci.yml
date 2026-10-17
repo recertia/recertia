@@ -85,6 +85,9 @@ jobs:
       - name: Assumptions hygiene (R3)
         run: python3 scripts/check_assumptions_hygiene.py --check
 
+      - name: Raw write inventory (REL-1c, baselined)
+        run: python3 scripts/check_raw_writes.py --check
+
       - name: Security review (static)
         run: python3 scripts/security_review.py --check
 
