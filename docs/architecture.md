@@ -20,6 +20,7 @@
 - [Measurement and domain scope](architecture/measurement-and-scope.md)
 - [Remaining work: implementation plan](architecture/remaining-work.md)
 - [Store receipts remaining work (RW-SR / ADR-0020)](architecture/remaining-work-sr.md)
+- [Recuris remaining work (RW-RC, deferred)](architecture/remaining-work-rc.md)
 - [Incident tabletop (operator GA)](architecture/incident-tabletop.md)
 - [Threat-model deltas (principal review §5, single-operator)](architecture/threat-model-deltas.md)
 - [Product console architecture](architecture/product-console.md)
@@ -39,7 +40,7 @@
 - [2026-08-24 landing extract](plans/2026-08-24-todays-work-refactor.md) — dual-path extract after today's stack; landed, not a GA gate
 - [Recuris record (2026-08-26)](plans/2026-08-26-recuris.md) — Yu et al. arXiv:2608.24876; closest published sibling; cite, do not reshape T3
 - [Store receipts (2026-09-23)](plans/2026-09-23-store-receipts.md) — ADR-0020 Proposed; P0 contract only; `backup --receipts` stays off until P4 after one counted soak week compares tar vs receipt restore
-- [Multi-tenant remediation](plans/remediation/README.md) — [ADR-0021](adr/0021-deployment-model.md) accepted: pooled control plane and isolated execution; specifications only, no runtime change
+- [Multi-tenant remediation](plans/remediation/README.md) — [ADR-0021](adr/0021-deployment-model.md) accepted. Phase 0 (#68) and Phase 1 (#69) shipped. Phases 2–5 remain (services, queue, control plane, guardrails).
 
 Normative requirements are in the [specifications index](specifications.md).
 Forward work is in the
