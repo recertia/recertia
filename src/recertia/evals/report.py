@@ -22,12 +22,15 @@ def assemble_metric_report(
     snapshot_id: str | None = None,
     model_version: str | None = None,
     canary_root: Path | str | None = None,
+    tenant_id: str | None = None,
 ) -> MetricReport:
     """Build a report with honest ``unavailable`` holes, including yield/precision/decay."""
 
     from recertia.policy_load import load_policy
 
-    rows = eval_store.metric_rows(task_class=task_class, snapshot_id=snapshot_id)
+    rows = eval_store.metric_rows(
+        task_class=task_class, snapshot_id=snapshot_id, tenant_id=tenant_id
+    )
     snap = snapshot_id or (rows[0]["snapshot_id"] if rows else "none")
     min_runs = load_policy().min_independent_runs
     _updated, pressure = recompute_active_set(skill_store, config=DEFAULT_AUTONOMY)

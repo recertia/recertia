@@ -21,7 +21,8 @@ def drain_eval_outbox(checkpoints: CheckpointStore, eval_store: EvalStore) -> in
     for row in checkpoints.pending_eval_outbox():
         try:
             state = RunState.model_validate_json(row.payload_json)
-            eval_store.append_run(state)
+            tenant = row.observation_key.split("/", 1)[0] if "/" in row.observation_key else None
+            eval_store.append_run(state, tenant_id=tenant)
         except ObservationError as exc:
             if "already has an immutable observation" in str(exc):
                 checkpoints.mark_eval_outbox(row.observation_key, "delivered", attempts=row.attempts)

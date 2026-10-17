@@ -111,6 +111,7 @@ class EvalStore:
                 "suppressed_skill_version": "INTEGER",
                 "valid_non_judge_evidence": "INTEGER NOT NULL DEFAULT 0",
                 "evidence_hash": "TEXT NOT NULL DEFAULT ''",
+                "tenant_id": "TEXT",
             }
             for column, definition in migrations.items():
                 if column not in existing:
@@ -122,6 +123,7 @@ class EvalStore:
         *,
         strategy_override: str | None = None,
         force_eval_fixture: bool = False,
+        tenant_id: str | None = None,
     ) -> EvalObservation:
         """Append an observation derived only from a completed, locked ``RunState``.
 
@@ -185,7 +187,7 @@ class EvalStore:
             valid_non_judge_evidence=valid_non_judge_evidence,
             evidence_hash=evidence_hash,
         )
-        self._append_observation(obs)
+        self._append_observation(obs, tenant_id=tenant_id)
         return obs
 
     def record_observation(self, obs: EvalObservation) -> None:
@@ -194,7 +196,7 @@ class EvalStore:
         del obs
         raise ObservationError("observations must be append_run-derived from a locked RunState")
 
-    def _append_observation(self, obs: EvalObservation) -> None:
+    def _append_observation(self, obs: EvalObservation, *, tenant_id: str | None = None) -> None:
         with self._lock, self._conn:
             try:
                 self._conn.execute(
@@ -204,8 +206,10 @@ class EvalStore:
                     first_attempt_success, predicted_success, terminal, fixture_id,
                     is_eval_fixture, strategy, attempt_no, cost_usd, abstention_confirmed,
                     skill_id, skill_version, suppressed_skill_id, suppressed_skill_version,
-                    valid_non_judge_evidence, evidence_hash, recorded_at, payload
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    valid_non_judge_evidence, evidence_hash, recorded_at, payload, tenant_id
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
                 """,
                 (
                     obs.run_id,
@@ -230,6 +234,7 @@ class EvalStore:
                     obs.evidence_hash,
                     obs.recorded_at.isoformat(),
                     obs.model_dump_json(),
+                    tenant_id,
                 ),
             )
             except sqlite3.IntegrityError as exc:
@@ -626,13 +631,19 @@ class EvalStore:
         return RetrievalAblationEffect.model_validate_json(row["payload"]) if row else None
 
     def metric_rows(
-        self, *, task_class: str | None = None, snapshot_id: str | None = None
+        self,
+        *,
+        task_class: str | None = None,
+        snapshot_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> list[dict]:
         """Return stored, run-derived rows in the shape consumed by metric aggregation."""
 
         return [
             observation.model_dump(mode="json")
-            for observation in self.list_observations(task_class=task_class, snapshot_id=snapshot_id)
+            for observation in self.list_observations(
+                task_class=task_class, snapshot_id=snapshot_id, tenant_id=tenant_id
+            )
         ]
 
     def _sample(self, sql: str, params: list[object]) -> BinomialSample:
@@ -643,7 +654,11 @@ class EvalStore:
         )
 
     def list_observations(
-        self, *, task_class: str | None = None, snapshot_id: str | None = None
+        self,
+        *,
+        task_class: str | None = None,
+        snapshot_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> list[EvalObservation]:
         clauses: list[str] = []
         params: list[object] = []
@@ -653,6 +668,9 @@ class EvalStore:
         if snapshot_id is not None:
             clauses.append("snapshot_id = ?")
             params.append(snapshot_id)
+        if tenant_id is not None:
+            clauses.append("(tenant_id IS NULL OR tenant_id = ?)")
+            params.append(tenant_id)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         rows = self._conn.execute(
             f"SELECT payload FROM observations{where} ORDER BY recorded_at ASC", params

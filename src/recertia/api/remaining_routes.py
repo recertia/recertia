@@ -436,4 +436,6 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
             env_fingerprint=body.env,
             limit=body.limit,
             affordance_path=runs_root / "affordances.json",
+            tenant_id=tenant_id,
+            tenant_root=runs_root,
         )

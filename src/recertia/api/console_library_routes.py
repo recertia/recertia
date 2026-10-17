@@ -433,6 +433,7 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
                 skill_store=skill_store,
                 task_class=task_class,
                 snapshot_id=snapshot_id,
+                tenant_id=tenant_id,
             )
         finally:
             store.close()
