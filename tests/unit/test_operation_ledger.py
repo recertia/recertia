@@ -136,3 +136,52 @@ def test_concurrent_waiters_block_until_result_not_pending(tmp_path: Path) -> No
     assert not errors
     assert calls == ["holder"]
     assert results == [{"value": 42}, {"value": 42}]
+
+
+def test_live_owner_pending_not_reclaimed_after_legacy_timeout(tmp_path: Path) -> None:
+    """F7: a live in-process owner must not be reclaimed after the old 5s timer."""
+
+    ops = OperationLedger(tmp_path / "ops.db", pending_timeout_s=5.0, pending_poll_s=0.01)
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def owner_a() -> dict:
+        calls.append("A")
+        started.set()
+        assert release.wait(timeout=20.0)
+        return {"owner": "A"}
+
+    def owner_b() -> dict:
+        calls.append("B")
+        return {"owner": "B"}
+
+    def run_a() -> None:
+        try:
+            results.append(ops.run_once("run-1", 1, "solve", 0, owner_a))
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def run_b() -> None:
+        try:
+            results.append(ops.run_once("run-1", 1, "solve", 0, owner_b))
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    holder = threading.Thread(target=run_a)
+    waiter = threading.Thread(target=run_b)
+    holder.start()
+    assert started.wait(timeout=2.0)
+    time.sleep(5.2)
+    waiter.start()
+    time.sleep(0.3)
+    assert calls == ["A"]
+    release.set()
+    holder.join(timeout=2.0)
+    waiter.join(timeout=2.0)
+
+    assert not errors
+    assert calls == ["A"]
+    assert results == [{"owner": "A"}, {"owner": "A"}]

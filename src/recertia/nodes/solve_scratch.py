@@ -31,6 +31,8 @@ def solve_scratch_observe_act(
     assert ctx.model is not None and ctx.tools is not None
     from recertia.solver.command_policy import CommandPolicyError, enforce_model_shell
 
+    model = ctx.model
+    tools = ctx.tools
     writer = (
         TranscriptWriter(ctx.transcripts, ctx.run_id, attempt_no)
         if ctx.transcripts is not None
@@ -67,11 +69,52 @@ def solve_scratch_observe_act(
             "Reply with only the command, no markdown. "
             "If the task appears done, reply with: true"
         )
-        try:
-            response = ctx.model.complete(
-                prompt,
+        window = RuntimeWindow(ctx)
+
+        def _step(prompt_text: str = prompt, seq: int = step) -> dict:
+            response = model.complete(
+                prompt_text,
                 system="Return a single shell command only.",
             )
+            lines = response.text.strip().splitlines()
+            command = lines[0].strip().strip("`") if lines else ""
+            payload: dict = {
+                "command": command,
+                "prompt_tokens": response.prompt_tokens,
+                "completion_tokens": response.completion_tokens,
+                "cost_usd": response.cost_usd,
+            }
+            if not command:
+                payload["empty"] = True
+                payload["usage"] = UsageDelta().as_dict()
+                return payload
+            try:
+                command = enforce_model_shell(command)
+            except CommandPolicyError as exc:
+                payload["refused"] = str(exc)
+                payload["usage"] = UsageDelta().as_dict()
+                return payload
+            payload["command"] = command
+            invoke_window = RuntimeWindow(ctx)
+            result = tools.invoke(
+                "shell",
+                {"command": command},
+                workdir=ctx.workdir,
+                step_id=f"scratch-{seq}",
+                origin="model",
+            )
+            payload.update(
+                {
+                    "returncode": result.exit_code,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "usage": invoke_window.delta().as_dict(),
+                }
+            )
+            return payload
+
+        try:
+            result = ctx.op_once(step, _step)
         except Exception as exc:  # noqa: BLE001 — solver boundary
             return failed(
                 state,
@@ -86,54 +129,35 @@ def solve_scratch_observe_act(
                 note="scratch model error",
                 updates={"transcript_ref": writer.finalize() if writer else None},
             )
-        # The model call is outside op_once, so it is re-issued on resume and charged directly.
+
+        # Charge from the stored result so resume of this hop still meters spend
+        # (AttemptMeter is per node-entry and is not idempotent).
         meter.charge(
-            tokens=response.prompt_tokens + response.completion_tokens,
-            cost_usd=response.cost_usd,
+            tokens=int(result.get("prompt_tokens") or 0)
+            + int(result.get("completion_tokens") or 0),
+            cost_usd=float(result.get("cost_usd") or 0.0),
         )
-        command = response.text.strip().splitlines()[0].strip().strip("`")
-        if not command:
+        command = str(result.get("command") or "")
+        if result.get("empty"):
             last_error = "empty command from model"
             continue
-        try:
-            command = enforce_model_shell(command)
-        except CommandPolicyError as exc:
-            last_error = str(exc)
-            history.append(f"$ {command}\n[refused] {exc}")
+        if result.get("refused"):
+            last_error = str(result["refused"])
+            history.append(f"$ {command}\n[refused] {result['refused']}")
             if writer:
-                writer.event("tool", tool="shell", command=command, refused=str(exc))
+                writer.event("tool", tool="shell", command=command, refused=str(result["refused"]))
             continue
 
-        window = RuntimeWindow(ctx)
-
-        def _run(cmd: str = command, seq: int = step, win: RuntimeWindow = window) -> dict:
-            if writer:
-                writer.event("tool", tool="shell", command=cmd, step=seq)
-            result = ctx.tools.invoke(  # type: ignore[union-attr]
-                "shell",
-                {"command": cmd},
-                workdir=ctx.workdir,
-                step_id=f"scratch-{seq}",
-                origin="model",
-            )
-            return {
-                "returncode": result.exit_code,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "usage": win.delta().as_dict(),
-            }
-
-        result = ctx.op_once(step, _run)
         meter.charge_delta(UsageDelta.from_dict(result.get("usage") or {}))
         record_new_affordances(ctx, window)
+        if writer:
+            writer.event("tool", tool="shell", command=command, step=step)
         history.append(
             f"$ {command}\nexit={result['returncode']}\n"
             f"stdout:\n{result['stdout'][-1500:]}\nstderr:\n{result['stderr'][-800:]}"
         )
         if result["returncode"] != 0:
-            last_error = (
-                f"step {step} exited {result['returncode']}: {command}"
-            )
+            last_error = f"step {step} exited {result['returncode']}: {command}"
             continue
         # Successful command: leave the attempt for validate to judge.
         # (A final `true` also ends the loop cleanly.)
