@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 from contracts.program import MigrationProgram, MigrationStep, RepoBinding
 
+_COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+
 
 class GitTipError(ValueError):
     """Invalid binding, tip, or checkout."""
+
+
+def assert_tip_sha(sha: str) -> str:
+    """Accept only a 40-character lowercase commit id. Options never reach git."""
+
+    if _COMMIT_SHA.fullmatch(sha) is None:
+        raise GitTipError("tip_sha must be 40 lowercase hex characters")
+    return sha
 
 
 def tenant_bindings_root(api_root: Path, tenant_id: str) -> Path:
@@ -47,7 +58,7 @@ def assert_git_tip_program(program: MigrationProgram) -> None:
 def git_rev_parse(repo: Path, ref: str = "HEAD") -> str:
     try:
         out = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", ref],
+            ["git", "-C", str(repo), "rev-parse", "--verify", "--end-of-options", ref],
             check=True,
             capture_output=True,
             text=True,
@@ -91,7 +102,7 @@ def resolve_tip_sha(
     assert_git_tip_program(program)
     assert program.repo_binding is not None
     if explicit:
-        return explicit
+        return assert_tip_sha(explicit)
     pred = predecessor_tip(program, step)
     if pred:
         return pred
@@ -106,6 +117,7 @@ def checkout_tip(*, binding_root: Path, tip_sha: str, dest: Path) -> str:
     Returns the checked-out HEAD sha.
     """
 
+    sha = assert_tip_sha(tip_sha)
     if dest.exists() and any(dest.iterdir()):
         raise GitTipError(f"seed destination is not empty: {dest}")
     dest.mkdir(parents=True, exist_ok=True)
@@ -118,7 +130,7 @@ def checkout_tip(*, binding_root: Path, tip_sha: str, dest: Path) -> str:
             timeout=120,
         )
         subprocess.run(
-            ["git", "-C", str(dest), "checkout", "--force", tip_sha],
+            ["git", "-C", str(dest), "switch", "--detach", "--end-of-options", sha],
             check=True,
             capture_output=True,
             text=True,

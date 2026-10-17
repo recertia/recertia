@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import threading
 import time
@@ -351,6 +352,7 @@ def create_app(
     )
 
     configure_logging(loaded)
+    os.umask(0o077)
     root = root or DEFAULT_ROOT
     root.mkdir(parents=True, exist_ok=True)
     from recertia.persistence.root_lock import RootLock
@@ -378,7 +380,14 @@ def create_app(
         lambda tenant_id, run_id: _load_from_checkpoints(root, tenant_id, run_id),
     )
     run_slots = threading.Semaphore(_max_in_flight_runs())
-    app = FastAPI(title="Recertia", version="0.1.0")
+    expose_docs = loaded.env != "prod"
+    app = FastAPI(
+        title="Recertia",
+        version="0.1.0",
+        docs_url="/docs" if expose_docs else None,
+        redoc_url="/redoc" if expose_docs else None,
+        openapi_url="/openapi.json" if expose_docs else None,
+    )
 
     @app.middleware("http")
     async def _request_log_context(request: Any, call_next: Any) -> Any:

@@ -31,6 +31,7 @@ _DEPLOYMENT_CHECKS: list[Callable[["Settings"], None]] = []
 # Names read by load_settings. The inventory test compares this set to src/.
 KNOWN_ENV_KEYS = frozenset(
     {
+        "RECERTIA_ENV",
         "RECERTIA_DEPLOYMENT_MODE",
         "RECERTIA_DURABILITY",
         "RECERTIA_DB_BACKEND",
@@ -224,6 +225,7 @@ def _scan_model_prices(
 
 @dataclass(frozen=True)
 class Settings:
+    env: Literal["dev", "prod"] = "dev"
     deployment_mode: DeploymentMode = "single_node"
     durability: DurabilityName = "normal"
     db_backend: DbBackend = "sqlite"
@@ -435,7 +437,12 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     openai_base = _raw(env, "RECERTIA_OPENAI_BASE_URL").strip() or None
     backend = _choice(env, "RECERTIA_EXECUTION_BACKEND", {"container", "local"}, "container")
 
+    process_env = _raw(env, "RECERTIA_ENV", "dev").strip().lower() or "dev"
+    if process_env not in {"dev", "prod"}:
+        raise ConfigError("RECERTIA_ENV must be dev or prod")
+
     return Settings(
+        env=process_env,  # type: ignore[arg-type]
         deployment_mode=_choice(  # type: ignore[arg-type]
             env, "RECERTIA_DEPLOYMENT_MODE", {"single_node", "multi_node"}, "single_node"
         ),
