@@ -202,8 +202,9 @@ class HashChainLedger:
             evidence=evidence or {},
             at=at or datetime.now(timezone.utc),
         )
-        if self._hook is not None:
-            draft = self._hook.before_append(draft)
+        hook = self._hook if self._hook is not None else _settings_hook()
+        if hook is not None:
+            draft = hook.before_append(draft)
         entry = draft.model_copy(update={"entry_hash": compute_entry_hash(draft)})
         line = (entry.model_dump_json() + "\n").encode("utf-8")
         appender = JsonlAppender(
@@ -224,8 +225,8 @@ class HashChainLedger:
             durability_name=self._durability_name,
             durability=self._durability,
         )
-        if self._hook is not None:
-            self._hook.after_append(entry)
+        if hook is not None:
+            hook.after_append(entry)
         return entry
 
     def _tip_for_append(self) -> tuple[int, str]:
@@ -264,17 +265,19 @@ class HashChainLedger:
             raw = self._path.read_bytes() if size else b""
             return self._entries_from_bytes(raw)
 
-    def verify(self, *, full: bool = False) -> VerifyReport:
+    def verify(self, *, full: bool = False, check_sig: bool = False) -> VerifyReport:
         """Recompute the chain. Raise :class:`LedgerVerificationError` on the first break.
 
         ``full=False`` uses a verified sidecar and checks only the suffix. A torn
         tail always fails, including when the complete prefix would otherwise verify.
+        ``check_sig=True`` also checks HMAC signatures and forces a full scan.
+        Unsigned entries are accepted until the first signed entry.
         """
 
         with self._held():
-            return self._verify_unlocked(full=full)
+            return self._verify_unlocked(full=full or check_sig, check_sig=check_sig)
 
-    def _verify_unlocked(self, *, full: bool) -> VerifyReport:
+    def _verify_unlocked(self, *, full: bool, check_sig: bool = False) -> VerifyReport:
         self.lines_parsed = 0
         size = self._path.stat().st_size if self._path.exists() else 0
         try:
@@ -309,6 +312,8 @@ class HashChainLedger:
             )
         entries = self._entries_from_bytes(raw[:complete_len])
         self._verify_chain(entries, start_seq=0, prev_hash=GENESIS_HASH)
+        if check_sig:
+            self._check_signatures(entries)
         tip = entries[-1].entry_hash if entries else GENESIS_HASH
         self._tip = (len(entries), tip)
         write_sidecar(
@@ -364,6 +369,23 @@ class HashChainLedger:
                 )
             prev_hash = entry.entry_hash
 
+    def _check_signatures(self, entries: list[LedgerEntry]) -> None:
+        from recertia.ledger.signer import SIG_FIELD, ledger_hmac_key, signature_ok
+
+        key = ledger_hmac_key()
+        seen_cutover = False
+        for entry in entries:
+            sig = entry.evidence.get(SIG_FIELD)
+            if not seen_cutover and sig is None:
+                continue
+            seen_cutover = True
+            if key is None:
+                raise LedgerVerificationError("ledger signature key is not configured")
+            if not signature_ok(entry, key):
+                raise LedgerVerificationError(
+                    f"entry seq={entry.seq} ledger signature does not verify"
+                )
+
     def repair_torn_tail(self, *, actor: str, dry_run: bool = False) -> RepairReport:
         from recertia.ledger.repair import repair_locked
 
@@ -387,3 +409,9 @@ def _resolve_durability(
         if lock_timeout_s is None:
             lock_timeout_s = settings.ledger_lock_timeout_s
     return str(durability), float(lock_timeout_s)
+
+
+def _settings_hook() -> LedgerHook | None:
+    from recertia.ledger.signer import hmac_hook_from_settings
+
+    return hmac_hook_from_settings()

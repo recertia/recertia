@@ -365,10 +365,15 @@ def _ledger_path(runs_root: Path, tenant: str | None) -> Path:
 def ledger_verify(
     runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
     tenant: Optional[str] = typer.Option(None, "--tenant"),
+    check_sig: bool = typer.Option(
+        False,
+        "--check-sig",
+        help="Verify HMAC signatures. Unsigned entries are allowed until the first signed one.",
+    ),
 ) -> None:
     ledger = HashChainLedger(_ledger_path(runs_root, tenant))
     try:
-        report = ledger.verify()
+        report = ledger.verify(check_sig=check_sig)
     except LedgerVerificationError as exc:
         typer.echo(f"LEDGER INVALID: {exc}", err=True)
         raise typer.Exit(code=2) from exc

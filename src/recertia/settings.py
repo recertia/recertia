@@ -117,6 +117,7 @@ KNOWN_ENV_KEYS = frozenset(
         "RECERTIA_JSONL_FSYNC_INTERVAL_S",
         "RECERTIA_LEDGER_LOCK_TIMEOUT_S",
         "RECERTIA_LEDGER_VERIFY_FULL",
+        "RECERTIA_LEDGER_HMAC_KEY",
         "RECERTIA_EXECUTOR_MODE",
         "RECERTIA_QUOTA_RESERVE_TTL_S",
     }
@@ -315,6 +316,7 @@ class Settings:
     jsonl_fsync_interval_s: float = 1.0
     ledger_lock_timeout_s: float = 5.0
     ledger_verify_full: bool = False
+    ledger_hmac_key: str = ""
     executor_mode: str = ""
     quota_reserve_ttl_s: int = 86400
 
@@ -525,6 +527,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         jsonl_fsync_interval_s=_float(env, "RECERTIA_JSONL_FSYNC_INTERVAL_S", 1.0),
         ledger_lock_timeout_s=_float(env, "RECERTIA_LEDGER_LOCK_TIMEOUT_S", 5.0),
         ledger_verify_full=_bool(env, "RECERTIA_LEDGER_VERIFY_FULL"),
+        ledger_hmac_key=_raw(env, "RECERTIA_LEDGER_HMAC_KEY").strip(),
         executor_mode=_raw(env, "RECERTIA_EXECUTOR_MODE").strip(),
         quota_reserve_ttl_s=_int(env, "RECERTIA_QUOTA_RESERVE_TTL_S", 86400),
     )
