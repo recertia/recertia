@@ -150,6 +150,11 @@
       "title": "Closed By",
       "type": "string"
     },
+    "genesis": {
+      "default": false,
+      "title": "Genesis",
+      "type": "boolean"
+    },
     "reviewed_git": {
       "anyOf": [
         {

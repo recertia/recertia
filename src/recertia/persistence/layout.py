@@ -32,6 +32,10 @@ class RunsRootLayout:
         return self.runs_root / "ledger.jsonl"
 
     @property
+    def receipts_path(self) -> Path:
+        return self.runs_root / "receipts.jsonl"
+
+    @property
     def run_events_dir(self) -> Path:
         return self.runs_root / "run_events"
 

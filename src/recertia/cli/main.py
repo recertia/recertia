@@ -1,5 +1,5 @@
-"""``recertia`` CLI wiring: ``run``, ``runs``, ``ledger``, ``skills``, ``keys``,
-``lift``, ``jobs``, ``gc``, ``task-state``, ``trajectory``, ``systems``.
+"""``recertia`` CLI wiring: ``run``, ``runs``, ``ledger``, ``receipt``, ``skills``,
+``keys``, ``lift``, ``jobs``, ``gc``, ``task-state``, ``trajectory``, ``systems``.
 
 Command implementations live in sibling modules; this file builds the Typer app and
 re-exports the historical command callables for tests that import them from ``main``.
@@ -25,6 +25,7 @@ from recertia.cli.migrate_cmd import register_migrate_commands
 from recertia.cli.policy_cmd import register_policy_commands
 from recertia.cli.probes import register_probes_commands
 from recertia.cli.proposals_cmd import register_proposals_commands
+from recertia.cli.receipt_cmd import register_receipt_commands
 from recertia.cli.review_cmd import register_review_commands
 from recertia.cli.runs import (
     ledger_verify,
@@ -87,6 +88,7 @@ register_jobs_commands(app)
 register_gc_commands(app)
 register_workspaces_commands(app)
 register_backup_commands(app)
+register_receipt_commands(app)
 register_tabletop_commands(app)
 register_tenant_commands(app)
 register_canary_commands(app)

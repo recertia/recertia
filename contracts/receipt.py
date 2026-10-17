@@ -59,6 +59,7 @@ class StoreReceipt(BaseModel):
     prev_receipt_hash: str
     receipt_hash: str
     closed_by: ReceiptCloser
+    genesis: bool = False
     reviewed_git: str | None = None
     fold_digest: str | None = None
     residue_cid: str | None = None

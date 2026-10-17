@@ -30,6 +30,14 @@ def test_empty_compression_moves_is_valid() -> None:
     assert receipt.residue_manifest == []
     assert receipt.fold_digest is None
     assert receipt.reviewed_git is None
+    assert receipt.genesis is False
+
+
+def test_genesis_true_is_valid() -> None:
+    receipt = _receipt(genesis=True, closed_by="upgrade_genesis")
+    assert receipt.genesis is True
+    assert receipt.closed_by == "upgrade_genesis"
+    assert receipt.compression_moves == []
 
 
 def test_close_receipt_is_a_ledger_action() -> None:
