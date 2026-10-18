@@ -15,7 +15,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Literal, TypeVar
+from typing import Callable, Literal, TypeVar
 
 from recertia.persistence.db import open_db
 from recertia.persistence.root_lock import RootLock
@@ -59,12 +59,10 @@ class OperationLedger:
         lease_db: Path | str | None = None,
         tenant_id: str = "local",
         schema_lock: bool = True,
-        read_fallback: Path | str | None = None,
     ) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lease_db = Path(lease_db) if lease_db is not None else self._db_path
-        self._read_fallback = Path(read_fallback) if read_fallback is not None else None
         self._tenant_id = tenant_id
         self._lock = threading.Lock()
         # Kept for constructor compatibility. Live in-process owners are never
@@ -102,16 +100,12 @@ class OperationLedger:
                 "WHERE run_id=? AND incarnation=? AND attempt_no=? AND node=? AND op_seq=?",
                 (run_id, incarnation, attempt_no, node, op_seq),
             ).fetchone()
-        if row is not None:
-            result = json.loads(row[0])
-            if not _is_pending(result):
-                return True, result
-        fallback = self._fallback_result(
-            run_id, incarnation, attempt_no, node, op_seq
-        )
-        if fallback is not None:
-            return True, fallback
-        return False, None
+        if row is None:
+            return False, None
+        result = json.loads(row[0])
+        if _is_pending(result):
+            return False, None
+        return True, result
 
     def put(
         self,
@@ -206,12 +200,6 @@ class OperationLedger:
                             self._install_claim(key)
                             claimed = True
                     else:
-                        leftover = self._fallback_result(
-                            run_id, incarnation, attempt_no, node, op_seq
-                        )
-                        if leftover is not None:
-                            self._conn.execute("COMMIT")
-                            return leftover  # type: ignore[no-any-return]
                         self._conn.execute(
                             "INSERT INTO operations "
                             "(run_id, incarnation, attempt_no, node, op_seq, result_json) "
@@ -305,47 +293,6 @@ class OperationLedger:
                 (run_id, incarnation, attempt_no, node, json.dumps(_PENDING_SENTINEL)),
             ).fetchone()
         return int(row[0]) if row else 0
-
-    def _fallback_result(
-        self,
-        run_id: str,
-        incarnation: int,
-        attempt_no: int,
-        node: str,
-        op_seq: int,
-    ) -> Any | None:
-        row = self._fallback_query(
-            "SELECT result_json FROM operations "
-            "WHERE run_id=? AND incarnation=? AND attempt_no=? AND node=? AND op_seq=?",
-            (run_id, incarnation, attempt_no, node, op_seq),
-        )
-        if row is None:
-            return None
-        result = json.loads(row[0])
-        if _is_pending(result):
-            return None
-        return result
-
-    def _fallback_query(
-        self, sql: str, params: tuple[object, ...] = ()
-    ) -> tuple[Any, ...] | None:
-        path = self._read_fallback
-        if path is None or not path.is_file():
-            return None
-        try:
-            conn = sqlite3.connect(
-                f"file:{path.resolve().as_posix().replace('?', '%3F')}?mode=ro",
-                uri=True,
-            )
-        except sqlite3.Error:
-            return None
-        try:
-            row = conn.execute(sql, params).fetchone()
-        except sqlite3.Error:
-            return None
-        finally:
-            conn.close()
-        return None if row is None else tuple(row)
 
     def _prepare_lease_attach(self, fencing_token: int | None) -> None:
         del fencing_token

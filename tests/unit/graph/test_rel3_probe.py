@@ -122,9 +122,8 @@ def test_probe_h_ops_rebuild_resumable_after_crash() -> None:
     _run(probe.scen_ops_rebuild_crash)
 
 
-@pytest.mark.skipif(
-    not _has_legacy_import(),
-    reason="REL-3 PR #90: import_legacy must not fall back to files while the root lock is busy",
+@pytest.mark.skip(
+    reason="superseded by R3 O/M3/M4 a-d: a busy leftover open must raise typed Busy or block, not overlay",
 )
 def test_probe_i_no_state_lost_across_concurrent_import() -> None:
     _run(probe.scen_import_split_brain)
@@ -172,17 +171,15 @@ def _assert_named(rows: list[tuple[str, bool, str]], name: str) -> None:
     assert not failed, "; ".join(f"{n}: {detail}" for n, detail in failed)
 
 
-@pytest.mark.skipif(
-    not _has_legacy_import(),
-    reason="REL-3 PR #90: lock-busy import must keep leftover state visible",
+@pytest.mark.skip(
+    reason="superseded by R3 O/M3/M4 a-d: a busy leftover open must raise typed Busy or block, not overlay",
 )
 def test_probe_l_legacy_visible_while_lock_busy() -> None:
     _assert_named(_busy_records(), "L legacy state visible while root lock busy")
 
 
-@pytest.mark.skipif(
-    not _has_legacy_import(),
-    reason="REL-3 PR #90: lock-busy import must keep leftover state visible",
+@pytest.mark.skip(
+    reason="superseded by R3 O/M3/M4 a-d: a busy leftover open must raise typed Busy or block, not overlay",
 )
 def test_probe_m_import_after_busy_keeps_state() -> None:
     _assert_named(_busy_records(), "M later import after busy-path write keeps all state")
