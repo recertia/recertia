@@ -96,7 +96,7 @@ def test_checkpoint_and_operation_store_fencing_token(tmp_path: Path) -> None:
             workdir=workdir,
             max_steps=1,
         )
-        row = sqlite3.connect(runs / "checkpoints.db").execute(
+        row = sqlite3.connect(runs / "runtime.db").execute(
             "SELECT fencing_token FROM checkpoints WHERE run_id=?",
             ("run-fenced",),
         ).fetchone()

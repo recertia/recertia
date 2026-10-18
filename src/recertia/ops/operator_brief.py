@@ -73,12 +73,13 @@ def brief_from_runs_root(runs_root: Path | str) -> OperatorBrief:
 
     from contracts.policy import COMPUTER_USE_TASK_CLASSES
     from recertia.graph.store import CheckpointStore
+    from recertia.persistence.import_legacy import live_checkpoint_db
 
     root = Path(runs_root)
-    db = root / "checkpoints.db"
+    db = live_checkpoint_db(root)
     unavailable: list[str] = []
     stuck: list[dict[str, Any]] = []
-    if not db.exists():
+    if db is None:
         unavailable.append("checkpoints missing")
     else:
         store = CheckpointStore(db)

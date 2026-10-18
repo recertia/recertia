@@ -1838,7 +1838,7 @@ time.
 | **RW-HCI** | engineering | Ye/Zhao high-confidence review fixes (honest faithfulness scorer, paired lift gap, exact applicability, writer, curator proposal log) | P0+P1+leftovers landed; `a9` under evaluation |
 | **RW-SR** | engineering | Store Receipts — published durability unit (ADR-0020) | P0 contract shipped; P1–P5 open; not a GA gate |
 | **RW-RC** | docs + gated | Recuris extracts (checked WM, blame taxonomy, three-arm lift, miner candidate). **Do not build.** | open, deferred |
-| **RW-REM** | engineering | Multi-tenant remediation (ADR-0021): services, queue, control plane, guardrails | Phase 0–1 shipped (#68/#69); Phases 2–5 remaining |
+| **RW-REM** | engineering | Multi-tenant remediation (ADR-0021): services, queue, control plane, guardrails | Phase 0–2 shipped; Phases 3–5 remaining |
 
 Deliberately out of scope for this year (unchanged from
 [measurement-and-scope.md](architecture/measurement-and-scope.md) §18): fine-tuning, learned retrieval
@@ -2113,7 +2113,7 @@ skill accretion.
 Plan: [`plans/remediation/README.md`](plans/remediation/README.md).
 Phase 0 hotfixes (#68) and Phase 1 foundations (#69) shipped. Remaining:
 
-- **Phase 2** — services, PDP action table, run ownership (ARCH-4/6, SEC-2/3/5/7/8/10, REL-3 remainder). ARCH-5 PR-5.1–5.5 shipped (`RunService`, `JobService`, `PromotionService` / `EvalService`, library/programs/workspaces/keys/ops, `AppState`, `cli/exit.py`); REL-3 incarnation, `run_leases`, and `FencedRunPersistence` shipped. Remaining REL-3 is `rel3_runtime_db` (consolidate checkpoints/operations into `runtime.db`).
+- **Phase 2** — services, PDP action table, run ownership (ARCH-4/6, SEC-2/3/5/7/8/10, REL-3). Shipped: ARCH-5 PR-5.1–5.5 (`RunService`, `JobService`, `PromotionService` / `EvalService`, library/programs/workspaces/keys/ops, `AppState`, `cli/exit.py`); REL-3 incarnation, `run_leases`, `FencedRunPersistence`, and `rel3_runtime_db` (legacy `checkpoints.db` / `operations.db` import into `runtime.db`). Phase 2 engineering is closed.
 - **Phase 3** — durable `RunQueue`, outbox, ledger repair/signing
 - **Phase 4** — paging/SSE, `/ready`, backup/GC, Postgres+RLS, tenant lifecycle, executor service, secrets
 - **Phase 5** — supply-chain review, security-review automation, blocking guardrails

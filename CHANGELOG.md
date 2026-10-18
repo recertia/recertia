@@ -61,6 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **REL-3 runtime.db** — `open_run_persistence` imports leftover
+  `checkpoints.db` / `operations.db` into `runtime.db` when
+  `RECERTIA_RUNTIME_DB_MIGRATE=auto` (default), then renames the sources to
+  `*.db.migrated`. `off` keeps the legacy files for one release. `manual`
+  refuses to start while they remain (`state_corrupt`, action
+  `recertia migrate apply`). Pending operation sentinels are dropped on
+  import. Readers (list, tabletop, operator brief) prefer `runtime.db`.
 - **REL-3 FencedRunPersistence** — checkpoint writes compare the caller's
   fencing token to `run_leases`. A stale token raises `LeaseLost` (409,
   exit 6). `CheckpointStore` opened via `open_run_persistence` checks the

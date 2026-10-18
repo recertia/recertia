@@ -222,17 +222,21 @@ class RunService:
         terminal: str | None = None,
     ) -> dict[str, Any]:
         from recertia.graph.store import CheckpointStore
+        from recertia.persistence.import_legacy import live_checkpoint_db
 
-        store = CheckpointStore(Path(runs_root) / "checkpoints.db")
-        try:
-            disk_rows = store.list_summaries(
-                limit=limit + 1,
-                cursor=cursor,
-                task_class=task_class,
-                terminal=terminal,
-            )
-        finally:
-            store.close()
+        db = live_checkpoint_db(Path(runs_root))
+        disk_rows: list[dict[str, object]] = []
+        if db is not None:
+            store = CheckpointStore(db)
+            try:
+                disk_rows = store.list_summaries(
+                    limit=limit + 1,
+                    cursor=cursor,
+                    task_class=task_class,
+                    terminal=terminal,
+                )
+            finally:
+                store.close()
         disk_has_extra = len(disk_rows) > limit
         page = disk_rows[:limit]
         next_disk_id = str(disk_rows[limit]["run_id"]) if disk_has_extra else None
