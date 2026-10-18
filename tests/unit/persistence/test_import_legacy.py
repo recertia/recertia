@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,7 +24,7 @@ from recertia.persistence.import_legacy import (
     legacy_sqlite_pending,
 )
 from recertia.persistence.layout import RuntimeLayout
-from recertia.persistence.root_lock import RootLock, RootLockBusy
+from recertia.persistence.root_lock import RootBusy, RootLock, RootLockBusy
 from recertia.runtime.errors import StateCorrupt
 
 
@@ -342,6 +345,200 @@ def test_legacy_not_pending_after_completed_import(tmp_path: Path) -> None:
     open_run_persistence(root).close()
     assert layout.checkpoints_db.is_file()
     assert legacy_sqlite_pending(layout) is False
+
+
+def _db_byte_snapshot(root: Path) -> dict[str, str]:
+    snap: dict[str, str] = {}
+    if not root.exists():
+        return snap
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        name = path.name
+        if not (
+            name.endswith(".db")
+            or name.endswith(".sqlite")
+            or name.endswith("-wal")
+            or name.endswith("-shm")
+            or ".db." in name
+        ):
+            continue
+        snap[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return snap
+
+
+def _legacy_row_snapshot(root: Path) -> tuple[tuple[object, ...], tuple[object, ...]]:
+    ck_rows: list[object] = []
+    op_rows: list[object] = []
+    ck = root / "checkpoints.db"
+    op = root / "operations.db"
+    if ck.is_file():
+        conn = sqlite3.connect(ck)
+        try:
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoints'"
+            ).fetchone():
+                ck_rows = conn.execute(
+                    "SELECT run_id, seq, node FROM checkpoints ORDER BY run_id, seq"
+                ).fetchall()
+        finally:
+            conn.close()
+    if op.is_file():
+        conn = sqlite3.connect(op)
+        try:
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operations'"
+            ).fetchone():
+                op_rows = conn.execute(
+                    "SELECT run_id, attempt_no, node, op_seq, result_json "
+                    "FROM operations ORDER BY run_id, op_seq"
+                ).fetchall()
+        finally:
+            conn.close()
+    return tuple(ck_rows), tuple(op_rows)
+
+
+def test_busy_open_raises_root_busy_without_mutating_sqlite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O/M3/M4 ruling: typed RootBusy, no writes during the busy window."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    root = tmp_path / "runs"
+    effects: list[str] = []
+    p0 = open_run_persistence(root, migrate="off")
+    try:
+        for seq in (1, 2, 3):
+            p0.checkpoints.save("legacy-run", seq, f"n{seq}", None, _state("legacy-run"))
+        p0.operations.run_once(
+            "legacy-run", 1, "solve", 0, lambda: effects.append("legacy") or {"v": 1}
+        )
+    finally:
+        p0.close()
+    before_bytes = _db_byte_snapshot(root)
+    before_rows = _legacy_row_snapshot(root)
+    lock = RootLock(root / ".lock")
+    lock.try_exclusive()
+    started = time.monotonic()
+    try:
+        with pytest.raises(RootBusy, match="cannot import leftover runtime files"):
+            open_run_persistence(root)
+        assert time.monotonic() - started < 1.5
+        assert _db_byte_snapshot(root) == before_bytes
+        assert _legacy_row_snapshot(root) == before_rows
+        assert not (root / "runtime.db").exists()
+        assert effects == ["legacy"]
+    finally:
+        lock.release()
+
+
+def test_busy_open_does_not_rerun_legacy_op_after_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    root = tmp_path / "runs"
+    effects: list[str] = []
+    p0 = open_run_persistence(root, migrate="off")
+    try:
+        p0.checkpoints.save("legacy-run", 1, "n", None, _state("legacy-run"))
+        p0.operations.run_once(
+            "legacy-run", 1, "solve", 0, lambda: effects.append("legacy") or {"v": 1}
+        )
+    finally:
+        p0.close()
+    lock = RootLock(root / ".lock")
+    lock.try_exclusive()
+    try:
+        with pytest.raises(RootBusy):
+            open_run_persistence(root)
+        assert effects == ["legacy"]
+    finally:
+        lock.release()
+    opened = open_run_persistence(root)
+    try:
+        opened.operations.run_once(
+            "legacy-run", 1, "solve", 0, lambda: effects.append("busy-rerun") or {"v": 2}
+        )
+        assert effects == ["legacy"]
+        assert opened.checkpoints.latest_seq("legacy-run") == 1
+    finally:
+        opened.close()
+
+
+def test_after_busy_release_import_sees_holder_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    root = tmp_path / "runs"
+    p0 = open_run_persistence(root, migrate="off")
+    try:
+        for seq in (1, 2, 3):
+            p0.checkpoints.save("legacy-run", seq, f"n{seq}", None, _state("legacy-run"))
+    finally:
+        p0.close()
+    before_bytes = _db_byte_snapshot(root)
+    lock = RootLock(root / ".lock")
+    lock.try_exclusive()
+    try:
+        with pytest.raises(RootBusy):
+            open_run_persistence(root)
+        assert _db_byte_snapshot(root) == before_bytes
+        holder = CheckpointStore(root / "checkpoints.db")
+        try:
+            holder.save("legacy-run", 4, "holder", None, _state("legacy-run"))
+        finally:
+            holder.close()
+    finally:
+        lock.release()
+    opened = open_run_persistence(root)
+    try:
+        assert opened.checkpoints.latest_seq("legacy-run") == 4
+        nodes = [node for _seq, node, *_rest in opened.checkpoints.history("legacy-run")]
+        assert nodes == ["n1", "n2", "n3", "holder"]
+    finally:
+        opened.close()
+
+
+def test_busy_open_waits_then_succeeds_after_holder_releases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "2")
+    root = tmp_path / "runs"
+    p0 = open_run_persistence(root, migrate="off")
+    try:
+        for seq in (1, 2, 3):
+            p0.checkpoints.save("legacy-run", seq, f"n{seq}", None, _state("legacy-run"))
+    finally:
+        p0.close()
+    before_bytes = _db_byte_snapshot(root)
+    lock = RootLock(root / ".lock")
+    lock.try_exclusive()
+    errors: list[BaseException] = []
+    seen: dict[str, int | None] = {}
+
+    def opener() -> None:
+        try:
+            opened = open_run_persistence(root)
+            seen["seq"] = opened.checkpoints.latest_seq("legacy-run")
+            opened.close()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    worker = threading.Thread(target=opener)
+    worker.start()
+    time.sleep(0.25)
+    assert worker.is_alive()
+    assert _db_byte_snapshot(root) == before_bytes
+    holder = CheckpointStore(root / "checkpoints.db")
+    try:
+        holder.save("legacy-run", 4, "holder", None, _state("legacy-run"))
+    finally:
+        holder.close()
+    lock.release()
+    worker.join(timeout=2.0)
+    assert not worker.is_alive()
+    assert errors == []
+    assert seen.get("seq") == 4
 
 
 def test_api_presence_lock_does_not_block_legacy_import(tmp_path: Path) -> None:

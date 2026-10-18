@@ -11,7 +11,7 @@ from pathlib import Path
 
 from recertia.persistence.db import apply_migrations, open_db
 from recertia.persistence.layout import RunsRootLayout
-from recertia.persistence.root_lock import RootLock, RootLockBusy
+from recertia.persistence.root_lock import RootBusy, RootLock, RootLockBusy
 from recertia.runtime.errors import StateCorrupt
 
 IMPORT_ID = "runtime.import_legacy_checkpoints"
@@ -183,7 +183,7 @@ def import_legacy_runtime(
     Returns ``True`` when the dest is ready (imported, already done, or nothing
     to import). A busy exclusive root lock is waited out for ``timeout_s``
     (default ``RECERTIA_IMPORT_LOCK_TIMEOUT_S``, 5s) and then raised as
-    :class:`RootLockBusy` — the caller must not write somewhere else.
+    :class:`RootBusy` — the caller must not write somewhere else.
     Conflicting rows raise :class:`StateCorrupt` and leave the legacy files
     in place.
     """
@@ -195,7 +195,7 @@ def import_legacy_runtime(
     try:
         lock.acquire_exclusive(timeout_s=wait)
     except RootLockBusy as exc:
-        raise RootLockBusy(
+        raise RootBusy(
             f"cannot import leftover runtime files while the root lock is held: {lock.path}"
         ) from exc
     try:

@@ -21,6 +21,14 @@ class RootLockBusy(RuntimeError):
     """An exclusive lock could not be taken because the root is in use."""
 
 
+class RootBusy(RootLockBusy):
+    """Typed busy error: leftover import timed out waiting for the root lock.
+
+    Callers must not write somewhere else. A generic ``Exception`` or a hang is
+    not this error.
+    """
+
+
 class RootLock:
     """One open file description for ``root/.lock`` (or any lock path)."""
 
