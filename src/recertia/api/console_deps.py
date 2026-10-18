@@ -65,6 +65,9 @@ class ConsoleContext:
 
             pdp = PolicyDecisionPoint.load(surface="api")
         self.pdp = pdp
+        from recertia.app.jobs import JobService
+
+        self.job_service = JobService(pdp=pdp)
         self.sessions = SessionStore(path=root / "console_sessions.sqlite")
         self.proposals = ProposalStore(root / "proposals.sqlite")
         self.programs = ProgramStore(root / "programs.sqlite")

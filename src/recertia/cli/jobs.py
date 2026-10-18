@@ -17,6 +17,7 @@ def register_jobs_commands(app: typer.Typer) -> None:
 
 @jobs_app.command("run")
 def jobs_run(
+    ctx: typer.Context,
     job: str = typer.Argument(
         ...,
         help=(
@@ -97,25 +98,21 @@ def jobs_run(
 ) -> None:
     """Run an offline improvement job under a proposal budget."""
 
-    from recertia.evals.store import EvalStore
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.jobs import JobDispatch, JobService
+    from recertia.errors import RecertiaError
     from recertia.jobs import JobBudget, build_job_runner
     from recertia.jobs.enablement import attach_enablement
-    from recertia.jobs.workers import (
-        correction_miner_from_reviewer_edits,
-        curator_active_set_and_dedup,
-        enqueue_mined_candidate,
-        load_reviewer_edits,
-        mine_from_arxiv,
-        mine_from_repo_hints,
-        propose_hex_search,
-        propose_parallelise,
-        propose_serialise,
-    )
     from recertia.memory.procedural.lineage import LineageServices
     from recertia.memory.procedural.store import SkillStore
     from recertia.policy_load import load_policy
-    from recertia.trajectory.store import TrajectoryStore
+    from recertia.ports.identity import Principal
 
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
+    )
     policy = load_policy()
     lineage = LineageServices.open(runs_root / "lineage")
     store = SkillStore(
@@ -130,81 +127,12 @@ def jobs_run(
         skills_root=skills_root,
     )
     budget = JobBudget(max_proposals=max_proposals, max_tokens=max_tokens)
-    from recertia.app.jobs import JobDispatch, canonical_job, run_named_job
-
-    name = canonical_job(job) or ""
-    traj_store = TrajectoryStore(runs_root / "trajectories")
-
-    def _run(job_name: str, fn, *, budget=budget):
-        return runner.run(job_name, fn, budget=budget, task_class=task_class)
-
-
-    if name in {"mine", "miner"}:
-        use_arxiv = bool(arxiv_id) or bool(arxiv_query and arxiv_query.strip())
-        if use_arxiv:
-
-            def _mine_arxiv() -> list:
-                return mine_from_arxiv(
-                    store,
-                    arxiv_ids=list(arxiv_id or []),
-                    query=arxiv_query,
-                    max_results=arxiv_max,
-                )
-
-            result = _run("mine", _mine_arxiv, budget=budget)
-            if with_pdf and result.proposals:
-                from recertia.jobs.paper_pipeline import enrich_proposals_with_pdf
-
-                result.proposals = enrich_proposals_with_pdf(
-                    result.proposals,
-                    dest_dir=runs_root / "arxiv-pdfs",
-                    use_sandbox=pdf_sandbox,
-                    sandbox_workdir=runs_root / "arxiv-pdf-sandbox",
-                )
-        else:
-            hints = list(hint or ["README.md chore hints"])
-            result = _run(
-                "mine", lambda: mine_from_repo_hints(store, hints=hints), budget=budget
-            )
-        if submit and not dry_run:
-            if distill_paper and use_arxiv:
-                from recertia.jobs.paper_pipeline import submit_paper_proposals
-                from recertia.memory.semantic import FactStore
-
-                fact_store = FactStore(facts_root)
-                written = submit_paper_proposals(
-                    store,
-                    result.proposals,
-                    fact_store=fact_store,
-                    distill=True,
-                )
-                for draft, facts in written:
-                    typer.echo(
-                        f"candidate {draft.skill_id}@v{draft.version} facts={len(facts)}"
-                    )
-            else:
-                for proposal in result.proposals:
-                    draft = enqueue_mined_candidate(store, proposal)
-                    typer.echo(f"candidate {draft.skill_id}@v{draft.version}")
-    elif name in {"curator", "curate"}:
-        eval_store = EvalStore(runs_root / "evals.db")
-        try:
-            result = _run(
-                "curator",
-                lambda: curator_active_set_and_dedup(
-                    store,
-                    trajectory_store=traj_store,
-                    eval_store=eval_store,
-                    proposals_path=runs_root / "proposals.jsonl",
-                ),
-                budget=budget,
-            )
-        finally:
-            eval_store.close()
-    elif name in {"practice", "recertify", "shadow", "compress"}:
-        dispatched = run_named_job(
-            name,
-            JobDispatch(
+    service = JobService(pdp=PolicyDecisionPoint.load(surface="cli"))
+    try:
+        result = service.run(
+            principal,
+            job,
+            dispatch=JobDispatch(
                 store=store,
                 runner=runner,
                 budget=budget,
@@ -214,51 +142,34 @@ def jobs_run(
                 dry_run=dry_run,
                 one_off=list(one_off) if one_off else None,
                 tool_upgraded=tool_upgraded,
+                hint=list(hint) if hint else None,
+                arxiv_id=list(arxiv_id) if arxiv_id else None,
+                arxiv_query=arxiv_query,
+                arxiv_max=arxiv_max,
+                with_pdf=with_pdf,
+                pdf_sandbox=pdf_sandbox,
+                distill_paper=distill_paper,
+                facts_root=facts_root,
+                submit=submit,
+                skill_id=skill_id,
+                skill_version=skill_version,
+                fake_edge_failures=fake_edge_failures,
+                merge_conflicts=merge_conflicts,
+                edits_log=edits_log,
+                task_class=task_class,
             ),
         )
-        if dispatched is None:
-            typer.echo(f"unknown job {job!r}", err=True)
-            raise typer.Exit(code=2)
-        result = dispatched
-    elif name in {"parallelise", "parallelize"}:
-        if not skill_id:
-            typer.echo("--skill-id is required for parallelise", err=True)
-            raise typer.Exit(code=2)
-        result = _run(
-            "parallelise",
-            lambda: propose_parallelise(
-                skill_id, skill_version, fake_edge_failures=fake_edge_failures or None
-            ),
-            budget=budget,
-        )
-    elif name in {"serialise", "serialize"}:
-        if not skill_id:
-            typer.echo("--skill-id is required for serialise", err=True)
-            raise typer.Exit(code=2)
-        result = _run(
-            "serialise",
-            lambda: propose_serialise(
-                skill_id, skill_version, merge_conflict_count=merge_conflicts or None
-            ),
-            budget=budget,
-        )
-    elif name in {"correction", "correction_miner"}:
-        edits = load_reviewer_edits(edits_log or runs_root / "reviewer_edits.jsonl")
-        result = _run(
-            "correction",
-            lambda: correction_miner_from_reviewer_edits(edits),
-            budget=budget,
-        )
-    elif name in {"hex", "practice_hex"}:
-        result = _run("practice_hex", propose_hex_search, budget=budget)
-    else:
-        typer.echo(
-            "unknown job "
-            f"{job!r}; expected mine|curator|practice|recertify|shadow|"
-            "parallelise|serialise|correction|hex|compress",
-            err=True,
-        )
-        raise typer.Exit(code=2)
+    except RecertiaError as exc:
+        if exc.code == "not_found":
+            typer.echo(
+                "unknown job "
+                f"{job!r}; expected mine|curator|practice|recertify|shadow|"
+                "parallelise|serialise|correction|fail_cluster|hex|compress",
+                err=True,
+            )
+            raise typer.Exit(code=2) from exc
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
 
     # Strip internal PDF text from JSON echo (can be large).
     safe_proposals = []

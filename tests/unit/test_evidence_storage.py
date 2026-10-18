@@ -72,9 +72,24 @@ def _version() -> SkillVersion:
     )
 
 
-def _allocate_worker(root: str, queue: multiprocessing.Queue) -> None:
-    version = allocate_and_write(SkillStore(root), _version())
-    queue.put(version.version)
+def _allocate_worker(root: str, result_path: str) -> None:
+    try:
+        version = allocate_and_write(SkillStore(root), _version())
+        Path(result_path).write_text(str(version.version), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 — child must leave a file, then fail
+        Path(result_path).write_text(f"ERR {type(exc).__name__}: {exc}", encoding="utf-8")
+        raise
+
+
+def _reap_workers(workers: list[multiprocessing.Process]) -> None:
+    for worker in workers:
+        if worker.is_alive():
+            worker.terminate()
+    for worker in workers:
+        worker.join(timeout=5)
+        if worker.is_alive():
+            worker.kill()
+            worker.join(timeout=2)
 
 
 def test_run_derived_observations_are_append_only_and_feed_metrics(tmp_path: Path) -> None:
@@ -114,15 +129,28 @@ def test_run_derived_observations_are_append_only_and_feed_metrics(tmp_path: Pat
 
 
 def test_version_allocation_is_safe_across_processes(tmp_path: Path) -> None:
-    queue: multiprocessing.Queue = multiprocessing.Queue()
+    ctx = multiprocessing.get_context("spawn")
+    skills_root = tmp_path / "skills"
+    result_dir = tmp_path / "results"
+    result_dir.mkdir()
     workers = [
-        multiprocessing.Process(target=_allocate_worker, args=(str(tmp_path / "skills"), queue))
-        for _ in range(8)
+        ctx.Process(target=_allocate_worker, args=(str(skills_root), str(result_dir / f"{index}.txt")))
+        for index in range(8)
     ]
-    for worker in workers:
-        worker.start()
-    for worker in workers:
-        worker.join(timeout=20)
-    assert all(worker.exitcode == 0 for worker in workers)
-    versions = sorted(queue.get(timeout=2) for _ in workers)
-    assert versions == list(range(1, len(workers) + 1))
+    try:
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=60)
+        crashed = [(worker.pid, worker.exitcode) for worker in workers if worker.exitcode not in (0, None)]
+        hung = [worker.pid for worker in workers if worker.is_alive()]
+        payloads = []
+        for index in range(len(workers)):
+            path = result_dir / f"{index}.txt"
+            payloads.append(path.read_text(encoding="utf-8") if path.is_file() else "missing")
+        assert not hung, f"workers still running: {hung}; results={payloads}"
+        assert not crashed, f"workers crashed: {crashed}; results={payloads}"
+        versions = sorted(int(payload) for payload in payloads)
+        assert versions == list(range(1, len(workers) + 1))
+    finally:
+        _reap_workers(workers)

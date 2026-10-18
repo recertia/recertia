@@ -189,6 +189,18 @@ def test_runs_read_requires_runs_scope() -> None:
         pdp.require(metrics, "runs.read", resource)
 
 
+def test_jobs_run_requires_jobs_scope() -> None:
+    pdp = _pdp()
+    resource = Resource(tenant_id="t1")
+    jobs = Principal.from_api_key(
+        key_id="jobs", tenant_id="t1", scopes=frozenset({"jobs"})
+    )
+    pdp.require(jobs, "jobs.run", resource)
+    pdp.require(jobs, "job.run", resource)
+    with pytest.raises(Forbidden):
+        pdp.require(_runs_only(), "jobs.run", resource)
+
+
 def test_runs_script_requires_exec_or_admin() -> None:
     pdp = _pdp()
     resource = Resource(tenant_id="t1")
