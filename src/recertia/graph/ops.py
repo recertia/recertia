@@ -56,9 +56,13 @@ class OperationLedger:
         *,
         pending_timeout_s: float = _PENDING_TIMEOUT_S,
         pending_poll_s: float = _PENDING_POLL_S,
+        lease_db: Path | str | None = None,
+        tenant_id: str = "local",
     ) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lease_db = Path(lease_db) if lease_db is not None else self._db_path
+        self._tenant_id = tenant_id
         self._lock = threading.Lock()
         # Kept for constructor compatibility. Live in-process owners are never
         # reclaimed by this timer (F7); abandoned pending rows are reclaimed immediately.
@@ -156,8 +160,10 @@ class OperationLedger:
             claimed = False
             wait_for: threading.Event | None = None
             with self._lock:
+                self._prepare_lease_attach(fencing_token)
                 self._conn.execute("BEGIN IMMEDIATE")
                 try:
+                    self._require_fence(run_id, fencing_token)
                     row = self._conn.execute(
                         "SELECT result_json FROM operations "
                         "WHERE run_id=? AND incarnation=? AND attempt_no=? AND node=? AND op_seq=?",
@@ -231,21 +237,28 @@ class OperationLedger:
             if _is_pending(result):
                 raise ValueError("operation fn must not return the pending sentinel")
             with self._lock:
-                self._conn.execute(
-                    "UPDATE operations SET result_json=?, fencing_token=? "
-                    "WHERE run_id=? AND incarnation=? AND attempt_no=? AND node=? AND op_seq=?",
-                    (
-                        json.dumps(result),
-                        fencing_token,
-                        run_id,
-                        incarnation,
-                        attempt_no,
-                        node,
-                        op_seq,
-                    ),
-                )
-                self._conn.commit()
-                self._release_claim(key)
+                self._prepare_lease_attach(fencing_token)
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._require_fence(run_id, fencing_token)
+                    self._conn.execute(
+                        "UPDATE operations SET result_json=?, fencing_token=? "
+                        "WHERE run_id=? AND incarnation=? AND attempt_no=? AND node=? AND op_seq=?",
+                        (
+                            json.dumps(result),
+                            fencing_token,
+                            run_id,
+                            incarnation,
+                            attempt_no,
+                            node,
+                            op_seq,
+                        ),
+                    )
+                    self._conn.execute("COMMIT")
+                    self._release_claim(key)
+                except Exception:
+                    self._conn.execute("ROLLBACK")
+                    raise
             return result
         except Exception:
             with self._lock:
@@ -276,6 +289,30 @@ class OperationLedger:
                 (run_id, incarnation, attempt_no, node, json.dumps(_PENDING_SENTINEL)),
             ).fetchone()
         return int(row[0]) if row else 0
+
+    def _prepare_lease_attach(self, fencing_token: int | None) -> None:
+        if fencing_token is None:
+            return
+        from recertia.graph.lease import attach_lease_schema, lease_paths_equal
+
+        if not self._lease_db.exists():
+            return
+        if lease_paths_equal(self._lease_db, self._db_path):
+            return
+        attach_lease_schema(self._conn, self._lease_db)
+
+    def _require_fence(self, run_id: str, fencing_token: int | None) -> None:
+        if fencing_token is None:
+            return
+        from recertia.graph.lease import require_lease_token
+
+        require_lease_token(
+            self._lease_db,
+            tenant_id=self._tenant_id,
+            run_id=run_id,
+            fencing_token=fencing_token,
+            conn=self._conn if self._lease_db.exists() else None,
+        )
 
     def _live_wait_event(self, key: OpKey) -> threading.Event | None:
         """Return the wait event for a live in-process holder, or ``None`` to reclaim."""

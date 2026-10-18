@@ -101,8 +101,16 @@ def open_run_persistence(
             lease_db=layout.runtime_db,
             tenant_id=tenant,
         ),
-        operations=OperationLedger(layout.operations_db),
-        ledger=HashChainLedger(layout.ledger_path),
+        operations=OperationLedger(
+            layout.operations_db,
+            lease_db=layout.runtime_db,
+            tenant_id=tenant,
+        ),
+        ledger=HashChainLedger(
+            layout.ledger_path,
+            lease_db=layout.runtime_db,
+            tenant_id=tenant,
+        ),
         trajectories=TrajectoryStore(layout.trajectories_dir),
         audited_states=AuditedStateStore(layout.audited_states_dir),
         workspaces=WorkspaceManager(layout.snapshots_dir),

@@ -130,9 +130,13 @@ class HashChainLedger:
         durability: str | Durability | None = None,
         hook: LedgerHook | None = None,
         lock_timeout_s: float | None = None,
+        lease_db: Path | str | None = None,
+        tenant_id: str = "local",
     ) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._lease_db = Path(lease_db) if lease_db is not None else None
+        self._tenant_id = tenant_id
         self._hook = hook
         self._tip: tuple[int, str] | None = None
         self.lines_parsed = 0
@@ -170,10 +174,12 @@ class HashChainLedger:
         target: str,
         evidence: dict | None = None,
         at: datetime | None = None,
+        fencing_token: int | None = None,
     ) -> LedgerEntry:
         """Append one entry. Returns the entry as written, with ``seq`` and hashes filled in."""
 
         with self._held():
+            self._require_run_fence(target, fencing_token)
             return self._append_locked(
                 actor=actor,
                 action=action,
@@ -181,6 +187,24 @@ class HashChainLedger:
                 evidence=evidence,
                 at=at,
             )
+
+    def _require_run_fence(self, target: str, fencing_token: int | None) -> None:
+        """Reject appends that target a currently held run without a matching token.
+
+        Skill ids and other non-run targets have no ``run_leases`` row, so a
+        missing row (or missing sibling ``runtime.db``) is allowed.
+        """
+
+        from recertia.graph.lease import require_lease_token
+
+        lease_db = self._lease_db if self._lease_db is not None else self._path.parent / "runtime.db"
+        require_lease_token(
+            lease_db,
+            tenant_id=self._tenant_id,
+            run_id=target,
+            fencing_token=fencing_token,
+            missing_row="allow",
+        )
 
     def _append_locked(
         self,

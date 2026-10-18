@@ -107,16 +107,22 @@ def test_checkpoint_and_operation_store_fencing_token(tmp_path: Path) -> None:
     finally:
         orch.close()
 
-    ops = OperationLedger(tmp_path / "operations.db")
+    ops_db = tmp_path / "operations.db"
+    ops_lease = RunLease(
+        tmp_path / "locks" / "ops.lock", db_path=ops_db, run_id="run-fenced"
+    )
+    token = ops_lease.acquire()
+    ops = OperationLedger(ops_db)
     try:
-        assert ops.run_once("run-fenced", 1, "solve", 0, lambda: {"ok": True}, fencing_token=7) == {
-            "ok": True
-        }
-        stored = sqlite3.connect(tmp_path / "operations.db").execute(
+        assert ops.run_once(
+            "run-fenced", 1, "solve", 0, lambda: {"ok": True}, fencing_token=token
+        ) == {"ok": True}
+        stored = sqlite3.connect(ops_db).execute(
             "SELECT fencing_token FROM operations"
         ).fetchone()
-        assert stored == (7,)
+        assert stored == (token,)
     finally:
+        ops_lease.release()
         ops.close()
 
 
@@ -175,7 +181,7 @@ def test_crash_resume_keeps_incarnation_and_does_not_rerun(tmp_path: Path) -> No
     db = tmp_path / "runtime.db"
     lock = tmp_path / "locks" / "run-1.lock"
     calls: list[str] = []
-    ops = OperationLedger(db)
+    ops = OperationLedger(db, tenant_id="t1")
     first = RunLease(lock, db_path=db, tenant_id="t1", run_id="run-1")
     token = first.acquire()
     ops.run_once(

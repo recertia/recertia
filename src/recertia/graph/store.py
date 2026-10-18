@@ -115,17 +115,40 @@ class CheckpointStore:
         fencing_token: int | None = None,
         eval_outbox: EvalOutboxWrite | None = None,
     ) -> None:
-        if fencing_token is not None and self._lease_db is not None:
-            from recertia.graph.lease import require_lease_token
-
-            require_lease_token(
-                self._lease_db,
-                tenant_id=self._tenant_id,
-                run_id=run_id,
-                fencing_token=fencing_token,
-            )
         with self._lock:
+            lease_db = self._lease_db
+            fenced = fencing_token is not None and lease_db is not None
+            if fenced:
+                from recertia.graph.lease import (
+                    attach_lease_schema,
+                    lease_paths_equal,
+                    require_lease_token,
+                )
+
+                assert lease_db is not None
+                # First check is load-bearing: callers (and the REL-3 probe) may
+                # steal the row after this returns. The write transaction re-checks.
+                require_lease_token(
+                    lease_db,
+                    tenant_id=self._tenant_id,
+                    run_id=run_id,
+                    fencing_token=fencing_token,
+                )
+                if lease_db.exists() and not lease_paths_equal(lease_db, self._db_path):
+                    attach_lease_schema(self._conn, lease_db)
+                self._begin_immediate()
             try:
+                if fenced:
+                    from recertia.graph.lease import require_lease_token
+
+                    assert lease_db is not None
+                    require_lease_token(
+                        lease_db,
+                        tenant_id=self._tenant_id,
+                        run_id=run_id,
+                        fencing_token=fencing_token,
+                        conn=self._conn,
+                    )
                 self._conn.execute(
                     "INSERT INTO checkpoints ("
                     "run_id, seq, node, next_node, state_json, created_at, fencing_token"
@@ -156,6 +179,16 @@ class CheckpointStore:
                 raise CheckpointConflict(
                     f"checkpoint ({run_id!r}, seq={seq}) already exists"
                 ) from exc
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def _begin_immediate(self) -> None:
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError:
+            self._conn.rollback()
+            self._conn.execute("BEGIN IMMEDIATE")
 
     def _upsert_summary(self, state: RunState) -> None:
         terminal = str(state.terminal) if state.terminal else None

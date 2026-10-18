@@ -61,10 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **REL-3 FencedRunPersistence** — checkpoint writes compare the caller's
-  fencing token to `run_leases`. A stale token raises `LeaseLost` (409,
-  exit 6). `CheckpointStore` opened via `open_run_persistence` checks the
-  tenant `runtime.db`.
+- **REL-3 FencedRunPersistence** — checkpoint, operation, and hash-chain
+  writes compare the caller's fencing token to `run_leases`. A stale token
+  raises `LeaseLost` (409, exit 6). `CheckpointStore.save` re-checks the
+  token inside the same `BEGIN IMMEDIATE` as the `INSERT` (ATTACH when
+  `runtime.db` is a second file). A missing lease database fails closed.
+  Hash-chain appends that target a held `run_id` require a matching token;
+  skill-id targets with no lease row still append.
 - **REL-3 run_leases** — `RunLease` records a row in `runtime.db`. A crash that
   leaves a HELD row on the same lock inode is a resume (incarnation stays,
   fencing token advances) so finished operations are not re-run. A clean
