@@ -14,38 +14,31 @@ def register_systems_commands(app: typer.Typer) -> None:
 
 
 def systems_cmd(
+    ctx: typer.Context,
     spans: Optional[Path] = typer.Option(None, "--spans", help="Telemetry JSONL to fold."),
     output: Optional[Path] = typer.Option(None, "--output"),
     brief: bool = typer.Option(False, "--brief", help="Stuck jobs, lift-by-class, redundancy."),
 ) -> None:
     """Print the six-property snapshot. Does not claim lift or a 4.6× memory cut."""
 
-    from recertia.observability.systems import snapshot_from_events
-    from recertia.telemetry import get_telemetry
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.ops_service import OpsService
+    from recertia.errors import RecertiaError
+    from recertia.ports.identity import Principal
 
-    events: list[object]
-    if spans is not None:
-        events = []
-        for line in spans.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            payload = json.loads(line)
-            if payload.get("type") == "event":
-                events.append(payload)
-    else:
-        events = list(get_telemetry().events)
-    snap = snapshot_from_events(events)
-    if brief:
-        from contracts.policy import COMPUTER_USE_TASK_CLASSES
-        from recertia.ops.operator_brief import brief_from_events
-
-        payload = brief_from_events(
-            events, task_classes=list(COMPUTER_USE_TASK_CLASSES)
-        ).as_dict()
-        payload["six_properties"] = snap.as_dict()
-        text = json.dumps(payload, indent=2)
-    else:
-        text = json.dumps(snap.as_dict(), indent=2)
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
+    )
+    try:
+        payload = OpsService(pdp=PolicyDecisionPoint.load(surface="cli")).systems(
+            principal, spans=spans, brief=brief
+        )
+    except RecertiaError as exc:
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    text = json.dumps(payload, indent=2)
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text + "\n", encoding="utf-8")

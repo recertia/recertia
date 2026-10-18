@@ -19,25 +19,37 @@ def register_trajectory_commands(app: typer.Typer) -> None:
 
 @trajectory_app.command("import")
 def trajectory_import_cmd(
+    ctx: typer.Context,
     path: Path = typer.Argument(..., exists=True, readable=True, dir_okay=False),
     runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
     tenant: str = typer.Option("default", "--tenant"),
 ) -> None:
     """Validate and ingest a TrajectoryImport JSON document. Does not promote."""
 
-    from recertia.trajectory.import_store import ImportRejected, ingest_trajectory
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.library import LibraryService
+    from recertia.errors import RecertiaError
+    from recertia.ports.identity import Principal
 
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
+    )
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        result = ingest_trajectory(payload, runs_root=runs_root, tenant_id=tenant)
-    except (ImportRejected, ValidationError, ValueError, json.JSONDecodeError) as exc:
+        result = LibraryService(pdp=PolicyDecisionPoint.load(surface="cli")).import_trajectory(
+            principal, body=payload, runs_root=runs_root, tenant_id=tenant, actor="cli"
+        )
+    except (RecertiaError, ValidationError, ValueError, json.JSONDecodeError) as exc:
         typer.echo(json.dumps({"ok": False, "rejected": str(exc)}, indent=2), err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(json.dumps({"ok": True, **result.as_public_dict()}, indent=2))
+    typer.echo(json.dumps({"ok": True, **result}, indent=2))
 
 
 @trajectory_app.command("distill")
 def trajectory_distill_cmd(
+    ctx: typer.Context,
     path: Path = typer.Argument(..., exists=True, readable=True, dir_okay=False),
     skills_root: Path = typer.Option(Path("skills"), "--skills-root"),
     actor: str = typer.Option("cli", "--actor"),
@@ -49,15 +61,28 @@ def trajectory_distill_cmd(
 ) -> None:
     """Author a candidate from a reexecutable import. Does not promote."""
 
-    from recertia.distill.imported import DistillRejected, as_public_dict, distill_imported_file
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.library import LibraryService
+    from recertia.errors import RecertiaError
     from recertia.memory.procedural.store import SkillStore
+    from recertia.ports.identity import Principal
 
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
+    )
     store = SkillStore(skills_root)
     try:
-        version = distill_imported_file(path, store, actor=actor, task_class=task_class)
-    except (DistillRejected, ValueError) as exc:
+        payload = LibraryService(pdp=PolicyDecisionPoint.load(surface="cli")).distill_trajectory(
+            principal,
+            store=store,
+            trajectory=None,
+            actor=actor,
+            task_class=task_class,
+            from_file=path,
+        )
+    except RecertiaError as exc:
         typer.echo(json.dumps({"ok": False, "rejected": str(exc)}, indent=2), err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(
-        json.dumps({"ok": True, **as_public_dict(version, store)}, indent=2)
-    )
+    typer.echo(json.dumps({"ok": True, **payload}, indent=2))

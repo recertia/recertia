@@ -61,6 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ARCH-5 PR-5.4 library, programs, workspaces, keys, ops** — remaining HTTP
+  routes and CLI commands delegate to `LibraryService`, `ProgramService`,
+  `WorkspaceService`, `CheckpointReader`, `KeyService`, and `OpsService`.
+  `pdp.require` covers `skills.read`/`search`, `programs.*`, `workspaces.*`,
+  `proposals.*`, `policy.read`, `ledger.verify`, `blobs.*`, `keys.*`,
+  `tenants.switch`, and `ops.*`. URL paths and JSON keys stay. `ledger verify`
+  still exits 0 or 2. ConsoleContext remains until PR-5.5.
 - **ARCH-5 PR-5.3 promotion and evals** — `PromotionService.promote` runs the
   golden gate through `GateRunner`. `EvalService` owns `POST /v1/evals/runs`,
   `GET /v1/metrics/report|canary|dashboard`, and the CLI `skills promote`,

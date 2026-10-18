@@ -17,6 +17,7 @@ def register_faithfulness_commands(app: typer.Typer) -> None:
 
 @faithfulness_app.command("run")
 def faithfulness_run(
+    ctx: typer.Context,
     skill_id: str = typer.Option(..., "--skill-id"),
     version: int = typer.Option(1, "--version"),
     task_class: str = typer.Option("repo-chore", "--task-class"),
@@ -42,7 +43,6 @@ def faithfulness_run(
 
     from contracts.eval import BinomialSample
     from recertia.evals.faithfulness import (
-        evaluate_faithfulness,
         event_kinds,
         run_intervened_trials,
         strategy_tag,
@@ -149,16 +149,31 @@ def faithfulness_run(
         )
         event_groups[name] = _groups(rows)
 
-    report = evaluate_faithfulness(
-        skill=skill,
-        baseline=baseline,
-        baseline_event_groups=_groups(baseline_rows),
-        outcomes=outcomes,  # type: ignore[arg-type]
-        event_groups=event_groups,  # type: ignore[arg-type]
-        donor=donor,
-        skill_used=bool(baseline_rows),
-        min_independent_runs=policy.min_independent_runs,
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.evals import EvalService
+    from recertia.errors import RecertiaError
+    from recertia.ports.identity import Principal
+
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
     )
+    try:
+        report = EvalService(pdp=PolicyDecisionPoint.load(surface="cli")).faithfulness(
+            principal,
+            skill=skill,
+            baseline=baseline,
+            baseline_event_groups=_groups(baseline_rows),
+            outcomes=outcomes,  # type: ignore[arg-type]
+            event_groups=event_groups,  # type: ignore[arg-type]
+            donor=donor,
+            skill_used=bool(baseline_rows),
+            min_independent_runs=policy.min_independent_runs,
+        )
+    except RecertiaError as exc:
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
 
     payload = report.model_dump(mode="json")
     if report.score is None:

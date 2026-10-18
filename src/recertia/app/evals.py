@@ -168,6 +168,33 @@ class EvalService:
             task_class=task_class,
         )
 
+    def faithfulness(
+        self,
+        principal: Principal,
+        *,
+        skill: Any,
+        baseline: Any,
+        baseline_event_groups: dict[str, list[str]],
+        outcomes: Any,
+        event_groups: Any,
+        donor: Any | None,
+        skill_used: bool,
+        min_independent_runs: int,
+    ) -> Any:
+        self._require(principal, "evals.run")
+        from recertia.evals.faithfulness import evaluate_faithfulness
+
+        return evaluate_faithfulness(
+            skill=skill,
+            baseline=baseline,
+            baseline_event_groups=baseline_event_groups,
+            outcomes=outcomes,
+            event_groups=event_groups,
+            donor=donor,
+            skill_used=skill_used,
+            min_independent_runs=min_independent_runs,
+        )
+
     def suite_payload(self, report: Any) -> dict[str, Any]:
         return {
             "all_passed": report.all_passed,

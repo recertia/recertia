@@ -26,6 +26,8 @@ from recertia.api.console_routes import (
     WorkspaceCreate,
     WorkspacePatch,
 )
+from recertia.errors import ConfigError, Conflict, Forbidden, NotFound
+from recertia.ports.identity import ledger_actor
 
 
 def _set_session_cookies(response: Response, sessions: Any, token: str) -> None:
@@ -66,9 +68,6 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
     require_runs = rs.require_runs
     _optional_console_user = rs.optional_console_user
     _resolve_tenant = rs.resolve_tenant
-    _require_workspace_admin = rs.require_workspace_admin
-    _require_host_admin = rs.require_host_admin
-    _require_library_write = rs.require_library_write
     _public_user = rs.public_user
 
     # ----- C3 auth -----
@@ -129,6 +128,12 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
         user = _optional_console_user(request)
         if user is None:
             raise HTTPException(status_code=401, detail="console authentication required")
+        from recertia.api.identity import principal_from_session_user
+
+        try:
+            ctx.pdp.require(principal_from_session_user(user), "tenants.switch")
+        except Forbidden as exc:
+            raise HTTPException(status_code=403, detail=exc.message) from exc
         try:
             switched = ctx.sessions.switch_tenant(user, body.tenant_id)
         except ValueError as exc:
@@ -147,7 +152,9 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
         if ctx.workspace_registry is None:
             raise HTTPException(status_code=500, detail="workspace registry unavailable")
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
-        items = ctx.workspace_registry.list(tenant_id=tenant_id)
+        items = ctx.workspace_service.list(
+            principal, registry=ctx.workspace_registry, tenant_id=tenant_id
+        )
         return {"workspaces": [w.model_dump(mode="json") for w in items]}
 
     @app.get("/v1/workspaces/{workspace_id}")
@@ -160,9 +167,15 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
         if ctx.workspace_registry is None:
             raise HTTPException(status_code=500, detail="workspace registry unavailable")
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
-        ws = ctx.workspace_registry.get(workspace_id, tenant_id=tenant_id)
-        if ws is None:
-            raise HTTPException(status_code=404, detail="workspace not found")
+        try:
+            ws = ctx.workspace_service.get(
+                principal,
+                registry=ctx.workspace_registry,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+            )
+        except NotFound as exc:
+            raise HTTPException(status_code=404, detail=exc.message) from exc
         return ws.model_dump(mode="json")
 
     @app.post("/v1/workspaces", status_code=201)
@@ -174,23 +187,27 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         if ctx.workspace_registry is None:
             raise HTTPException(status_code=500, detail="workspace registry unavailable")
-        actor = _require_host_admin(request, principal)
+        user = _optional_console_user(request)
+        actor = user.user_id if user is not None else ledger_actor(principal)
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
-        from recertia.paths import HostRootError
-
         try:
-            ws = ctx.workspace_registry.register(
+            ws = ctx.workspace_service.register(
+                principal,
+                registry=ctx.workspace_registry,
                 tenant_id=tenant_id,
                 workspace_id=body.workspace_id,
                 display_name=body.display_name,
                 host_root=body.host_root,
                 created_by=actor,
                 notes=body.notes,
+                console_roles=frozenset(user.roles) if user is not None else None,
             )
-        except LookupError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except (HostRootError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Forbidden as exc:
+            raise HTTPException(status_code=403, detail=exc.message) from exc
+        except Conflict as exc:
+            raise HTTPException(status_code=409, detail=exc.message) from exc
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=exc.message) from exc
         return ws.model_dump(mode="json")
 
     @app.patch("/v1/workspaces/{workspace_id}")
@@ -203,21 +220,26 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         if ctx.workspace_registry is None:
             raise HTTPException(status_code=500, detail="workspace registry unavailable")
-        _require_workspace_admin(request, principal)
+        user = _optional_console_user(request)
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         try:
-            ws = ctx.workspace_registry.patch(
-                workspace_id,
+            ws = ctx.workspace_service.update(
+                principal,
+                registry=ctx.workspace_registry,
                 tenant_id=tenant_id,
+                workspace_id=workspace_id,
                 display_name=body.display_name,
                 notes=body.notes,
                 enabled=body.enabled,
                 clear_notes=body.clear_notes,
+                console_is_admin=user.may("admin") if user is not None else None,
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if ws is None:
-            raise HTTPException(status_code=404, detail="workspace not found")
+        except Forbidden as exc:
+            raise HTTPException(status_code=403, detail=exc.message) from exc
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=exc.message) from exc
+        except NotFound as exc:
+            raise HTTPException(status_code=404, detail=exc.message) from exc
         return ws.model_dump(mode="json")
 
     @app.delete("/v1/workspaces/{workspace_id}")
@@ -229,11 +251,20 @@ def register_session_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         if ctx.workspace_registry is None:
             raise HTTPException(status_code=500, detail="workspace registry unavailable")
-        _require_workspace_admin(request, principal)
+        user = _optional_console_user(request)
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
-        ws = ctx.workspace_registry.set_enabled(workspace_id, tenant_id=tenant_id, enabled=False)
-        if ws is None:
-            raise HTTPException(status_code=404, detail="workspace not found")
+        try:
+            ws = ctx.workspace_service.delete(
+                principal,
+                registry=ctx.workspace_registry,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                console_is_admin=user.may("admin") if user is not None else None,
+            )
+        except Forbidden as exc:
+            raise HTTPException(status_code=403, detail=exc.message) from exc
+        except NotFound as exc:
+            raise HTTPException(status_code=404, detail=exc.message) from exc
         return ws.model_dump(mode="json")
 
     @app.get("/v1/auth/oidc/login")

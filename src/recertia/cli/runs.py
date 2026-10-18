@@ -17,7 +17,6 @@ from contracts.goal import Goal, compile_goal
 from contracts.run import Task
 from recertia.bootstrap import build_default_orchestrator, resolve_task_class
 from recertia.config import load_model_config
-from recertia.graph.engine import GraphOrchestrator
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.ledger import HashChainLedger, LedgerVerificationError
 from recertia.runtime.errors import LedgerUnavailable
@@ -334,23 +333,21 @@ def runs_show(
     runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
     route_log: bool = typer.Option(False, "--route-log", help="Print the full route log."),
 ) -> None:
-    orchestrator = GraphOrchestrator(runs_root)
-    try:
-        latest = orchestrator.checkpoints.latest(run_id)
-        if latest is None:
-            typer.echo(f"no such run: {run_id}", err=True)
-            raise typer.Exit(code=1)
-        _, _, next_node, state = latest
-        typer.echo(
-            f"run_id={run_id} terminal={state.terminal} next_node={next_node} "
-            f"attempt_no={state.attempt_no}"
-        )
-        if route_log:
-            for entry in state.route_log:
-                reason = entry.reason.replace("\u2192", "->")
-                typer.echo(f"  [{entry.attempt_no}] {entry.node} --{entry.route}--> {reason}")
-    finally:
-        orchestrator.close()
+    from recertia.app.checkpoints import CheckpointReader
+
+    latest = CheckpointReader().latest_row("default", run_id, runs_root=runs_root)
+    if latest is None:
+        typer.echo(f"no such run: {run_id}", err=True)
+        raise typer.Exit(code=1)
+    _, _, next_node, state = latest
+    typer.echo(
+        f"run_id={run_id} terminal={state.terminal} next_node={next_node} "
+        f"attempt_no={state.attempt_no}"
+    )
+    if route_log:
+        for entry in state.route_log:
+            reason = entry.reason.replace("\u2192", "->")
+            typer.echo(f"  [{entry.attempt_no}] {entry.node} --{entry.route}--> {reason}")
 
 
 def _ledger_path(runs_root: Path, tenant: str | None) -> Path:
@@ -363,6 +360,7 @@ def _ledger_path(runs_root: Path, tenant: str | None) -> Path:
 
 @ledger_app.command("verify")
 def ledger_verify(
+    ctx: typer.Context,
     runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
     tenant: Optional[str] = typer.Option(None, "--tenant"),
     check_sig: bool = typer.Option(
@@ -376,14 +374,29 @@ def ledger_verify(
         help="Reserved. Skipped until a tip anchor is configured.",
     ),
 ) -> None:
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.library import LibraryService
+    from recertia.errors import RecertiaError
+    from recertia.ports.identity import Principal
+
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
+    )
     ledger = HashChainLedger(_ledger_path(runs_root, tenant))
     try:
-        report = ledger.verify(check_sig=check_sig)
+        report = LibraryService(pdp=PolicyDecisionPoint.load(surface="cli")).verify_ledger(
+            principal, ledger=ledger, check_sig=check_sig
+        )
     except LedgerVerificationError as exc:
         typer.echo(f"LEDGER INVALID: {exc}", err=True)
         raise typer.Exit(code=2) from exc
     except LedgerUnavailable as exc:
         typer.echo(f"LEDGER INVALID: {exc}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    except RecertiaError as exc:
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
         raise typer.Exit(code=exc.exit_code) from exc
     anchor = " (anchor check skipped)" if check_anchor else ""
     typer.echo(f"ledger OK: {report.entries} entries verified{anchor}")
