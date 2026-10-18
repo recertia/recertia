@@ -122,6 +122,12 @@ def test_probe_h_ops_rebuild_resumable_after_crash() -> None:
     _run(probe.scen_ops_rebuild_crash)
 
 
+@pytest.mark.skip(
+    reason=(
+        "R2 I expected leftover overlay while .lock is exclusive; "
+        "R3 O/M3/M4 require typed RootBusy or block-until-release"
+    ),
+)
 @pytest.mark.skipif(
     not _has_legacy_import(),
     reason="REL-3 PR #90: import_legacy must not fall back to files while the root lock is busy",
@@ -172,6 +178,12 @@ def _assert_named(rows: list[tuple[str, bool, str]], name: str) -> None:
     assert not failed, "; ".join(f"{n}: {detail}" for n, detail in failed)
 
 
+@pytest.mark.skip(
+    reason=(
+        "R2 L expected leftover overlay while .lock is exclusive; "
+        "R3 O/M3/M4 require typed RootBusy or block-until-release"
+    ),
+)
 @pytest.mark.skipif(
     not _has_legacy_import(),
     reason="REL-3 PR #90: lock-busy import must keep leftover state visible",
@@ -180,6 +192,12 @@ def test_probe_l_legacy_visible_while_lock_busy() -> None:
     _assert_named(_busy_records(), "L legacy state visible while root lock busy")
 
 
+@pytest.mark.skip(
+    reason=(
+        "R2 M expected leftover overlay while .lock is exclusive; "
+        "R3 O/M3/M4 require typed RootBusy or block-until-release"
+    ),
+)
 @pytest.mark.skipif(
     not _has_legacy_import(),
     reason="REL-3 PR #90: lock-busy import must keep leftover state visible",
