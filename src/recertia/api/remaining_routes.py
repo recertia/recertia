@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, ValidationError
 from recertia.api.console_auth import console_session
 from recertia.api.console_routes import ConsoleContext
 from recertia.api.errors import V1HTTPError
-from recertia.evals.golden import run_eval_suite
+from recertia.errors import Forbidden
 from recertia.evals.store import EvalStore
 from recertia.ledger import HashChainLedger
 from recertia.memory.affordance import AffordanceStore
@@ -170,11 +170,10 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         skills_root = ctx.tenant_skills_root(tenant_id)
         runs_root = ctx.tenant_runs_root(tenant_id)
         eval_db = runs_root / "evals.db"
-        from recertia.review.gate import default_golden_factory
-
         store = EvalStore(eval_db)
         try:
-            report = run_eval_suite(
+            report = ctx.eval_service.run_eval_suite(
+                principal,
                 task_class=body.task_class,
                 golden_root=_safe_golden_root(body.golden_root),
                 skills_root=skills_root,
@@ -182,23 +181,12 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
                 eval_store=store,
                 snapshot_id=body.snapshot or "eval-api",
                 golden_dir=_safe_golden_dir(body.golden_dir),
-                factory=default_golden_factory(),
             )
+        except Forbidden as exc:
+            raise V1HTTPError(403, code="forbidden", message=exc.message) from exc
         finally:
             store.close()
-        return {
-            "all_passed": report.all_passed,
-            "results": [
-                {
-                    "skill_id": r.skill_id,
-                    "passed": r.passed,
-                    "terminal": r.terminal,
-                    "run_id": r.run_id,
-                    "detail": r.detail,
-                }
-                for r in report.results
-            ],
-        }
+        return ctx.eval_service.suite_payload(report)
 
     @app.get("/v1/policy")
     def get_policy(principal=Depends(require_runs)) -> dict[str, Any]:

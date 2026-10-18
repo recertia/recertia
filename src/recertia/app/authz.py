@@ -248,7 +248,7 @@ class PolicyDecisionPoint:
             if not principal.has_scope("runs"):
                 return Decision(allow=False, status=403, reason="missing scope: runs")
             return Decision(allow=True)
-        if action == "skill.promote":
+        if action in {"skill.promote", "skills.promote"}:
             if principal.has_scope("promote") or principal.has_role("reviewer"):
                 return Decision(allow=True)
             return Decision(allow=False, status=403, reason="missing scope: promote")
@@ -262,7 +262,7 @@ class PolicyDecisionPoint:
             if not principal.has_scope("jobs"):
                 return Decision(allow=False, status=403, reason="missing scope: jobs")
             return Decision(allow=True)
-        if action == "eval.run":
+        if action in {"eval.run", "evals.run", "metrics.read"}:
             # SEC-8 currently skips a distinct evals key scope so existing
             # metrics keys keep calling eval routes. Treat metrics OR evals.
             if principal.has_scope("evals") or principal.has_scope("metrics"):

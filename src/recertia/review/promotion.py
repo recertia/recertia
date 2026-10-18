@@ -22,6 +22,7 @@ from contracts.status import Certification, SkillStatus
 from recertia.memory.procedural.active_set import assign_active_on_approval
 from recertia.memory.procedural.lint import lint_skill
 from recertia.memory.procedural.store import SkillStore
+from recertia.ports.orchestration import GateRunner
 from recertia.review.gate import discover_golden, discover_version_golden
 
 
@@ -60,6 +61,7 @@ def promote_to_approved(
     require_task_class_gate: bool = False,
     factory: object | None = None,
     executor: object | None = None,
+    gate: GateRunner | None = None,
 ) -> SkillStatus:
     """Run golden regression; on pass, write ``lifecycle=approved`` and the log ref.
 
@@ -104,6 +106,7 @@ def promote_to_approved(
         extra_golden_dirs=extra_dirs,
         factory=factory,
         executor=executor,
+        gate=gate,
     )
 
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -301,10 +304,13 @@ def _run_regression(
     extra_golden_dirs: list[Path],
     factory: object | None = None,
     executor: object | None = None,
+    gate: GateRunner | None = None,
 ) -> Any:
     from recertia.review.gate import GoldenGateRunner, GraphOrchestratorFactory
 
-    if factory is not None:
+    if gate is not None:
+        runner = gate
+    elif factory is not None:
         runner = GoldenGateRunner(factory)  # type: ignore[arg-type]
     elif executor is not None:
         runner = GoldenGateRunner(GraphOrchestratorFactory(executor))  # type: ignore[arg-type]

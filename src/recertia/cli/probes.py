@@ -16,6 +16,7 @@ def register_probes_commands(app: typer.Typer) -> None:
 
 @probes_app.command("run")
 def probes_run(
+    ctx: typer.Context,
     probes: Path = typer.Option(Path("evals/probes/repo-chore.json"), "--probes"),
     skills_root: Path = typer.Option(Path("skills"), "--skills-root"),
     eval_db: Path = typer.Option(Path(".recertia/evals.db"), "--eval-db"),
@@ -30,16 +31,30 @@ def probes_run(
 
     import json
 
-    from recertia.evals.probes import run_probes
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.evals import EvalService
+    from recertia.errors import RecertiaError
     from recertia.evals.store import EvalStore
+    from recertia.ports.identity import Principal
 
-    result = run_probes(
-        probes_path=probes,
-        skills_root=skills_root,
-        index_path=index_path,
-        workdir_root=workdir_root,
-        task_class=task_class,
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
     )
+    service = EvalService(pdp=PolicyDecisionPoint.load(surface="cli"))
+    try:
+        result = service.probes(
+            principal,
+            probes_path=probes,
+            skills_root=skills_root,
+            index_path=index_path,
+            workdir_root=workdir_root,
+            task_class=task_class,
+        )
+    except RecertiaError as exc:
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
     if persist:
         store = EvalStore(eval_db)
         try:
