@@ -39,8 +39,9 @@ def skills_lint(
             principal, store=store
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     failures = {k: v for k, v in report.items() if v}
     for key, violations in report.items():
         if violations:
@@ -93,8 +94,9 @@ def skills_search(
             explain=explain,
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     bundle = payload["bundle"]
     explanation = payload["explanation"]
 
@@ -169,8 +171,9 @@ def skills_promote(
             require_task_class_gate=require_task_class_gate,
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     except PromotionError as exc:
         typer.echo(f"PROMOTION FAILED: {exc}", err=True)
         if exc.failing_fixtures:
@@ -216,8 +219,9 @@ def skills_list(
             principal, store=store, task_class=task_class, lifecycle=lifecycle
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     for item in items:
         typer.echo(
             f"{item['skill_id']}@{item['version']} lifecycle={item['lifecycle']} "
@@ -265,6 +269,7 @@ def skills_show(
             principal, store=store, skill_id=skill_id, version=version
         )
     except RecertiaError as exc:
-        typer.echo(f"skill not found: {skill_id}@{version}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc, message=f"skill not found: {skill_id}@{version}")
     typer.echo(json.dumps(payload, indent=2))

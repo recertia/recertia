@@ -54,8 +54,9 @@ def metrics_cmd(
                 canary_root=canary_root,
             )
         except RecertiaError as exc:
-            typer.echo(f"{exc.code}: {exc.message}", err=True)
-            raise typer.Exit(code=exc.exit_code) from exc
+            from recertia.cli.exit import raise_exit
+
+            raise_exit(exc)
     finally:
         store.close()
 

@@ -51,8 +51,9 @@ def policy_show(
             _principal(ctx), path=path
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     typer.echo(json.dumps(payload, indent=2))
 
 
@@ -126,8 +127,9 @@ def policy_propose(
             extra_payload={"eval_comparison": eval_compare.strip()},
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     finally:
         store.close()
     typer.echo(json.dumps(rec.to_dict(), indent=2))

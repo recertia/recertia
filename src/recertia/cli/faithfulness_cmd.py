@@ -172,8 +172,9 @@ def faithfulness_run(
             min_independent_runs=policy.min_independent_runs,
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
 
     payload = report.model_dump(mode="json")
     if report.score is None:

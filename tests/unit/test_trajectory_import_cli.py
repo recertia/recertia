@@ -81,7 +81,7 @@ def test_cli_import_rejects_and_accepts(tmp_path: Path) -> None:
     bad = tmp_path / "bad.json"
     bad.write_text("{}", encoding="utf-8")
     denied = runner.invoke(app, ["trajectory", "import", str(bad), "--runs-root", str(tmp_path)])
-    assert denied.exit_code == 1
+    assert denied.exit_code == 2
     combined = (denied.output + denied.stdout + denied.stderr).lower()
     assert "rejected" in combined or "ok" in combined
 
@@ -93,7 +93,7 @@ def test_cli_import_rejects_and_accepts(tmp_path: Path) -> None:
     env_denied = runner.invoke(
         app, ["trajectory", "import", str(empty_env), "--runs-root", str(tmp_path)]
     )
-    assert env_denied.exit_code == 1
+    assert env_denied.exit_code == 2
 
     good = tmp_path / "good.json"
     good.write_text(json.dumps(_valid_payload(import_id="imp-cli")), encoding="utf-8")

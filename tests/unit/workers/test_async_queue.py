@@ -29,8 +29,8 @@ def test_async_run_is_finished_by_the_queue_worker(tmp_path: Path) -> None:
     )
     assert created.status_code == 202, created.text
     assert created.json()["status"] == "queued"
-    app.state.console_ctx.embedded.flush(timeout=30)
-    row = app.state.console_ctx.queue.get("t1", "async-q")
+    app.state.recertia.embedded.flush(timeout=30)
+    row = app.state.recertia.queue.get("t1", "async-q")
     assert row is not None
     assert row.status == "succeeded"
     got = client.get("/v1/runs/async-q", headers={"X-API-Key": issued.secret})

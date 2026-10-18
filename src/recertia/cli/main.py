@@ -64,8 +64,9 @@ def _load_process_settings(ctx: typer.Context) -> None:
         settings = load_settings()
         settings.validate_deployment(role="cli")
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     ctx.obj = {"settings": settings, "principal": Principal.local_operator()}
 
 

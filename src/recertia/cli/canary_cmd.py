@@ -56,8 +56,9 @@ def canary_cmd(
             model_version=None if live else cfg.verifier_model_id,
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     except LiveCanaryError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc

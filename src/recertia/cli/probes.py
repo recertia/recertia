@@ -53,8 +53,9 @@ def probes_run(
             task_class=task_class,
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     if persist:
         store = EvalStore(eval_db)
         try:

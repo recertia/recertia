@@ -39,6 +39,33 @@ def error_body(
     return {"error": err}
 
 
+def quota_error(exc: Exception, *, run_id: str | None = None) -> JSONResponse:
+    """Map quota / in-flight exhaustion to the existing 429 envelope."""
+
+    message = str(exc)
+    if "max_in_flight" in message:
+        return v1_error(
+            429, code="worker_busy", message=message, run_id=run_id, retryable=True
+        )
+    return v1_error(
+        429, code="budget_exhausted", message=message, run_id=run_id, retryable=False
+    )
+
+
+def recertia_error_response(exc: Any) -> JSONResponse:
+    """``RecertiaError`` → existing ``{"error": ...}`` envelope plus Retry-After."""
+
+    from recertia.errors import RecertiaError
+
+    if not isinstance(exc, RecertiaError):
+        raise TypeError("expected RecertiaError")
+    body = exc.error_body()
+    headers = {}
+    if exc.retry_after_s is not None:
+        headers["Retry-After"] = str(int(exc.retry_after_s))
+    return JSONResponse(status_code=exc.http_status, content=body, headers=headers or None)
+
+
 def v1_error(
     status_code: int,
     *,

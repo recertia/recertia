@@ -26,8 +26,9 @@ def worker_cmd(
     try:
         load_settings().validate_deployment(role="worker")
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
 
     ident = worker_id()
     if once:

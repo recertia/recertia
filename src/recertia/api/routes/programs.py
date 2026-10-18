@@ -1,4 +1,4 @@
-"""Console Goal-pack / migration-program routes."""
+"""HTTP adapters. Handlers map RecertiaError to HTTP; services own policy."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 
-from recertia.api.console_deps import RouteState
-from recertia.api.console_routes import (
+from recertia.api.deps import RouteState
+from recertia.api.schemas import (
     ProgramAccept,
     ProgramCreate,
     ProgramFromPack,
@@ -26,10 +26,13 @@ def _map_program_error(exc: RecertiaError) -> HTTPException:
     return HTTPException(status_code=exc.http_status, detail=detail)
 
 
-def register_program_routes(app: FastAPI, rs: RouteState) -> None:
+def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
     ctx = rs.ctx
     require_runs = rs.require_runs
+    _optional_console_user = rs.optional_console_user
     _resolve_tenant = rs.resolve_tenant
+    _require_library_write = rs.require_library_write
+    _public_user = rs.public_user
 
     @app.post("/v1/programs/from-pack")
     def program_from_pack(
@@ -47,7 +50,6 @@ def register_program_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
-
     @app.post("/v1/programs")
     def create_program(
         request: Request,
@@ -62,7 +64,6 @@ def register_program_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
-
     @app.get("/v1/programs")
     def list_programs(
         request: Request,
@@ -78,7 +79,6 @@ def register_program_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
-
     @app.get("/v1/programs/{program_id}")
     def get_program(
         program_id: str,
@@ -93,7 +93,6 @@ def register_program_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
-
     @app.post("/v1/programs/{program_id}/accept")
     def accept_program(
         program_id: str,
@@ -109,7 +108,6 @@ def register_program_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
-
     @app.post("/v1/programs/{program_id}/abandon")
     def abandon_program(
         program_id: str,
@@ -124,7 +122,6 @@ def register_program_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
-
     @app.patch("/v1/programs/{program_id}/steps/{step_id}")
     def patch_step(
         program_id: str,
@@ -146,7 +143,6 @@ def register_program_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
-
     @app.post("/v1/programs/{program_id}/steps/{step_id}/preview")
     def preview_step(
         program_id: str,
@@ -166,7 +162,6 @@ def register_program_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
-
     @app.post("/v1/programs/{program_id}/steps/{step_id}/run")
     def run_step(
         program_id: str,
@@ -190,7 +185,6 @@ def register_program_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
-
     @app.post("/v1/programs/{program_id}/steps/{step_id}/skip")
     def skip_step(
         program_id: str,
@@ -212,7 +206,6 @@ def register_program_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
-
     @app.post("/v1/programs/{program_id}/repo-binding")
     def set_repo_binding(
         program_id: str,
@@ -228,7 +221,6 @@ def register_program_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
-
     @app.post("/v1/programs/{program_id}/steps/{step_id}/record-tip")
     def record_step_tip(
         program_id: str,
@@ -250,7 +242,6 @@ def register_program_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
-
     @app.post("/v1/programs/{program_id}/steps/{step_id}/seed-workdir")
     def seed_step_workdir(
         program_id: str,
@@ -275,4 +266,3 @@ def register_program_routes(app: FastAPI, rs: RouteState) -> None:
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
 
-    app.state.console_ctx = ctx

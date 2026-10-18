@@ -41,7 +41,14 @@ def trajectory_import_cmd(
         result = LibraryService(pdp=PolicyDecisionPoint.load(surface="cli")).import_trajectory(
             principal, body=payload, runs_root=runs_root, tenant_id=tenant, actor="cli"
         )
-    except (RecertiaError, ValidationError, ValueError, json.JSONDecodeError) as exc:
+    except RecertiaError as exc:
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(
+            exc,
+            message=json.dumps({"ok": False, "rejected": str(exc)}, indent=2),
+        )
+    except (ValidationError, ValueError, json.JSONDecodeError) as exc:
         typer.echo(json.dumps({"ok": False, "rejected": str(exc)}, indent=2), err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(json.dumps({"ok": True, **result}, indent=2))
@@ -83,6 +90,10 @@ def trajectory_distill_cmd(
             from_file=path,
         )
     except RecertiaError as exc:
-        typer.echo(json.dumps({"ok": False, "rejected": str(exc)}, indent=2), err=True)
-        raise typer.Exit(code=1) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(
+            exc,
+            message=json.dumps({"ok": False, "rejected": str(exc)}, indent=2),
+        )
     typer.echo(json.dumps({"ok": True, **payload}, indent=2))

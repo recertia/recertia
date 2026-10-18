@@ -172,7 +172,7 @@ def test_create_run_and_worker_use_tenant_skills_root(
         headers={"X-API-Key": issued.secret},
     )
     assert async_created.status_code == 202, async_created.text
-    app.state.console_ctx.embedded.flush(timeout=30)
+    app.state.recertia.embedded.flush(timeout=30)
     assert expected in seen
 
 

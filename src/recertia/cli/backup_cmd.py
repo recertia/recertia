@@ -64,7 +64,11 @@ def backup_verify(
         manifest = OpsService(pdp=PolicyDecisionPoint.load(surface="cli")).verify_backup(
             principal, archive=archive
         )
-    except (BackupError, RecertiaError) as exc:
+    except RecertiaError as exc:
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc, message=str(exc))
+    except BackupError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc
     count = len(manifest.get("files", []))
@@ -85,7 +89,11 @@ def _backup(root: Path, output: Path | None, *, ctx: typer.Context | None = None
         dest = OpsService(pdp=PolicyDecisionPoint.load(surface="cli")).backup(
             principal, root=root, output=output
         )
-    except (BackupError, RecertiaError) as exc:
+    except RecertiaError as exc:
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc, message=str(exc))
+    except BackupError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc
     typer.echo(str(dest))
@@ -114,7 +122,11 @@ def restore_cmd(
         path = OpsService(pdp=PolicyDecisionPoint.load(surface="cli")).restore(
             principal, archive=archive, dest=dest, overwrite=overwrite
         )
-    except (BackupError, RecertiaError) as exc:
+    except RecertiaError as exc:
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc, message=str(exc))
+    except BackupError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc
     typer.echo(str(path))

@@ -41,7 +41,7 @@ def workspaces_register(
 
     from recertia.app.authz import PolicyDecisionPoint
     from recertia.app.workspaces import WorkspaceService
-    from recertia.errors import ConfigError, Conflict, Forbidden, RecertiaError
+    from recertia.errors import Forbidden, RecertiaError
 
     registry = WorkspaceRegistry(runs_root / "workspaces_registry.sqlite")
     try:
@@ -55,15 +55,15 @@ def workspaces_register(
             created_by=actor,
             notes=notes,
         )
-    except Forbidden as exc:
-        typer.echo("forbidden: registering a host root requires platform_admin", err=True)
-        raise typer.Exit(code=3) from exc
-    except Conflict as exc:
-        typer.echo(str(exc.message), err=True)
-        raise typer.Exit(code=1) from exc
-    except (ConfigError, RecertiaError) as exc:
-        typer.echo(str(exc.message), err=True)
-        raise typer.Exit(code=2 if isinstance(exc, ConfigError) else exc.exit_code) from exc
+    except RecertiaError as exc:
+        from recertia.cli.exit import raise_exit
+
+        if isinstance(exc, Forbidden):
+            raise_exit(
+                exc,
+                message="forbidden: registering a host root requires platform_admin",
+            )
+        raise_exit(exc, message=str(exc.message))
     finally:
         registry.close()
     typer.echo(
@@ -87,8 +87,9 @@ def workspaces_list(
             _principal(ctx), registry=registry, tenant_id=tenant
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     finally:
         registry.close()
     if not items:
@@ -119,8 +120,9 @@ def workspaces_disable(
             workspace_id=workspace_id,
         )
     except RecertiaError as exc:
-        typer.echo(exc.message, err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     finally:
         registry.close()
     typer.echo(f"workspace_id={ws.workspace_id} enabled=false")

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_cli_and_api_share_one_registry() -> None:
     cli = (ROOT / "src/recertia/cli/jobs.py").read_text(encoding="utf-8")
-    api = (ROOT / "src/recertia/api/console_library_routes.py").read_text(encoding="utf-8")
+    api = (ROOT / "src/recertia/api/routes/jobs.py").read_text(encoding="utf-8")
     assert "JobService" in cli
     assert "job_service.run" in api
     assert 'name in {"mine"' not in cli

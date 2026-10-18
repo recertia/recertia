@@ -36,8 +36,9 @@ def systems_cmd(
             principal, spans=spans, brief=brief
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     text = json.dumps(payload, indent=2)
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)

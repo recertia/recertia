@@ -213,7 +213,7 @@ def test_pc3_proposal_decision_appends_human_actor(
         payload={"tier": "T1"},
         tenant_id="t1",
     )
-    app.state.console_ctx.proposals.add(prop)
+    app.state.recertia.proposals.add(prop)
 
     decided = client.post(
         "/v1/proposals/prop-pc3/decision",
@@ -234,7 +234,7 @@ def test_pc3_proposal_decision_appends_human_actor(
 def test_pc4_sse_after_cursor_skips_seen_events(tmp_path: Path) -> None:
     client, app = _client(tmp_path)
     headers = _issue(app, tenant_id="t1")
-    events = app.state.console_ctx.events
+    events = app.state.recertia.events
     e1 = events.append("t1", "run-sse", "run.queued", {"n": 1})
     e2 = events.append("t1", "run-sse", "run.started", {"n": 2})
     e3 = events.append("t1", "run-sse", "run.finished", {"n": 3, "terminal": "solved"})
@@ -369,7 +369,7 @@ def test_c3_me_and_rbac_operator_cannot_decide_t2(
         payload={"tier": "T2"},
         tenant_id="t1",
     )
-    app.state.console_ctx.proposals.add(prop)
+    app.state.recertia.proposals.add(prop)
     denied = client.post(
         "/v1/proposals/t2-prop/decision",
         headers=headers,
@@ -425,12 +425,12 @@ def test_c5_tenant_switch_isolates_skills_and_proposals(
     }
 
     ver = add_gitignore_entry()
-    store_a = SkillStore(app.state.console_ctx.tenant_skills_root("tenant-a"))
+    store_a = SkillStore(app.state.recertia.tenant_skills_root("tenant-a"))
     store_a.write_version(ver)
     store_a.write_status(seed_status_draft(ver))
     store_a.write_stats(seed_stats(ver))
 
-    app.state.console_ctx.proposals.add(
+    app.state.recertia.proposals.add(
         ProposalRecord(
             proposal_id="pa",
             kind="mine",
@@ -440,7 +440,7 @@ def test_c5_tenant_switch_isolates_skills_and_proposals(
             tenant_id="tenant-a",
         )
     )
-    app.state.console_ctx.proposals.add(
+    app.state.recertia.proposals.add(
         ProposalRecord(
             proposal_id="pb",
             kind="mine",
@@ -502,14 +502,14 @@ def test_job_dry_run_does_not_persist_proposals(tmp_path: Path) -> None:
     assert body["status"] == "succeeded"
     assert body["dry_run"] is True
     # dry_run may emit proposal payloads on the job record but must not enqueue durable queue
-    pending = app.state.console_ctx.proposals.list(tenant_id="t1", status="pending")
+    pending = app.state.recertia.proposals.list(tenant_id="t1", status="pending")
     assert pending == []
 
 
 def test_rejected_proposal_cannot_be_reapproved(tmp_path: Path) -> None:
     client, app = _client(tmp_path)
     headers = _issue(app, tenant_id="t1")
-    app.state.console_ctx.proposals.add(
+    app.state.recertia.proposals.add(
         ProposalRecord(
             proposal_id="rej1",
             kind="mine",

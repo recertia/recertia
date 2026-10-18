@@ -396,8 +396,9 @@ def ledger_verify(
         typer.echo(f"LEDGER INVALID: {exc}", err=True)
         raise typer.Exit(code=exc.exit_code) from exc
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     anchor = " (anchor check skipped)" if check_anchor else ""
     typer.echo(f"ledger OK: {report.entries} entries verified{anchor}")
 
