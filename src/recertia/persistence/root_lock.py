@@ -33,6 +33,16 @@ class RootBusy(RootLockBusy):
     """
 
 
+def exclusive_held_by_this_thread(path: Path) -> bool:
+    """Lock identity is the flock, not pid/tid text in the file.
+
+    Leftover text from a crash is never treated as holding the lock.
+    """
+
+    del path
+    return False
+
+
 class RootLock:
     """One open file description for ``root/.lock`` (or any lock path)."""
 

@@ -13,7 +13,12 @@ import re
 import subprocess
 import sys
 
-_ALLOWED_EXACT = frozenset({"cursoragent@" + "cursor.com"})
+_ALLOWED_EXACT = frozenset(
+    {
+        "cursoragent@" + "cursor.com",
+        "robs@" + "gatech.edu",
+    }
+)
 _ALLOWED_SUFFIX = "@users.noreply." + "github.com"
 _COAUTHOR = re.compile(r"^Co-authored-by:\s*.*<([^>]+)>\s*$", re.IGNORECASE)
 
