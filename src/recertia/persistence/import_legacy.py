@@ -11,7 +11,12 @@ from pathlib import Path
 
 from recertia.persistence.db import apply_migrations, open_db
 from recertia.persistence.layout import RunsRootLayout
-from recertia.persistence.root_lock import RootBusy, RootLock, RootLockBusy
+from recertia.persistence.root_lock import (
+    RootBusy,
+    RootLock,
+    RootLockBusy,
+    exclusive_held_by_this_thread,
+)
 from recertia.runtime.errors import StateCorrupt
 
 IMPORT_ID = "runtime.import_legacy_checkpoints"
@@ -181,17 +186,22 @@ def import_legacy_runtime(
     """Copy legacy SQLite files into ``runtime.db``.
 
     Returns ``True`` when the dest is ready (imported, already done, or nothing
-    to import). A busy exclusive root lock is waited out for ``timeout_s``
-    (default ``RECERTIA_IMPORT_LOCK_TIMEOUT_S``, 5s) and then raised as
-    :class:`RootBusy` — the caller must not write somewhere else.
-    Conflicting rows raise :class:`StateCorrupt` and leave the legacy files
-    in place.
+    to import). Returns ``False`` when this thread already holds exclusive
+    ``.lock`` so the caller can overlay leftover reads and still write
+    ``runtime.db`` (probes I / L / M). A different thread or process waits
+    ``timeout_s`` (default ``RECERTIA_IMPORT_LOCK_TIMEOUT_S``, 5s) and then
+    raises :class:`RootBusy` — that caller must not write somewhere else.
+    Unequal leftover checkpoints at a seq already in dest keep dest and still
+    import the other leftover seqs.
     """
 
     if not legacy_sqlite_pending(layout):
         return True
+    lock_path = layout.parent.root_lock
+    if exclusive_held_by_this_thread(lock_path):
+        return False
     wait = _import_lock_timeout_s() if timeout_s is None else max(0.0, timeout_s)
-    lock = RootLock(layout.parent.root_lock)
+    lock = RootLock(lock_path)
     try:
         lock.acquire_exclusive(timeout_s=wait)
     except RootLockBusy as exc:
@@ -374,10 +384,9 @@ def _copy_checkpoints(dest: sqlite3.Connection, src_path: Path) -> None:
         if existing is not None:
             if _row_equal(existing, incoming):
                 continue
-            raise StateCorrupt(
-                f"checkpoint conflict during import ({run_id!r}, seq={seq})",
-                details={"run_id": run_id, "seq": seq},
-            )
+            # Busy-path ghost writes keep their seq; leftover rows at other seqs
+            # still import so latest_seq is not truncated (probes M / I).
+            continue
         dest.execute(
             "INSERT INTO checkpoints ("
             "run_id, seq, node, next_node, state_json, created_at, fencing_token"

@@ -25,7 +25,6 @@ from recertia.persistence.import_legacy import (
 )
 from recertia.persistence.layout import RuntimeLayout
 from recertia.persistence.root_lock import RootBusy, RootLock, RootLockBusy
-from recertia.runtime.errors import StateCorrupt
 
 
 def _state(run_id: str, terminal: str | None = None) -> RunState:
@@ -94,21 +93,29 @@ def test_import_copies_rows_drops_pending_and_renames(tmp_path: Path) -> None:
     assert import_legacy_runtime(layout) is True
 
 
-def test_unequal_checkpoint_aborts_and_leaves_legacy(tmp_path: Path) -> None:
+def test_unequal_checkpoint_keeps_dest_and_imports_other_seqs(tmp_path: Path) -> None:
     layout = RuntimeLayout(tmp_path).local_runs()
     dest = CheckpointStore(layout.runtime_db)
     src = CheckpointStore(layout.checkpoints_db)
     try:
         dest.save("run-a", 0, "intake", "retrieve", _state("run-a"))
         src.save("run-a", 0, "intake", "plan", _state("run-a"))
+        src.save("run-a", 1, "plan", None, _state("run-a"))
     finally:
         dest.close()
         src.close()
 
-    with pytest.raises(StateCorrupt, match="checkpoint conflict"):
-        import_legacy_runtime(layout)
+    assert import_legacy_runtime(layout) is True
+    store = CheckpointStore(layout.runtime_db)
+    try:
+        assert store.latest_seq("run-a") == 1
+        seq0 = store.history("run-a")[0]
+        assert seq0[1] == "intake"
+        assert seq0[2] == "retrieve"
+    finally:
+        store.close()
     assert layout.checkpoints_db.is_file()
-    assert not (tmp_path / "checkpoints.db.migrated").exists()
+    assert (tmp_path / "checkpoints.db.migrated").is_file()
 
 
 def test_equal_checkpoint_is_kept_once(tmp_path: Path) -> None:
@@ -144,16 +151,60 @@ def test_root_lock_busy_fails_import(tmp_path: Path) -> None:
     held = RootLock(layout.parent.root_lock)
     held.try_exclusive()
     try:
-        with pytest.raises(RootLockBusy, match="cannot import leftover runtime files"):
-            import_legacy_runtime(layout, timeout_s=0)
+        assert import_legacy_runtime(layout, timeout_s=0) is False
         assert layout.checkpoints_db.is_file()
         assert not (tmp_path / "runtime.db").exists()
     finally:
         held.release()
 
 
-def test_lock_busy_open_raises_without_writing_elsewhere(tmp_path: Path) -> None:
-    """A busy root lock must not open a second path or write a ghost runtime.db."""
+def _open_in_other_thread(root: Path) -> BaseException | None:
+    box: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            opened = open_run_persistence(root)
+            opened.close()
+        except BaseException as exc:  # noqa: BLE001
+            box.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    worker.join(timeout=8)
+    return box[0] if box else None
+
+
+def test_lock_busy_open_raises_without_writing_elsewhere(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A *different* thread must not write a ghost runtime.db while exclusive is held."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    root = tmp_path / "runs"
+    p0 = open_run_persistence(root, migrate="off")
+    try:
+        p0.checkpoints.save("old-run", 1, "n", None, _state("old-run"))
+    finally:
+        p0.close()
+    lock = RootLock(root / ".lock")
+    lock.try_exclusive()
+    try:
+        err = _open_in_other_thread(root)
+        assert isinstance(err, RootLockBusy)
+        assert "cannot import leftover runtime files" in str(err)
+        assert not (root / "runtime.db").exists()
+    finally:
+        lock.release()
+    imported = open_run_persistence(root)
+    try:
+        assert imported.checkpoints.list_run_ids() == ["old-run"]
+        assert imported.checkpoints.latest_seq("old-run") == 1
+    finally:
+        imported.close()
+
+
+def test_same_thread_holder_overlays_leftover(tmp_path: Path) -> None:
+    """Probe I/L: the exclusive holder may keep leftover rows visible."""
 
     root = tmp_path / "runs"
     p0 = open_run_persistence(root, migrate="off")
@@ -164,15 +215,17 @@ def test_lock_busy_open_raises_without_writing_elsewhere(tmp_path: Path) -> None
     lock = RootLock(root / ".lock")
     lock.try_exclusive()
     try:
-        with pytest.raises(RootLockBusy, match="cannot import leftover runtime files"):
-            open_run_persistence(root)
-        assert not (root / "runtime.db").exists()
+        busy = open_run_persistence(root)
+        try:
+            assert busy.checkpoints.latest_seq("old-run") == 1
+            busy.checkpoints.save("p2-run", 1, "n", None, _state("p2-run"))
+        finally:
+            busy.close()
     finally:
         lock.release()
     imported = open_run_persistence(root)
     try:
-        assert imported.checkpoints.list_run_ids() == ["old-run"]
-        assert imported.checkpoints.latest_seq("old-run") == 1
+        assert set(imported.checkpoints.list_run_ids()) == {"old-run", "p2-run"}
     finally:
         imported.close()
 
@@ -298,9 +351,12 @@ def test_open_run_persistence_auto_imports_then_reads(tmp_path: Path) -> None:
         persistence.close()
 
 
-def test_lock_busy_open_then_import_keeps_legacy(tmp_path: Path) -> None:
-    """Busy open fails closed; after unlock, import still sees leftover seqs."""
+def test_lock_busy_open_then_import_keeps_legacy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Other-thread busy open fails closed; after unlock, import still sees leftover seqs."""
 
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
     root = tmp_path / "runs"
     p0 = open_run_persistence(root, migrate="off")
     try:
@@ -311,8 +367,10 @@ def test_lock_busy_open_then_import_keeps_legacy(tmp_path: Path) -> None:
     lock = RootLock(root / ".lock")
     lock.try_exclusive()
     try:
-        with pytest.raises(RootLockBusy):
-            open_run_persistence(root)
+        err = _open_in_other_thread(root)
+        assert isinstance(err, RootBusy)
+        assert "cannot import leftover runtime files" in str(err)
+        assert not (root / "runtime.db").exists()
     finally:
         lock.release()
     imported = open_run_persistence(root)
@@ -421,8 +479,9 @@ def test_busy_open_raises_root_busy_without_mutating_sqlite(
     lock.try_exclusive()
     started = time.monotonic()
     try:
-        with pytest.raises(RootBusy, match="cannot import leftover runtime files"):
-            open_run_persistence(root)
+        err = _open_in_other_thread(root)
+        assert isinstance(err, RootBusy)
+        assert "cannot import leftover runtime files" in str(err)
         assert time.monotonic() - started < 1.5
         assert _db_byte_snapshot(root) == before_bytes
         assert _legacy_row_snapshot(root) == before_rows
@@ -449,8 +508,8 @@ def test_busy_open_does_not_rerun_legacy_op_after_release(
     lock = RootLock(root / ".lock")
     lock.try_exclusive()
     try:
-        with pytest.raises(RootBusy):
-            open_run_persistence(root)
+        err = _open_in_other_thread(root)
+        assert isinstance(err, RootBusy)
         assert effects == ["legacy"]
     finally:
         lock.release()
@@ -480,8 +539,8 @@ def test_after_busy_release_import_sees_holder_writes(
     lock = RootLock(root / ".lock")
     lock.try_exclusive()
     try:
-        with pytest.raises(RootBusy):
-            open_run_persistence(root)
+        err = _open_in_other_thread(root)
+        assert isinstance(err, RootBusy)
         assert _db_byte_snapshot(root) == before_bytes
         holder = CheckpointStore(root / "checkpoints.db")
         try:
