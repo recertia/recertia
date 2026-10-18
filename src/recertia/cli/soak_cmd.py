@@ -50,8 +50,9 @@ def soak_record(
             canary=canary,
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     typer.echo(json.dumps(classified.as_dict(), indent=2))
     if not classified.counted:
         typer.echo(f"not counted: {classified.reason}", err=True)
@@ -74,8 +75,9 @@ def soak_status(
             _principal(ctx), log_path=log_path, tabletop=tabletop
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     typer.echo(json.dumps(payload, indent=2))
     if payload.get("ga_claimed"):
         typer.echo("soak must not claim GA", err=True)

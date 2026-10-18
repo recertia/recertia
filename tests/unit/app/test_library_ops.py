@@ -26,10 +26,10 @@ def test_cli_and_api_call_library_ops_services() -> None:
     cli_policy = (ROOT / "src/recertia/cli/policy_cmd.py").read_text(encoding="utf-8")
     cli_backup = (ROOT / "src/recertia/cli/backup_cmd.py").read_text(encoding="utf-8")
     cli_runs = (ROOT / "src/recertia/cli/runs.py").read_text(encoding="utf-8")
-    api_lib = (ROOT / "src/recertia/api/console_library_routes.py").read_text(encoding="utf-8")
-    api_prog = (ROOT / "src/recertia/api/console_program_routes.py").read_text(encoding="utf-8")
-    api_sess = (ROOT / "src/recertia/api/console_session_routes.py").read_text(encoding="utf-8")
-    api_rem = (ROOT / "src/recertia/api/remaining_routes.py").read_text(encoding="utf-8")
+    api_lib = (ROOT / "src/recertia/api/routes/library.py").read_text(encoding="utf-8")
+    api_skills = (ROOT / "src/recertia/api/routes/skills.py").read_text(encoding="utf-8")
+    api_prog = (ROOT / "src/recertia/api/routes/programs.py").read_text(encoding="utf-8")
+    api_ws = (ROOT / "src/recertia/api/routes/workspaces.py").read_text(encoding="utf-8")
     assert "LibraryService" in cli_skills
     assert "lint_store(" not in cli_skills
     assert "KeyService" in cli_keys
@@ -38,11 +38,11 @@ def test_cli_and_api_call_library_ops_services() -> None:
     assert "OpsService" in cli_backup
     assert "CheckpointReader" in cli_runs
     assert "library_service." in api_lib
+    assert "library_service." in api_skills
     assert "program_service." in api_prog
-    assert "workspace_service." in api_sess
-    assert "library_service." in api_rem
+    assert "workspace_service." in api_ws
     assert "ctx.programs.put" not in api_prog
-    assert "ctx.workspace_registry.register" not in api_sess
+    assert "ctx.workspace_registry.register" not in api_ws
 
 
 def test_library_read_requires_runs_scope() -> None:

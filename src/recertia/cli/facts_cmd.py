@@ -43,6 +43,7 @@ def facts_list(
             principal, store=store, scope=scope
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     typer.echo(json.dumps({"items": [f.model_dump(mode="json") for f in items]}, indent=2))

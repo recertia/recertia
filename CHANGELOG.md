@@ -61,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ARCH-5 PR-5.5 AppState and CLI exits** — `ConsoleContext` is gone. `create_app`
+  stores one `AppState` on `app.state.recertia`. HTTP handlers live in
+  `api/routes/*.py` and share `api/schemas.py`. CLI errors go through
+  `cli/exit.py::raise_exit` (A2 table: not found 1, invalid 2, auth 3, quota 4,
+  conflict 5, busy 6, unavailable 7). `ledger verify` stays 0 or 2. URL paths
+  and JSON keys stay.
 - **ARCH-5 PR-5.4 library, programs, workspaces, keys, ops** — remaining HTTP
   routes and CLI commands delegate to `LibraryService`, `ProgramService`,
   `WorkspaceService`, `CheckpointReader`, `KeyService`, and `OpsService`.

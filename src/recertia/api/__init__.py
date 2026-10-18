@@ -24,27 +24,26 @@ from contracts.criteria import TaskCriterion
 # FastAPI is an optional extra. Importing this package (which ``api.events`` and
 # ``api.auth`` do on the way to the core CLI) must succeed without it.
 try:
-    from fastapi import Depends, FastAPI, HTTPException
-    from fastapi.responses import FileResponse, JSONResponse
-    from fastapi.staticfiles import StaticFiles
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import JSONResponse
     from starlette.exceptions import HTTPException as StarletteHTTPException
 except ImportError:  # pragma: no cover - bare wheel has no [api] extra
-    Depends = None  # type: ignore[assignment,misc]
     FastAPI = None  # type: ignore[assignment,misc]
     HTTPException = None  # type: ignore[assignment,misc]
-    FileResponse = None  # type: ignore[assignment,misc]
     JSONResponse = None  # type: ignore[assignment,misc]
-    StaticFiles = None  # type: ignore[assignment,misc]
     StarletteHTTPException = None  # type: ignore[assignment,misc]
 else:
     from recertia.api.auth import ApiKeyStore, Principal, require_scope, validate_tenant_id
-    from recertia.api.console_routes import ConsoleContext, register_console_routes
-    from recertia.api.errors import V1HTTPError, envelope_http_exception, v1_error
-    from recertia.api.remaining_routes import register_remaining_routes
+    from recertia.api.errors import (
+        V1HTTPError,
+        envelope_http_exception,
+        recertia_error_response,
+        v1_error,
+    )
 
 from recertia.api.quotas import QuotaExceeded, QuotaStore
-from recertia.api.runs_models import RunCreate as RunCreate
-from recertia.api.runs_models import RunRecord
+from recertia.api.schemas import RunCreate as RunCreate
+from recertia.api.schemas import RunRecord
 from recertia.bootstrap import build_default_orchestrator as build_default_orchestrator
 from recertia.config import ModelConfig
 from recertia.graph.engine import GraphOrchestrator
@@ -414,7 +413,11 @@ def create_app(
         response.headers["x-request-id"] = request_id
         return response
 
-    console_ctx = ConsoleContext(
+    from recertia.api.composition import assemble_app_state
+    from recertia.api.routes import include_routes
+    from recertia.errors import RecertiaError
+
+    state = assemble_app_state(
         root=root,
         skills_root=skills_root,
         facts_root=facts_root,
@@ -433,14 +436,23 @@ def create_app(
         validate_run_id=_validate_run_id,
         workspace_registry=workspace_registry,
         run_service=run_service,
+        model_config_for_run=_model_config_for_run,
+        tenant_has_checkpoints=lambda tid, rid: _tenant_has_checkpoints(root, tid, rid),
+        max_criterion_timeout_s=_api_max_criterion_timeout_s,
+        load_persisted_workdir=lambda tid, rid: _load_persisted_workdir(
+            root, tid, rid, registry=workspace_registry
+        ),
+        settings=loaded,
     )
-    run_service.bind(console_ctx)
-    register_console_routes(app, console_ctx)
-    register_remaining_routes(app, console_ctx)
+    run_service.bind(state)
 
     @app.exception_handler(V1HTTPError)
     async def _v1_http_error(_request: Any, exc: V1HTTPError) -> Any:
         return exc.response()
+
+    @app.exception_handler(RecertiaError)
+    async def _recertia_error(_request: Any, exc: RecertiaError) -> Any:
+        return recertia_error_response(exc)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_exception(request: Any, exc: StarletteHTTPException) -> Any:
@@ -451,81 +463,6 @@ def create_app(
         _log.error("unhandled error", exc_info=exc)
         return JSONResponse(status_code=500, content={"error": "internal error"})
 
-    console_dir = Path(__file__).resolve().parents[3] / "console" / "static"
-    if console_dir.is_dir():
-        app.mount("/console/assets", StaticFiles(directory=console_dir), name="console-assets")
-
-        @app.get("/console")
-        @app.get("/console/")
-        def console_index() -> FileResponse:
-            return FileResponse(console_dir / "index.html")
-
-    @app.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
-
-    @app.get("/ready")
-    def ready() -> JSONResponse:
-        ok, body = _readiness(root)
-        return JSONResponse(status_code=200 if ok else 503, content=body)
-
-    from recertia.api.runs_routes import register_run_routes
-
-    register_run_routes(app, console_ctx)
-
-
-    @app.post("/v1/blobs")
-    def put_blob(
-        payload: dict[str, Any],
-        principal: Principal = Depends(require_scope("blobs", key_store)),
-    ) -> dict[str, str]:
-        from recertia.errors import NotFound as RecertiaNotFound
-
-        blobs = blobs_by_tenant.setdefault(
-            principal.tenant_id, FilesystemBlobStore(_tenant_blob_root(root, principal.tenant_id))
-        )
-        data = str(payload.get("data", "")).encode()
-        if len(data) > _max_blob_bytes():
-            raise HTTPException(
-                status_code=413,
-                detail=f"blob exceeds max size of {_max_blob_bytes()} bytes",
-            )
-        try:
-            return console_ctx.library_service.put_blob(
-                principal,
-                store=blobs,
-                data=data,
-                content_type=str(payload.get("content_type", "text/plain")),
-            )
-        except RecertiaNotFound as exc:
-            raise HTTPException(status_code=404, detail=exc.message) from exc
-
-    @app.get("/v1/blobs/{digest}")
-    def get_blob(
-        digest: str, principal: Principal = Depends(require_scope("blobs", key_store))
-    ) -> dict[str, Any]:
-        from recertia.errors import NotFound as RecertiaNotFound
-
-        blobs = blobs_by_tenant.setdefault(
-            principal.tenant_id, FilesystemBlobStore(_tenant_blob_root(root, principal.tenant_id))
-        )
-        try:
-            return console_ctx.library_service.get_blob(
-                principal, store=blobs, digest=digest
-            )
-        except RecertiaNotFound as exc:
-            raise HTTPException(status_code=404, detail=exc.message) from exc
-
-    @app.get("/v1/metrics/dashboard")
-    def dashboard(
-        principal: Principal = Depends(require_scope("metrics", key_store)),
-    ) -> dict[str, Any]:
-        return console_ctx.eval_service.metrics_dashboard(
-            principal,
-            tenant_id=principal.tenant_id,
-            quota_snapshot=quota_store.snapshot(principal.tenant_id),
-        )
-
     app.state.root = root
     app.state.root_lock = root_lock
     app.state.skills_root = skills_root
@@ -535,7 +472,8 @@ def create_app(
     app.state.workspace_registry = workspace_registry
     app.state.blobs_by_tenant = blobs_by_tenant
     app.state.runs = runs
-    app.state.console_ctx = console_ctx
+    app.state.recertia = state
+    include_routes(app, state)
     return app
 
 

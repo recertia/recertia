@@ -624,9 +624,9 @@ def test_git_tip_rejects_unregistered_seed(tmp_path: Path) -> None:
     pid = created.json()["program"]["program_id"]
     client.post(f"/v1/programs/{pid}/accept", headers=headers, json={"ack_disclaimer": True})
     # Force handoff via store without binding (simulates unbound git_tip)
-    prog = app.state.console_ctx.programs.get(pid, tenant_id="t1")
+    prog = app.state.recertia.programs.get(pid, tenant_id="t1")
     assert prog is not None
-    app.state.console_ctx.programs.put(
+    app.state.recertia.programs.put(
         prog.model_copy(update={"handoff": "git_tip", "repo_binding": None})
     )
     denied = client.post(

@@ -337,7 +337,7 @@ def test_events_and_cancel_are_tenant_owned(tmp_path: Path) -> None:
     key_a = app.state.api_keys.issue(tenant_id="tenant-a", scopes={"runs"}, actor="test")
     key_b = app.state.api_keys.issue(tenant_id="tenant-b", scopes={"runs"}, actor="test")
     app.state.runs[("tenant-a", "shared-id")] = _run_record("tenant-a", "shared-id")
-    app.state.console_ctx.events.append("tenant-a", "shared-id", "run.queued", {"n": 1})
+    app.state.recertia.events.append("tenant-a", "shared-id", "run.queued", {"n": 1})
     client = TestClient(app)
     headers_a = {"X-API-Key": key_a.secret}
     headers_b = {"X-API-Key": key_b.secret}
@@ -350,7 +350,7 @@ def test_events_and_cancel_are_tenant_owned(tmp_path: Path) -> None:
     assert cross_get.status_code == 404
     cross_cancel = client.post("/v1/runs/shared-id/cancel", headers=headers_b)
     assert cross_cancel.status_code == 404
-    worker = app.state.console_ctx.worker
+    worker = app.state.recertia.worker
     assert worker.is_cancelled("tenant-b", "shared-id") is False
     assert worker.is_cancelled("tenant-a", "shared-id") is False
 
@@ -379,7 +379,7 @@ def test_review_alias_enforces_t2_gate(tmp_path: Path) -> None:
     app = create_app(root=tmp_path / "api-root")
     runs_only = app.state.api_keys.issue(tenant_id="t1", scopes={"runs"}, actor="test")
     admin = app.state.api_keys.issue(tenant_id="t1", scopes={"runs", "admin"}, actor="test")
-    app.state.console_ctx.proposals.add(
+    app.state.recertia.proposals.add(
         ProposalRecord(
             proposal_id="rev-t2",
             kind="policy",

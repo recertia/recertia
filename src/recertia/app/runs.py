@@ -167,7 +167,7 @@ class RunService:
         self._host: Any | None = None
 
     def bind(self, host: Any) -> None:
-        """Attach ConsoleContext (workdir, queue, events). Called from ``create_app``."""
+        """Attach AppState (workdir, queue, events). Called from ``create_app``."""
 
         self._host = host
         if getattr(host, "pdp", None) is not None:

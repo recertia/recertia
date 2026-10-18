@@ -47,7 +47,7 @@ def test_async_wait_returns_the_finished_run(tmp_path: Path) -> None:
 
 def test_async_wait_timeout_returns_202(tmp_path: Path) -> None:
     client, secret, app = _client(tmp_path)
-    app.state.console_ctx.embedded.ensure_started = lambda: None
+    app.state.recertia.embedded.ensure_started = lambda: None
     created = client.post(
         "/v1/runs",
         headers={"X-API-Key": secret, "X-Recertia-Wait": "0.05"},
@@ -61,6 +61,6 @@ def test_async_wait_timeout_returns_202(tmp_path: Path) -> None:
     )
     assert created.status_code == 202, created.text
     assert created.json()["status"] == "queued"
-    row = app.state.console_ctx.queue.get("t1", "wait-slow")
+    row = app.state.recertia.queue.get("t1", "wait-slow")
     assert row is not None
     assert row.status == "queued"

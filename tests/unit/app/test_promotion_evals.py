@@ -21,9 +21,9 @@ def test_cli_and_api_call_promotion_and_eval_services() -> None:
     cli_eval = (ROOT / "src/recertia/cli/eval_cmd.py").read_text(encoding="utf-8")
     cli_metrics = (ROOT / "src/recertia/cli/metrics_cmd.py").read_text(encoding="utf-8")
     cli_canary = (ROOT / "src/recertia/cli/canary_cmd.py").read_text(encoding="utf-8")
-    api_lib = (ROOT / "src/recertia/api/console_library_routes.py").read_text(encoding="utf-8")
-    api_rem = (ROOT / "src/recertia/api/remaining_routes.py").read_text(encoding="utf-8")
-    api_app = (ROOT / "src/recertia/api/__init__.py").read_text(encoding="utf-8")
+    api_lib = (ROOT / "src/recertia/api/routes/skills.py").read_text(encoding="utf-8")
+    api_rem = (ROOT / "src/recertia/api/routes/evals.py").read_text(encoding="utf-8")
+    api_app = (ROOT / "src/recertia/api/routes/metrics.py").read_text(encoding="utf-8")
     assert "PromotionService" in cli_skills
     assert "service.promote" in cli_skills
     assert "promote_to_approved(" not in cli_skills
@@ -35,8 +35,8 @@ def test_cli_and_api_call_promotion_and_eval_services() -> None:
     assert "run_judge_canary" not in cli_canary
     assert "promotion_service.promote" in api_lib
     assert "promote_to_approved(" not in api_lib
-    assert "eval_service.metrics_report" in api_lib
-    assert "eval_service.run_canary" in api_lib
+    assert "eval_service.metrics_report" in api_app
+    assert "eval_service.run_canary" in api_app
     assert "eval_service.run_eval_suite" in api_rem
     assert "eval_service.metrics_dashboard" in api_app
 

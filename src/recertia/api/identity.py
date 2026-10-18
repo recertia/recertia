@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 from fastapi import Header, HTTPException, Request
 
@@ -85,6 +85,24 @@ def resolve_tenant(principal: Principal, requested: str | None) -> TenantId:
     if wanted not in principal.tenants and wanted != principal.tenant:
         raise Forbidden("tenant is not in membership")
     return wanted
+
+
+class IdentityResolver:
+    """API key (X-API-Key) or console session. Does not invent a tenant from a header."""
+
+    def __init__(self, *, keys: ApiKeyStore, sessions: Any, settings: object | None = None) -> None:
+        self.keys = keys
+        self.sessions = sessions
+        self.settings = settings
+
+    def from_request(self, request: Request, x_api_key: str | None = None) -> Principal:
+        from recertia.api.console_auth import console_session
+
+        user = console_session(self.sessions, request)
+        return resolve_principal(request, x_api_key, keys=self.keys, session_user=user)
+
+    def resolve_tenant(self, principal: Principal, requested: str | None) -> TenantId:
+        return resolve_tenant(principal, requested)
 
 
 def require(scope: str, store: ApiKeyStore) -> Callable[..., Principal]:

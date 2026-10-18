@@ -478,8 +478,12 @@ _RECERTIA_CONTROLS: tuple[tuple[str, str | tuple[str, ...], tuple[str, ...], str
     ),
     (
         "promote-requires-scope",
-        "src/recertia/api/console_library_routes.py",
-        ("_require_library_write", 'scope="promote"', 'scope="jobs"'),
+        (
+            "src/recertia/api/deps.py",
+            "src/recertia/api/routes/skills.py",
+            "src/recertia/api/routes/jobs.py",
+        ),
+        ("require_library_write", 'scope="promote"', 'scope="jobs"'),
         "promote and jobs must require a dedicated scope or admin, not runs alone",
     ),
 )
@@ -577,7 +581,7 @@ _COOKIE_POSTS = ("dev_login", "logout", "switch_tenant")
 
 
 def _cookie_posts_check_origin(root: Path) -> bool:
-    path = root / "src" / "recertia" / "api" / "console_session_routes.py"
+    path = root / "src" / "recertia" / "api" / "routes" / "auth.py"
     if not path.is_file():
         return False
     try:
@@ -670,7 +674,7 @@ def check_ast_controls(root: Path) -> list[ControlResult]:
         (
             "cookie-post-origin-check",
             _cookie_posts_check_origin(root),
-            "src/recertia/api/console_session_routes.py",
+            "src/recertia/api/routes/auth.py",
             "dev-login, logout, and switch-tenant must reject a foreign Origin",
         ),
         (

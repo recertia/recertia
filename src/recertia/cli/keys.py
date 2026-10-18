@@ -48,8 +48,9 @@ def keys_issue(
             actor=actor,
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     typer.echo(
         f"key_id={issued.key_id} tenant={issued.tenant_id} "
         f"scopes={','.join(sorted(issued.scopes))}"
@@ -76,7 +77,9 @@ def keys_revoke(
             _principal(ctx), store=ApiKeyStore(db), key_id=key_id, actor=actor
         )
     except RecertiaError as exc:
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     typer.echo(f"revoked={key_id}")
 
 
@@ -97,7 +100,8 @@ def keys_list(
             _principal(ctx), store=ApiKeyStore(db)
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     for record in records:
         typer.echo(json.dumps(record, sort_keys=True))

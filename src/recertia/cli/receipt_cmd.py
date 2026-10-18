@@ -29,8 +29,9 @@ def receipt_show(
     try:
         receipts = load_receipts(layout.receipts_path)
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     payload = {"receipts": [item.model_dump(mode="json") for item in receipts]}
     typer.echo(json.dumps(payload, indent=2))
 
@@ -59,8 +60,9 @@ def receipt_verify(
                 if entry.action == "close_receipt":
                     verify_close_receipt_evidence(entry.evidence)
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     except (LedgerVerificationError, LedgerUnavailable) as exc:
         typer.echo(f"receipts INVALID: {exc}", err=True)
         raise typer.Exit(code=2) from exc
@@ -101,8 +103,9 @@ def receipt_close(
         ledger = HashChainLedger(layout.ledger_path)
         entry = close_receipt(ledger, receipt, receipts_path=layout.receipts_path, actor=actor)
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     typer.echo(
         json.dumps(
             {

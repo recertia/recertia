@@ -168,8 +168,9 @@ def jobs_run(
                 err=True,
             )
             raise typer.Exit(code=2) from exc
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
 
     # Strip internal PDF text from JSON echo (can be large).
     safe_proposals = []

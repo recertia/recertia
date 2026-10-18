@@ -45,8 +45,9 @@ def review_queue(
             _principal(ctx), store=store, tenant_id=tenant, status=status, limit=limit
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     finally:
         store.close()
     typer.echo(json.dumps(payload, indent=2))
@@ -82,12 +83,12 @@ def review_approve(
             note=note,
             ledger=ledger,
         )
-    except NotFound as exc:
-        typer.echo("review not found", err=True)
-        raise typer.Exit(code=1) from exc
     except RecertiaError as exc:
-        typer.echo(str(exc.message), err=True)
-        raise typer.Exit(code=1) from exc
+        from recertia.cli.exit import raise_exit
+
+        if isinstance(exc, NotFound):
+            raise_exit(exc, message="review not found")
+        raise_exit(exc, message=str(exc.message))
     finally:
         store.close()
     typer.echo(json.dumps(updated.to_dict(), indent=2))

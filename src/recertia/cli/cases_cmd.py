@@ -40,6 +40,7 @@ def cases_show(
             principal, store=store, case_id=case_id
         )
     except RecertiaError as exc:
-        typer.echo("case not found", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc, message="case not found")
     typer.echo(json.dumps(rec.model_dump(mode="json"), indent=2))

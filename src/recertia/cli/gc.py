@@ -36,8 +36,9 @@ def gc_cmd(
             principal, root=runs_root, older_than_days=older_than_days, dry_run=dry_run
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     typer.echo(
         f"gc{' (dry-run)' if dry_run else ''}: "
         f"snapshots={len(report.snapshots)} "

@@ -42,8 +42,9 @@ def proposals_queue(
             principal, store=store, tenant_id=tenant, status=status, kind=kind, limit=limit
         )
     except RecertiaError as exc:
-        typer.echo(f"{exc.code}: {exc.message}", err=True)
-        raise typer.Exit(code=exc.exit_code) from exc
+        from recertia.cli.exit import raise_exit
+
+        raise_exit(exc)
     finally:
         store.close()
     typer.echo(json.dumps({"items": [p.to_dict() for p in items]}, indent=2))
