@@ -24,8 +24,10 @@ def require_lease_token(
     Fail closed (``missing_row='reject'``): a missing database, missing
     ``run_leases`` table, missing row, or mismatched/absent token all raise.
     ``missing_row='allow'`` is for hash-chain appends whose ``target`` may be a
-    skill id: no db/table/row (or a released row) is not a live fence. A held
-    row still requires a matching token.
+    skill id, and for token-less writes of runs that were never leased: no
+    db/table/row is not a live fence. A row that exists — held or released —
+    is always checked against the highest token ever issued. A released row
+    is not treated as missing.
 
     When ``conn`` is supplied the check runs on that connection so it can share
     a ``BEGIN IMMEDIATE`` with a write. Attached ``lease`` schemas are searched
@@ -82,10 +84,8 @@ def require_lease_token(
         if missing_row == "allow":
             return
         _reject()
-    if str(row[1] or "held") != "held":
-        if missing_row == "allow":
-            return
-        _reject()
+    # Highest token ever issued lives on the row after release. A stale
+    # token (or a token-less write) must not land once any holder existed.
     if fencing_token is None or int(row[0]) != int(fencing_token):
         _reject()
 

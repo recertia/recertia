@@ -15,7 +15,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Callable, TypeVar
+from typing import Callable, Literal, TypeVar
 
 from recertia.persistence.db import open_db
 from recertia.persistence.root_lock import RootLock
@@ -291,8 +291,7 @@ class OperationLedger:
         return int(row[0]) if row else 0
 
     def _prepare_lease_attach(self, fencing_token: int | None) -> None:
-        if fencing_token is None:
-            return
+        del fencing_token
         from recertia.graph.lease import attach_lease_schema, lease_paths_equal
 
         if not self._lease_db.exists():
@@ -302,16 +301,18 @@ class OperationLedger:
         attach_lease_schema(self._conn, self._lease_db)
 
     def _require_fence(self, run_id: str, fencing_token: int | None) -> None:
-        if fencing_token is None:
-            return
         from recertia.graph.lease import require_lease_token
 
+        missing_row: Literal["reject", "allow"] = (
+            "allow" if fencing_token is None else "reject"
+        )
         require_lease_token(
             self._lease_db,
             tenant_id=self._tenant_id,
             run_id=run_id,
             fencing_token=fencing_token,
             conn=self._conn if self._lease_db.exists() else None,
+            missing_row=missing_row,
         )
 
     def _live_wait_event(self, key: OpKey) -> threading.Event | None:

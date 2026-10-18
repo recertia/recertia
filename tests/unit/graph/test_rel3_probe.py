@@ -13,6 +13,7 @@ import pytest
 from recertia.graph.lease import RunLease
 from recertia.graph.store import CheckpointStore
 from tests.probes import rel3_probe as probe
+from tests.probes import rel3_probe_d as probe_d
 
 
 def _has_persisted_leases() -> bool:
@@ -75,6 +76,24 @@ def test_probe_e_check_then_write_atomic() -> None:
     _run(probe.scen_toctou)
 
 
+def _run_d(mode: str) -> list[tuple[str, bool, str]]:
+    start = len(probe_d.RESULTS)
+    probe_d.scenario(mode)
+    new = probe_d.RESULTS[start:]
+    assert new, f"rel3_probe_d.scenario({mode!r}) recorded no PASS/FAIL"
+    failed = [(name, detail) for name, ok, detail in new if not ok]
+    assert not failed, "; ".join(f"{name}: {detail}" for name, detail in failed)
+    return new
+
+
+def test_probe_d_steal_while_held() -> None:
+    _run_d("while-held")
+
+
+def test_probe_d_steal_after_release() -> None:
+    _run_d("after-release")
+
+
 @pytest.mark.skipif(
     not _has_persisted_leases(),
     reason="REL-3 PR #88: fencing tokens must be seeded in runtime.db, not only locks/",
@@ -109,3 +128,61 @@ def test_probe_i_no_state_lost_across_concurrent_import() -> None:
 )
 def test_probe_j_k_import_idempotent_and_rollback() -> None:
     _run(probe.scen_import_idempotent)
+
+
+def _busy_records() -> list[tuple[str, bool, str]]:
+    cached = getattr(_busy_records, "_rows", None)
+    if cached is not None:
+        return cached
+    start = len(probe.RESULTS)
+    import tests.probes.rel3_probe_busy  # noqa: F401
+    rows = probe.RESULTS[start:]
+    _busy_records._rows = rows  # type: ignore[attr-defined]
+    return rows
+
+
+def _assert_named(rows: list[tuple[str, bool, str]], name: str) -> None:
+    matched = [row for row in rows if row[0] == name]
+    assert matched, f"probe did not record {name!r}; got {[r[0] for r in rows]}"
+    failed = [(n, detail) for n, ok, detail in matched if not ok]
+    assert not failed, "; ".join(f"{n}: {detail}" for n, detail in failed)
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: lock-busy import must keep leftover state visible",
+)
+def test_probe_l_legacy_visible_while_lock_busy() -> None:
+    _assert_named(_busy_records(), "L legacy state visible while root lock busy")
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: lock-busy import must keep leftover state visible",
+)
+def test_probe_m_import_after_busy_keeps_state() -> None:
+    _assert_named(_busy_records(), "M later import after busy-path write keeps all state")
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: lock-busy import must keep leftover state visible",
+)
+def test_probe_m2_root_openable_after_conflict() -> None:
+    rows = _busy_records()
+    named = [row for row in rows if row[0] == "M2 root still openable after conflict"]
+    if not named:
+        # M2 only records when M raises. A passing M is the success path.
+        _assert_named(rows, "M later import after busy-path write keeps all state")
+        return
+    _assert_named(rows, "M2 root still openable after conflict")
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: API must not hold root/.lock across import",
+)
+def test_probe_n_api_sees_legacy_tenant_run() -> None:
+    start = len(probe.RESULTS)
+    import tests.probes.rel3_probe_api_busy  # noqa: F401
+    _assert_named(probe.RESULTS[start:], "N API process sees legacy tenant run after upgrade")
