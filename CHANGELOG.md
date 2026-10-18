@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI evidence allocation hang** — `test_version_allocation_is_safe_across_processes`
+  reaps leftover workers and reports via files instead of `multiprocessing.Queue`,
+  so a failed allocation cannot orphan pytest. The `ci` job has a 25-minute
+  timeout so a stuck suite cannot run to the GitHub 6-hour cap.
 - **F7 live operation reclaim** — `OperationLedger.run_once` waits on a live
   in-process owner instead of reclaiming a pending row after 5s. A crash-left
   pending sentinel with no holder is still claimed immediately.
