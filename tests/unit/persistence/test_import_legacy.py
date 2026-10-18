@@ -151,7 +151,8 @@ def test_root_lock_busy_fails_import(tmp_path: Path) -> None:
     held = RootLock(layout.parent.root_lock)
     held.try_exclusive()
     try:
-        assert import_legacy_runtime(layout, timeout_s=0) is False
+        with pytest.raises(RootBusy, match="cannot import leftover runtime files"):
+            import_legacy_runtime(layout, timeout_s=0)
         assert layout.checkpoints_db.is_file()
         assert not (tmp_path / "runtime.db").exists()
     finally:
@@ -203,9 +204,12 @@ def test_lock_busy_open_raises_without_writing_elsewhere(
         imported.close()
 
 
-def test_same_thread_holder_overlays_leftover(tmp_path: Path) -> None:
-    """Probe I/L: the exclusive holder may keep leftover rows visible."""
+def test_same_thread_holder_gets_root_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No same-thread exception: opening while this thread holds exclusive is RootBusy."""
 
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
     root = tmp_path / "runs"
     p0 = open_run_persistence(root, migrate="off")
     try:
@@ -215,19 +219,38 @@ def test_same_thread_holder_overlays_leftover(tmp_path: Path) -> None:
     lock = RootLock(root / ".lock")
     lock.try_exclusive()
     try:
-        busy = open_run_persistence(root)
-        try:
-            assert busy.checkpoints.latest_seq("old-run") == 1
-            busy.checkpoints.save("p2-run", 1, "n", None, _state("p2-run"))
-        finally:
-            busy.close()
+        with pytest.raises(RootBusy, match="cannot import leftover runtime files"):
+            open_run_persistence(root)
+        assert not (root / "runtime.db").exists()
     finally:
         lock.release()
     imported = open_run_persistence(root)
     try:
-        assert set(imported.checkpoints.list_run_ids()) == {"old-run", "p2-run"}
+        assert imported.checkpoints.list_run_ids() == ["old-run"]
     finally:
         imported.close()
+
+
+def test_sigkill_holder_leaves_empty_lock_file(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    lock_path = tmp_path / ".lock"
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os, sys\n"
+            "from pathlib import Path\n"
+            "from recertia.persistence.root_lock import RootLock\n"
+            f"l = RootLock(Path({str(lock_path)!r}))\n"
+            "l.try_exclusive()\n"
+            "os.kill(os.getpid(), 9)\n",
+        ],
+        check=False,
+    )
+    assert lock_path.is_file()
+    assert lock_path.read_text() == ""
 
 
 def test_migrate_off_after_import_sees_post_import_writes(tmp_path: Path) -> None:

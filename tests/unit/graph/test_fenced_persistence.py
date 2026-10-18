@@ -165,19 +165,40 @@ def test_never_leased_tokenless_writes_allowed(tmp_path: Path) -> None:
     persist.close()
 
 
-def test_hashchain_append_keeps_fence_in_immediate_txn() -> None:
-    """Fails if the hash-chain rework (BEGIN IMMEDIATE + conn= fence) is reverted."""
+def test_hashchain_append_holds_lease_lock_until_write(tmp_path: Path) -> None:
+    """Steal cannot mutate run_leases while a fenced append is in its write txn."""
 
-    import inspect
+    root = tmp_path
+    persist = open_run_persistence(root)
+    lock = RunLease(root / "locks" / "r-hc.lock", db_path=root / "runtime.db", run_id="r-hc")
+    token = lock.acquire()
+    stolen: list[str] = []
+    real = HashChainLedger._append_locked
 
-    from recertia.ledger.hashchain import HashChainLedger
+    def during_write(self: HashChainLedger, **kwargs: object) -> object:
+        conn = sqlite3.connect(str(root / "runtime.db"), timeout=0.2)
+        try:
+            conn.execute("PRAGMA busy_timeout=200")
+            conn.execute("UPDATE run_leases SET fencing_token = fencing_token + 1")
+            conn.commit()
+            stolen.append("updated")
+        except sqlite3.OperationalError:
+            stolen.append("blocked")
+        finally:
+            conn.close()
+        return real(self, **kwargs)
 
-    source = inspect.getsource(HashChainLedger._append_fenced)
-    assert "BEGIN IMMEDIATE" in source
-    assert "conn=conn" in source or "conn = conn" in source
-    assert "require_lease_token" in source
-    assert source.index("BEGIN IMMEDIATE") < source.index("require_lease_token")
-    assert source.index("require_lease_token") < source.index("_append_locked")
+    HashChainLedger._append_locked = during_write  # type: ignore[method-assign]
+    try:
+        entry = persist.ledger.append(
+            actor="holder", action="write", target="r-hc", fencing_token=token
+        )
+    finally:
+        HashChainLedger._append_locked = real  # type: ignore[method-assign]
+        persist.close()
+        lock.release()
+    assert stolen == ["blocked"]
+    assert entry.target == "r-hc"
 
 
 def test_tokenless_held_run_writes_rejected(tmp_path: Path) -> None:

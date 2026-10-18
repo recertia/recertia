@@ -2,13 +2,16 @@
 
 The API holds a shared lock for its lifetime. Backup and restore take an
 exclusive lock and refuse when the shared lock is already held.
+
+The lock file is a flock target only. It must not record pid/tid identity:
+a SIGKILLed holder leaves an empty file, and leftover text is never treated
+as holding the lock.
 """
 
 from __future__ import annotations
 
 import os
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -62,7 +65,6 @@ class RootLock:
             if _is_busy(exc):
                 raise RootLockBusy(f"root lock held: {self.path}") from exc
             raise
-        _record_exclusive_holder(fd)
         self._fd = fd
 
     def acquire_exclusive(self, *, timeout_s: float | None = None) -> None:
@@ -75,7 +77,6 @@ class RootLock:
             except OSError:
                 os.close(fd)
                 raise
-            _record_exclusive_holder(fd)
             self._fd = fd
             return
         deadline = time.monotonic() + max(0.0, timeout_s)
@@ -94,7 +95,6 @@ class RootLock:
         if fd is None:
             return
         try:
-            _clear_exclusive_holder(fd)
             _unlock(fd)
         finally:
             os.close(fd)
@@ -104,46 +104,6 @@ class RootLock:
             raise RuntimeError(f"root lock already held: {self.path}")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         return os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
-
-
-def exclusive_held_by_this_thread(path: Path) -> bool:
-    """True when this thread recorded the exclusive holder identity in ``path``."""
-
-    holder = exclusive_holder(path)
-    return holder == (os.getpid(), threading.get_ident())
-
-
-def exclusive_holder(path: Path) -> tuple[int, int] | None:
-    try:
-        text = Path(path).read_text(encoding="ascii").strip()
-    except OSError:
-        return None
-    parts = text.split()
-    if len(parts) != 2:
-        return None
-    try:
-        return int(parts[0]), int(parts[1])
-    except ValueError:
-        return None
-
-
-def _record_exclusive_holder(fd: int) -> None:
-    if sys.platform == "win32":
-        return
-    payload = f"{os.getpid()} {threading.get_ident()}\n".encode("ascii")
-    os.lseek(fd, 0, os.SEEK_SET)
-    os.write(fd, payload)
-    os.ftruncate(fd, len(payload))
-
-
-def _clear_exclusive_holder(fd: int) -> None:
-    if sys.platform == "win32":
-        return
-    try:
-        os.lseek(fd, 0, os.SEEK_SET)
-        os.ftruncate(fd, 0)
-    except OSError:
-        pass
 
 
 def _lock_shared(fd: int) -> None:

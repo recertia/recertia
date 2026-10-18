@@ -109,10 +109,9 @@ def open_run_persistence(
     leftover files (a copy, not a rename) for one-release rollback. After an
     import has been recorded in ``schema_migrations``, ``off`` reads
     ``runtime.db`` so post-import writes cannot vanish. ``manual`` refuses to
-    start while leftover files are still pending. If this thread already holds
-    exclusive ``.lock``, import is skipped and leftover rows are overlaid for
-    reads while writes land on ``runtime.db``. A different thread or process
-    waits, then raises ``RootBusy`` and must not write somewhere else.
+    start while leftover files are still pending. Anyone who finds exclusive
+    ``.lock`` already held waits, then raises ``RootBusy`` and must not write
+    somewhere else. There is no same-thread holder exception.
     """
 
     del durability

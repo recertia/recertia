@@ -7,18 +7,15 @@ on that PR. Probe assertions are not edited.
 from __future__ import annotations
 
 import inspect
-import tempfile
-from pathlib import Path
 
 import pytest
 
 from recertia.graph.lease import RunLease
-from recertia.graph.persistence import open_run_persistence
 from recertia.graph.store import CheckpointStore
-from recertia.persistence.root_lock import RootLock
 from tests.probes import rel3_probe as probe
 from tests.probes import rel3_probe_d as probe_d
 from tests.probes import rel3_probe_r3 as probe_r3
+from tests.probes import rel3_probe_r4 as probe_r4
 
 
 def _has_persisted_leases() -> bool:
@@ -160,6 +157,12 @@ def _busy_records() -> list[tuple[str, bool, str]]:
                 False,
                 f"probe error {type(exc).__name__}: {exc}",
             )
+        if not any(row[0].startswith("M2 ") for row in probe.RESULTS[start:]):
+            probe.record(
+                "M2 root still openable after conflict",
+                False,
+                f"probe error {type(exc).__name__}: {exc}",
+            )
     rows = probe.RESULTS[start:]
     _busy_records._rows = rows  # type: ignore[attr-defined]
     return rows
@@ -193,35 +196,7 @@ def test_probe_m_import_after_busy_keeps_state() -> None:
     reason="owned by REL-3 PR #90: open_run_persistence(migrate=) and leftover import",
 )
 def test_probe_m2_root_openable_after_conflict() -> None:
-    """M2 is independent of the busy.py except-path (which only records when M raises)."""
-
-    root = Path(tempfile.mkdtemp())
-    p0 = open_run_persistence(root, migrate="off")
-    try:
-        for seq in (1, 2, 3):
-            p0.checkpoints.save(
-                "legacy-run", seq, f"n{seq}", None, probe.state("legacy-run")
-            )
-    finally:
-        p0.close()
-    lock = RootLock(root / ".lock")
-    lock.try_exclusive()
-    try:
-        try:
-            open_run_persistence(root).close()
-        except Exception:
-            pass
-    finally:
-        lock.release()
-    start = len(probe.RESULTS)
-    try:
-        opened = open_run_persistence(root)
-        opened.close()
-        again = "opens"
-    except Exception as exc:
-        again = f"still raises {type(exc).__name__}"
-    probe.record("M2 root still openable after conflict", again == "opens", again)
-    _assert_named(probe.RESULTS[start:], "M2 root still openable after conflict")
+    _assert_named(_busy_records(), "M2 root still openable after conflict")
 
 
 @pytest.mark.skipif(
@@ -455,4 +430,66 @@ def test_probe_s_backup_refused_while_api_up() -> None:
     _run_r3_named(
         probe_r3.S_backup_refused_while_api_up,
         "S backup/restore still refused while API process is up",
+    )
+
+
+def _r4_records(fn) -> list[tuple[str, bool, str]]:
+    cache = getattr(_r4_records, "_cache", None)
+    if cache is None:
+        cache = {}
+        _r4_records._cache = cache  # type: ignore[attr-defined]
+    key = fn.__name__
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    start = len(probe.RESULTS)
+    probe_r4.scen(fn)
+    rows = probe.RESULTS[start:]
+    cache[key] = rows
+    return rows
+
+
+def _run_r4_named(fn, name: str) -> None:
+    _assert_named(_r4_records(fn), name)
+
+
+def test_probe_t1_same_thread_ops_not_rerun() -> None:
+    _run_r4_named(
+        probe_r4.T1_same_thread_ops_double_run,
+        "T1 same-thread holder: op done in legacy not re-executed",
+    )
+
+
+def test_probe_t2_same_thread_ghost_write_rejected() -> None:
+    _run_r4_named(
+        probe_r4.T2_same_thread_ghost_write,
+        "T2 same-thread holder: write at a seq that exists in leftover is rejected, nothing lost",
+    )
+
+
+def test_probe_t3_stale_holder_identity() -> None:
+    _run_r4_named(
+        probe_r4.T3_stale_holder_identity,
+        "T3 identity text without the flock is not treated as holder",
+    )
+
+
+def test_probe_t3b_sigkill_leaves_no_identity() -> None:
+    _run_r4_named(
+        probe_r4.T3b_crash_leaves_identity,
+        "T3b SIGKILLed holder leaves no identity in .lock",
+    )
+
+
+def test_probe_t4_asyncio_same_thread_busy() -> None:
+    _run_r4_named(
+        probe_r4.T4_asyncio_same_thread,
+        "T4 asyncio: unrelated coroutine on the holder's thread gets RootBusy, not the holder exception",
+    )
+
+
+def test_probe_t5_threadpool_reuse_not_holder() -> None:
+    _run_r4_named(
+        probe_r4.T5_threadpool_reuse,
+        "T5 thread-pool: a different task on the holder's worker thread is not the holder",
     )

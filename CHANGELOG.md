@@ -66,14 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RECERTIA_RUNTIME_DB_MIGRATE=auto` (default), then copies the sources to
   `*.db.migrated` without renaming them away. Import completion is a
   `schema_migrations` row (`runtime.import_legacy_checkpoints`), not leftover
-  file presence. If the calling thread already holds exclusive `.lock`,
-  import is skipped and leftover rows are overlaid for reads while writes
-  still land on `runtime.db` (probes I / L / M). A different thread or
-  process waits, then raises typed `RootBusy` and must not write somewhere
-  else (probes O / M3 / M4). After the holder releases, a fresh open
-  imports leftover plus the holder's writes; unequal leftover checkpoints
-  keep dest and still import other seqs. Leftover writers take a shared
-  root lock so import cannot race them.
+  file presence. Anyone who finds exclusive `.lock` already held waits,
+  then raises typed `RootBusy` and must not write somewhere else (no
+  same-thread holder exception; `.lock` stores no pid/tid identity). After
+  the holder releases, a fresh open imports leftover plus the holder's
+  writes; unequal leftover checkpoints keep dest and still import other
+  seqs. Leftover writers take a shared root lock so import cannot race
+  them.
   `off` keeps unused legacy files for one release; after an import has
   landed, `off` reads `runtime.db` so post-import writes cannot vanish.
   `manual` refuses to start while leftover files are still pending

@@ -92,9 +92,6 @@ jobs:
       - name: Security review (static)
         run: python3 scripts/security_review.py --check
 
-      - name: HEAD commit trailers (no personal Co-authored-by)
-        run: python3 scripts/check_commit_trailers.py
-
       # Risk lane: PR-range secret scan; full history runs weekly in weekly-ops.yml.
       - name: Secret scan (gitleaks v8.21.2, PR range)
         env:
@@ -112,6 +109,23 @@ jobs:
 
       - name: Test suite (contracts, M0–M9, hardening, API, import boundary)
         run: pytest -v
+
+  commit-emails:
+    name: commit emails (PR range)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Allow-list author, committer, and Co-authored-by emails
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/check_commit_trailers.py
 
   package-smoke:
     name: wheel / sdist smoke

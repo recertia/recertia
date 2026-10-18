@@ -22,6 +22,56 @@ RESULTS: list[tuple[str, bool, str]] = []
 def record(name, ok, detail):
     RESULTS.append((name, ok, detail)); print(f"[{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
 
+def subprocess_exclusive(path):
+    """Hold exclusive flock in a child process until ``.release()``.
+
+    Used by probes I / L / M so the lock is a real other-process flock, not a
+    same-thread identity bypass.
+    """
+    import subprocess
+    path = Path(path)
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "from recertia.persistence.root_lock import RootLock\n"
+            "from pathlib import Path\n"
+            "import sys\n"
+            "l = RootLock(Path(sys.argv[1]))\n"
+            "l.try_exclusive()\n"
+            "sys.stdout.write('held\\n')\n"
+            "sys.stdout.flush()\n"
+            "sys.stdin.read()\n"
+            "l.release()\n",
+            str(path),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.stdout is not None
+    line = proc.stdout.readline()
+    if line.strip() != "held":
+        err = proc.stderr.read() if proc.stderr is not None else ""
+        raise RuntimeError(f"subprocess exclusive holder failed: {line!r} {err!r}")
+
+    class _Holder:
+        def release(self) -> None:
+            if proc.stdin is not None and not proc.stdin.closed:
+                proc.stdin.close()
+            if proc.poll() is None:
+                proc.wait(timeout=5)
+
+        def __del__(self) -> None:  # noqa: D105
+            try:
+                self.release()
+            except Exception:
+                pass
+
+    return _Holder()
+
+
 def state(run_id):
     now = datetime.now(timezone.utc)
     return RunState(run_id=run_id, task=Task(task_id=run_id, request="x", task_class="repo-chore", submitted_at=now),
@@ -182,7 +232,7 @@ def scen_import_split_brain():
     root = Path(tempfile.mkdtemp())
     # old-format state
     p0 = open_run_persistence(root, migrate="off"); p0.checkpoints.save("old-run", 1, "n", None, state("old-run")); p0.close()
-    lock = RootLock(root / ".lock"); lock.try_exclusive()          # e.g. backup/another importer holds it
+    lock = subprocess_exclusive(root / ".lock")          # e.g. backup/another importer holds it
     p2 = open_run_persistence(root)                                 # lock busy -> falls back to legacy files
     lock.release()
     p1 = open_run_persistence(root)                                 # imports + retires legacy files
