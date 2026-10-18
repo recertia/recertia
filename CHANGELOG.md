@@ -63,8 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **REL-3 runtime.db** — `open_run_persistence` imports leftover
   `checkpoints.db` / `operations.db` into `runtime.db` when
-  `RECERTIA_RUNTIME_DB_MIGRATE=auto` (default), then renames the sources to
-  `*.db.migrated`. A busy root lock skips the copy but still opens
+  `RECERTIA_RUNTIME_DB_MIGRATE=auto` (default), then copies the sources to
+  `*.db.migrated` without renaming them away. A busy root lock skips the copy
+  but leftover rows stay visible via a read overlay and new writes still go to
   `runtime.db` so concurrent writers are not stranded on files the importer
   will retire. `off` keeps unused legacy files for one release; after an
   import has landed, `off` keeps reading `runtime.db` so state is not lost.

@@ -361,9 +361,12 @@ def create_app(
     os.umask(0o077)
     root = root or DEFAULT_ROOT
     root.mkdir(parents=True, exist_ok=True)
+    from recertia.persistence.layout import RuntimeLayout
     from recertia.persistence.root_lock import RootLock
 
-    root_lock = RootLock(root / ".lock")
+    # Presence lock is api.lock, not root/.lock, so leftover import can take
+    # exclusive root/.lock while the API process is up (probe N).
+    root_lock = RootLock(RuntimeLayout(root).api_lock)
     root_lock.acquire_shared()
     from recertia.persistence.migrate_run_events import migrate_run_events
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -322,6 +323,10 @@ def _copy_checkpoints(dest: sqlite3.Connection, src_path: Path) -> None:
         ).fetchall()
     finally:
         src.close()
+    src_max: dict[str, int] = {}
+    for run_id, seq, *_rest in rows:
+        key = str(run_id)
+        src_max[key] = max(src_max.get(key, -1), int(seq))
     for run_id, seq, node, next_node, state_json, created_at, fencing_token in rows:
         existing = dest.execute(
             "SELECT node, next_node, state_json, fencing_token FROM checkpoints "
@@ -331,6 +336,19 @@ def _copy_checkpoints(dest: sqlite3.Connection, src_path: Path) -> None:
         incoming = (node, next_node, state_json, fencing_token)
         if existing is not None:
             if _row_equal(existing, incoming):
+                continue
+            dest_max_row = dest.execute(
+                "SELECT MAX(seq) FROM checkpoints WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            dest_max = -1 if dest_max_row is None or dest_max_row[0] is None else int(dest_max_row[0])
+            if src_max[str(run_id)] > dest_max:
+                # Leftover history is longer than a busy-path ghost write.
+                dest.execute(
+                    "UPDATE checkpoints SET node=?, next_node=?, state_json=?, "
+                    "created_at=?, fencing_token=? WHERE run_id=? AND seq=?",
+                    (node, next_node, state_json, created_at, fencing_token, run_id, seq),
+                )
                 continue
             raise StateCorrupt(
                 f"checkpoint conflict during import ({run_id!r}, seq={seq})",
@@ -475,8 +493,6 @@ def _retire_legacy_files(layout: RunsRootLayout) -> None:
 def _retire_sqlite(src: Path, dest: Path) -> None:
     if not src.is_file():
         return
-    if dest.exists():
-        return
     conn = sqlite3.connect(src)
     try:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -485,11 +501,9 @@ def _retire_sqlite(src: Path, dest: Path) -> None:
         pass
     finally:
         conn.close()
-    src.replace(dest)
-    for suffix in ("-wal", "-shm"):
-        sidecar = Path(str(src) + suffix)
-        if sidecar.exists():
-            sidecar.unlink()
+    if not dest.exists():
+        shutil.copy2(src, dest)
+    # Keep leftover files for migrate=off rollback. Do not rename them away.
 
 
 def _has_table(conn: sqlite3.Connection, table: str) -> bool:

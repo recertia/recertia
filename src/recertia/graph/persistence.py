@@ -95,7 +95,10 @@ def open_run_persistence(
 
     ``RECERTIA_RUNTIME_DB_MIGRATE=auto`` (default) imports leftover
     ``checkpoints.db`` / ``operations.db`` into ``runtime.db``. ``off`` keeps the
-    legacy files for one release. ``manual`` refuses to start while they remain.
+    leftover files (a copy, not a rename) for one-release rollback. ``manual``
+    refuses to start while they remain. A busy root lock never hides leftover
+    rows: writes still go to ``runtime.db`` so they survive later import, and
+    reads overlay leftover until the importer can run.
     """
 
     del durability
@@ -107,7 +110,7 @@ def open_run_persistence(
         layout = RuntimeLayout(path).local_runs()
     tenant = str(layout.tenant) if layout.tenant is not None else "local"
     mode = migrate if migrate is not None else load_settings().runtime_db_migrate
-    use_runtime = _resolve_runtime_db(layout, mode)
+    use_runtime, read_fallback = _resolve_runtime_db(layout, mode)
     if use_runtime:
         conn = open_db(layout.runtime_db)
         try:
@@ -127,6 +130,7 @@ def open_run_persistence(
             checkpoint_db,
             lease_db=layout.runtime_db,
             tenant_id=tenant,
+            read_fallback=read_fallback,
         ),
         operations=OperationLedger(
             operations_db,
@@ -144,24 +148,31 @@ def open_run_persistence(
     )
 
 
-def _resolve_runtime_db(layout: RunsRootLayout, mode: MigrateMode) -> bool:
+def _resolve_runtime_db(
+    layout: RunsRootLayout, mode: MigrateMode
+) -> tuple[bool, Path | None]:
     if mode == "off":
         # After import, runtime.db is the source of truth. Opening the retired
         # legacy paths would hide already-imported rows (probe K).
+        if layout.checkpoints_db.is_file() or layout.operations_db.is_file():
+            return False, None
         if sqlite_has_table(layout.runtime_db, "checkpoints") or sqlite_has_table(
             layout.runtime_db, "operations"
         ):
-            return True
-        return False
+            return True, None
+        return False, None
     if mode == "manual":
         if legacy_sqlite_pending(layout):
             raise MigrationChecksumError(
                 "pending legacy runtime files; run recertia migrate apply",
                 details={"action": "recertia migrate apply"},
             )
-        return True
-    # Lock busy skips the copy (returns False) but we still open runtime.db.
-    # Falling back to leftover checkpoints.db loses writes when the importer
-    # later retires those files.
-    import_legacy_runtime(layout)
-    return True
+        return True, None
+    imported = import_legacy_runtime(layout)
+    fallback = None
+    if not imported and layout.checkpoints_db.is_file():
+        # Lock busy: do not wait (same-process exclusive would deadlock) and
+        # do not open an empty runtime.db that hides leftover runs. Overlay
+        # leftover reads; writes still land on runtime.db (probe I / L / M).
+        fallback = layout.checkpoints_db
+    return True, fallback
