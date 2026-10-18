@@ -64,19 +64,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **REL-3 runtime.db** — `open_run_persistence` imports leftover
   `checkpoints.db` / `operations.db` into `runtime.db` when
   `RECERTIA_RUNTIME_DB_MIGRATE=auto` (default), then renames the sources to
-  `*.db.migrated`. `off` keeps the legacy files for one release. `manual`
-  refuses to start while they remain (`state_corrupt`, action
-  `recertia migrate apply`). Pending operation sentinels are dropped on
-  import. Readers (list, tabletop, operator brief) prefer `runtime.db`.
-- **REL-3 FencedRunPersistence** — checkpoint writes compare the caller's
-  fencing token to `run_leases`. A stale token raises `LeaseLost` (409,
-  exit 6). `CheckpointStore` opened via `open_run_persistence` checks the
-  tenant `runtime.db`.
-- **REL-3 run_leases** — `RunLease` records a row in `runtime.db`. A clean
-  `release` deletes the row so resume keeps incarnation 1. A crash that
-  leaves the row with a free flock is a steal and bumps incarnation.
+  `*.db.migrated`. A busy root lock skips the copy but still opens
+  `runtime.db` so concurrent writers are not stranded on files the importer
+  will retire. `off` keeps unused legacy files for one release; after an
+  import has landed, `off` keeps reading `runtime.db` so state is not lost.
+  `manual` refuses to start while legacy files remain (`state_corrupt`,
+  action `recertia migrate apply`). Pending operation sentinels are dropped
+  on import. Readers (list, tabletop, operator brief) prefer `runtime.db`.
+- **REL-3 FencedRunPersistence** — checkpoint, operation, and hash-chain
+  writes compare the caller's fencing token to `run_leases`. A stale token
+  raises `LeaseLost` (409, exit 6). `CheckpointStore.save` re-checks the
+  token inside the same `BEGIN IMMEDIATE` as the `INSERT` (ATTACH when
+  `runtime.db` is a second file). A missing lease database fails closed.
+  Hash-chain appends that target a held `run_id` require a matching token;
+  skill-id targets with no lease row still append.
+- **REL-3 run_leases** — `RunLease` records a row in `runtime.db`. A crash that
+  leaves a HELD row on the same lock inode is a resume (incarnation stays,
+  fencing token advances) so finished operations are not re-run. A clean
+  `release` marks the row released and keeps incarnation/token so they cannot
+  go backwards. Steal is an expired heartbeat plus a new lock inode (unlink
+  while live is `RunBusy` until TTL). Heartbeat uses `time.monotonic()` plus
+  wall clock. Tokens are seeded from the row, so wiping `locks/` cannot
+  restart at 1.
 - **REL-3 incarnation** — operation identity includes `incarnation`. Legacy
   `operations.db` files are rebuilt onto the new primary key on open. The
+  rebuild is one SQLite transaction under the runs-root lock and is resumable
+  if `operations_rel3` was left behind by a crash. Duplicate `put()` raises
+  `OperationConflict` rather than `INSERT OR REPLACE`, so a recorded result
+  cannot be silently overwritten (`run_once` is the idempotent path). The
   file-lock `RunLease` keeps incarnation at 1 so resume after a clean close
   still replays ops; steal bumps wait on `run_leases` rows.
 - **ARCH-5 PR-5.5 AppState and CLI exits** — `ConsoleContext` is gone. `create_app`

@@ -142,6 +142,82 @@ def test_root_lock_busy_skips_import(tmp_path: Path) -> None:
         held.release()
 
 
+def test_lock_busy_open_writes_runtime_db_not_legacy(tmp_path: Path) -> None:
+    """CRITICAL: a busy root lock must not fall back to files the importer will retire."""
+
+    root = tmp_path / "runs"
+    p0 = open_run_persistence(root, migrate="off")
+    try:
+        p0.checkpoints.save("old-run", 1, "n", None, _state("old-run"))
+    finally:
+        p0.close()
+    lock = RootLock(root / ".lock")
+    lock.try_exclusive()
+    try:
+        busy = open_run_persistence(root)
+        try:
+            busy.checkpoints.save("p2-run", 1, "n", None, _state("p2-run"))
+            assert busy.checkpoints._db_path == root / "runtime.db"
+        finally:
+            busy.close()
+    finally:
+        lock.release()
+    imported = open_run_persistence(root)
+    try:
+        ids = sorted(imported.checkpoints.list_run_ids())
+        assert ids == ["old-run", "p2-run"]
+    finally:
+        imported.close()
+
+
+def test_migrate_off_after_import_still_sees_state(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    legacy = open_run_persistence(root, migrate="off")
+    try:
+        for i in range(5):
+            legacy.checkpoints.save("legacy", i + 1, "n", None, _state("legacy"))
+        legacy.operations.put("legacy", 1, "n", 0, {"v": 1})
+    finally:
+        legacy.close()
+    open_run_persistence(root).close()
+    off = open_run_persistence(root, migrate="off")
+    try:
+        assert off.checkpoints.latest_seq("legacy") == 5
+        assert off.checkpoints._db_path == root / "runtime.db"
+    finally:
+        off.close()
+
+
+def test_import_ops_rebuild_resumable_after_rel3_leftover(tmp_path: Path) -> None:
+    layout = RuntimeLayout(tmp_path).local_runs()
+    from recertia.persistence import import_legacy as il
+
+    conn = sqlite3.connect(layout.runtime_db)
+    conn.execute(
+        "CREATE TABLE operations ("
+        "run_id TEXT NOT NULL, attempt_no INTEGER NOT NULL, node TEXT NOT NULL, "
+        "op_seq INTEGER NOT NULL, result_json TEXT NOT NULL, "
+        "PRIMARY KEY (run_id, attempt_no, node, op_seq))"
+    )
+    conn.execute("INSERT INTO operations VALUES ('old', 1, 'n', 0, '{\"v\":1}')")
+    conn.execute(il._LIVE_OPERATIONS_DDL.replace("operations", "operations_rel3", 1))
+    conn.commit()
+    conn.close()
+    store = CheckpointStore(layout.checkpoints_db)
+    try:
+        store.save("old", 1, "n", None, _state("old"))
+    finally:
+        store.close()
+    assert import_legacy_runtime(layout) is True
+    ops = OperationLedger(layout.runtime_db)
+    try:
+        applied, result = ops.get("old", 1, "n", 0)
+        assert applied is True
+        assert result == {"v": 1}
+    finally:
+        ops.close()
+
+
 def test_open_run_persistence_auto_uses_runtime_db(tmp_path: Path) -> None:
     persistence = open_run_persistence(tmp_path / "runs")
     try:

@@ -7,12 +7,16 @@ from pathlib import Path
 
 from contracts.run import RunState
 from recertia.graph.lease import require_lease_token
-from recertia.graph.ops import OperationLedger
+from recertia.graph.ops import OperationLedger, ensure_operations_schema
 from recertia.graph.store import CheckpointStore, EvalOutboxWrite
 from recertia.ledger import HashChainLedger
 from recertia.mea.store import AuditedStateStore
 from recertia.persistence.db import MigrationChecksumError, apply_migrations, open_db
-from recertia.persistence.import_legacy import import_legacy_runtime, legacy_sqlite_pending
+from recertia.persistence.import_legacy import (
+    import_legacy_runtime,
+    legacy_sqlite_pending,
+    sqlite_has_table,
+)
 from recertia.persistence.layout import RunsRootLayout, RuntimeLayout
 from recertia.settings import MigrateMode, load_settings
 from recertia.trajectory.store import TrajectoryStore
@@ -108,6 +112,9 @@ def open_run_persistence(
         conn = open_db(layout.runtime_db)
         try:
             apply_migrations(conn, _RUNTIME_MIGRATIONS)
+            # Baseline operations PK has no incarnation. Rebuild here so
+            # OperationLedger.__init__ does not block on a busy root lock.
+            ensure_operations_schema(conn)
         finally:
             conn.close()
         checkpoint_db = layout.runtime_db
@@ -121,8 +128,16 @@ def open_run_persistence(
             lease_db=layout.runtime_db,
             tenant_id=tenant,
         ),
-        operations=OperationLedger(operations_db),
-        ledger=HashChainLedger(layout.ledger_path),
+        operations=OperationLedger(
+            operations_db,
+            lease_db=layout.runtime_db,
+            tenant_id=tenant,
+        ),
+        ledger=HashChainLedger(
+            layout.ledger_path,
+            lease_db=layout.runtime_db,
+            tenant_id=tenant,
+        ),
         trajectories=TrajectoryStore(layout.trajectories_dir),
         audited_states=AuditedStateStore(layout.audited_states_dir),
         workspaces=WorkspaceManager(layout.snapshots_dir),
@@ -131,6 +146,12 @@ def open_run_persistence(
 
 def _resolve_runtime_db(layout: RunsRootLayout, mode: MigrateMode) -> bool:
     if mode == "off":
+        # After import, runtime.db is the source of truth. Opening the retired
+        # legacy paths would hide already-imported rows (probe K).
+        if sqlite_has_table(layout.runtime_db, "checkpoints") or sqlite_has_table(
+            layout.runtime_db, "operations"
+        ):
+            return True
         return False
     if mode == "manual":
         if legacy_sqlite_pending(layout):
@@ -139,4 +160,8 @@ def _resolve_runtime_db(layout: RunsRootLayout, mode: MigrateMode) -> bool:
                 details={"action": "recertia migrate apply"},
             )
         return True
-    return import_legacy_runtime(layout)
+    # Lock busy skips the copy (returns False) but we still open runtime.db.
+    # Falling back to leftover checkpoints.db loses writes when the importer
+    # later retires those files.
+    import_legacy_runtime(layout)
+    return True

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 if sys.platform == "win32":
@@ -54,6 +55,28 @@ class RootLock:
             raise
         self._fd = fd
 
+    def acquire_exclusive(self, *, timeout_s: float | None = None) -> None:
+        """Blocking exclusive lock. Raises ``RootLockBusy`` when ``timeout_s`` elapses."""
+
+        if timeout_s is None:
+            fd = self._open()
+            try:
+                _lock_exclusive(fd)
+            except OSError:
+                os.close(fd)
+                raise
+            self._fd = fd
+            return
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while True:
+            try:
+                self.try_exclusive()
+                return
+            except RootLockBusy:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
+
     def release(self) -> None:
         fd = self._fd
         self._fd = None
@@ -85,6 +108,14 @@ def _lock_exclusive_nb(fd: int) -> None:
         msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
         return
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _lock_exclusive(fd: int) -> None:
+    if sys.platform == "win32":
+        _win_prepare(fd)
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        return
+    fcntl.flock(fd, fcntl.LOCK_EX)
 
 
 def _unlock(fd: int) -> None:

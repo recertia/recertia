@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -130,9 +131,14 @@ class HashChainLedger:
         durability: str | Durability | None = None,
         hook: LedgerHook | None = None,
         lock_timeout_s: float | None = None,
+        lease_db: Path | str | None = None,
+        tenant_id: str = "local",
     ) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._lease_db = Path(lease_db) if lease_db is not None else None
+        self._tenant_id = tenant_id
+        self._default_fencing_token: Callable[[], int | None] | None = None
         self._hook = hook
         self._tip: tuple[int, str] | None = None
         self.lines_parsed = 0
@@ -170,10 +176,14 @@ class HashChainLedger:
         target: str,
         evidence: dict | None = None,
         at: datetime | None = None,
+        fencing_token: int | None = None,
     ) -> LedgerEntry:
         """Append one entry. Returns the entry as written, with ``seq`` and hashes filled in."""
 
+        if fencing_token is None and self._default_fencing_token is not None:
+            fencing_token = self._default_fencing_token()
         with self._held():
+            self._require_run_fence(target, fencing_token)
             return self._append_locked(
                 actor=actor,
                 action=action,
@@ -181,6 +191,29 @@ class HashChainLedger:
                 evidence=evidence,
                 at=at,
             )
+
+    def set_default_fencing_token(self, getter: Callable[[], int | None] | None) -> None:
+        """Use the current run's token when ``append`` is not given one (engine path)."""
+
+        self._default_fencing_token = getter
+
+    def _require_run_fence(self, target: str, fencing_token: int | None) -> None:
+        """Reject appends that target a currently held run without a matching token.
+
+        Skill ids and other non-run targets have no ``run_leases`` row, so a
+        missing row (or missing sibling ``runtime.db``) is allowed.
+        """
+
+        from recertia.persistence.fence import require_lease_token
+
+        lease_db = self._lease_db if self._lease_db is not None else self._path.parent / "runtime.db"
+        require_lease_token(
+            lease_db,
+            tenant_id=self._tenant_id,
+            run_id=target,
+            fencing_token=fencing_token,
+            missing_row="allow",
+        )
 
     def _append_locked(
         self,

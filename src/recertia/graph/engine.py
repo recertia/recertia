@@ -114,6 +114,7 @@ class GraphOrchestrator:
         self.checkpoints = self.persistence.checkpoints
         self.ops = self.persistence.operations
         self.ledger = self.persistence.ledger
+        self.ledger.set_default_fencing_token(lambda: self._fencing_token)
         self.workspaces = self.persistence.workspaces
         self.retriever = retriever
         self.store = store

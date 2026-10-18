@@ -1,7 +1,8 @@
 """Lease token for REL-3 fencing.
 
-File-lock ``RunLease`` keeps ``incarnation=1`` because flock cannot tell a
-clean release from a crash. Steal bumps land with ``run_leases`` rows.
+``run_leases`` persists incarnation and the fencing-token high-water mark.
+Crash-resume on the same lock inode keeps incarnation; a steal after TTL
+plus a new inode bumps it.
 """
 
 from __future__ import annotations

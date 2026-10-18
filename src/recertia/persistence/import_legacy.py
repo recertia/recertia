@@ -208,33 +208,85 @@ def _import_recorded(conn: sqlite3.Connection) -> bool:
 
 
 def _ensure_live_operations(conn: sqlite3.Connection) -> None:
-    exists = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='operations'"
-    ).fetchone()
-    if exists is None:
-        conn.execute(_LIVE_OPERATIONS_DDL)
-        conn.commit()
+    """Create or rebuild ``operations`` with incarnation in the primary key.
+
+    Same crash-safe transaction as ``OperationLedger`` (#87): leftover
+    ``operations_rel3`` is dropped or renamed, and Python 3.11 does not
+    autocommit DDL (``isolation_level=None``). Caller already holds the
+    exclusive root lock.
+    """
+
+    if _live_operations_ready(conn):
         return
+    _rebuild_live_operations(conn)
+
+
+def _live_operations_ready(conn: sqlite3.Connection) -> bool:
+    names = _table_names(conn)
+    if "operations_rel3" in names:
+        return False
+    if "operations" not in names:
+        return False
+    return _operations_pk(conn) == ["run_id", "incarnation", "attempt_no", "node", "op_seq"]
+
+
+def _table_names(conn: sqlite3.Connection) -> set[str]:
+    return {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+
+
+def _operations_pk(conn: sqlite3.Connection) -> list[str]:
     info = list(conn.execute("PRAGMA table_info(operations)"))
-    pk = [row[1] for row in sorted((r for r in info if r[5]), key=lambda r: r[5])]
-    if pk == ["run_id", "incarnation", "attempt_no", "node", "op_seq"]:
-        return
-    cols = {row[1] for row in info}
-    incarnation = "incarnation" if "incarnation" in cols else "1"
-    fencing = "fencing_token" if "fencing_token" in cols else "NULL"
-    conn.execute(_LIVE_OPERATIONS_DDL.replace("operations", "operations_rel3", 1))
-    conn.execute(
-        f"""
-        INSERT INTO operations_rel3 (
-            run_id, incarnation, attempt_no, node, op_seq, result_json, fencing_token
-        )
-        SELECT run_id, {incarnation}, attempt_no, node, op_seq, result_json, {fencing}
-        FROM operations
-        """
-    )
-    conn.execute("DROP TABLE operations")
-    conn.execute("ALTER TABLE operations_rel3 RENAME TO operations")
-    conn.commit()
+    return [str(row[1]) for row in sorted((r for r in info if r[5]), key=lambda r: r[5])]
+
+
+def _rebuild_live_operations(conn: sqlite3.Connection) -> None:
+    previous = conn.isolation_level
+    conn.isolation_level = None
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            names = _table_names(conn)
+            if "operations_rel3" in names and "operations" not in names:
+                conn.execute("ALTER TABLE operations_rel3 RENAME TO operations")
+                names = _table_names(conn)
+            elif "operations_rel3" in names:
+                conn.execute("DROP TABLE operations_rel3")
+                names = _table_names(conn)
+            if "operations" not in names:
+                conn.execute(_LIVE_OPERATIONS_DDL)
+                conn.execute("COMMIT")
+                return
+            if _operations_pk(conn) == ["run_id", "incarnation", "attempt_no", "node", "op_seq"]:
+                conn.execute("COMMIT")
+                return
+            info = list(conn.execute("PRAGMA table_info(operations)"))
+            cols = {str(row[1]) for row in info}
+            incarnation = "incarnation" if "incarnation" in cols else "1"
+            fencing = "fencing_token" if "fencing_token" in cols else "NULL"
+            conn.execute(_LIVE_OPERATIONS_DDL.replace("operations", "operations_rel3", 1))
+            conn.execute(
+                f"""
+                INSERT INTO operations_rel3 (
+                    run_id, incarnation, attempt_no, node, op_seq, result_json, fencing_token
+                )
+                SELECT run_id, {incarnation}, attempt_no, node, op_seq, result_json, {fencing}
+                FROM operations
+                """
+            )
+            conn.execute("DROP TABLE operations")
+            conn.execute("ALTER TABLE operations_rel3 RENAME TO operations")
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+    finally:
+        conn.isolation_level = previous
 
 
 def _ensure_checkpoint_extras(conn: sqlite3.Connection) -> None:
