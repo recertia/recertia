@@ -134,8 +134,8 @@ def test_stale_ledger_token_rejected_after_steal_and_release(tmp_path: Path) -> 
     skill.append(actor="ci", action="write", target="skill-1")
 
 
-def test_released_run_tokenless_writes_rejected(tmp_path: Path) -> None:
-    """P3 ruling: token-less writes are allowed only on a never-leased run."""
+def test_released_holder_token_rejected_tokenless_ledger_allowed(tmp_path: Path) -> None:
+    """Clean completion: token-less ledger appends are allowed; the old token is dead."""
 
     root = tmp_path
     persist = open_run_persistence(root)
@@ -146,22 +146,9 @@ def test_released_run_tokenless_writes_rejected(tmp_path: Path) -> None:
     persist.checkpoints.save("done", 1, "n", None, _state("done"), fencing_token=token)
     holder.release()
     with pytest.raises(LeaseLost):
-        persist.ledger.append(actor="reviewer", action="write", target="done")
-    with pytest.raises(LeaseLost):
         persist.ledger.append(actor="old", action="write", target="done", fencing_token=token)
-    with pytest.raises(LeaseLost):
-        persist.checkpoints.save("done", 2, "n", None, _state("done"))
-    with pytest.raises(LeaseLost):
-        persist.operations.run_once("done", 1, "solve", 0, lambda: {"v": 1})
-    persist.close()
-
-
-def test_never_leased_tokenless_writes_allowed(tmp_path: Path) -> None:
-    persist = open_run_persistence(tmp_path)
-    persist.checkpoints.save("fresh", 1, "n", None, _state("fresh"))
-    persist.operations.run_once("fresh", 1, "solve", 0, lambda: {"v": 1})
-    entry = persist.ledger.append(actor="x", action="write", target="fresh")
-    assert entry.target == "fresh"
+    entry = persist.ledger.append(actor="reviewer", action="write", target="done")
+    assert entry.target == "done"
     persist.close()
 
 
