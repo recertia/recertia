@@ -289,7 +289,12 @@ class GraphOrchestrator:
         """Acquire the run flock for start/resume and release it on the way out."""
 
         safe = run_id.replace("/", "_").replace("..", "_")
-        lease = RunLease(self.runs_root / "locks" / f"{safe}.lock")
+        lease = RunLease(
+            self.runs_root / "locks" / f"{safe}.lock",
+            db_path=self.runs_root / "runtime.db",
+            tenant_id=self.tenant_id,
+            run_id=run_id,
+        )
         self._fencing_token = lease.acquire()
         self._incarnation = lease.incarnation
         self._lease = lease

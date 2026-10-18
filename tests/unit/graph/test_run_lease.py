@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -138,3 +139,39 @@ def test_create_run_returns_409_when_lease_is_held(tmp_path: Path) -> None:
         holder.release()
     assert created.status_code == 409
     assert error_text(created) == "run_busy"
+
+
+def test_clean_release_keeps_incarnation_one(tmp_path: Path) -> None:
+    db = tmp_path / "runtime.db"
+    lock = tmp_path / "locks" / "run-1.lock"
+    first = RunLease(lock, db_path=db, tenant_id="t1", run_id="run-1")
+    assert first.acquire() == 1
+    assert first.incarnation == 1
+    first.release()
+    second = RunLease(lock, db_path=db, tenant_id="t1", run_id="run-1")
+    assert second.acquire() == 2
+    assert second.incarnation == 1
+    second.release()
+
+
+def test_held_row_with_free_lock_bumps_incarnation(tmp_path: Path) -> None:
+    """Crash without release: flock is free, row remains, next owner steals."""
+
+    from recertia.graph.lease import _flock_unlock
+
+    db = tmp_path / "runtime.db"
+    lock = tmp_path / "locks" / "run-1.lock"
+    first = RunLease(lock, db_path=db, tenant_id="t1", run_id="run-1")
+    assert first.acquire() == 1
+    assert first.incarnation == 1
+    fd = first._fd
+    assert fd is not None
+    first._fd = None
+    _flock_unlock(fd)
+    os.close(fd)
+    first._release_thread()
+
+    second = RunLease(lock, db_path=db, tenant_id="t1", run_id="run-1")
+    assert second.acquire() == 2
+    assert second.incarnation == 2
+    second.release()

@@ -61,6 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **REL-3 run_leases** — `RunLease` records a row in `runtime.db`. A clean
+  `release` deletes the row so resume keeps incarnation 1. A crash that
+  leaves the row with a free flock is a steal and bumps incarnation.
 - **REL-3 incarnation** — operation identity includes `incarnation`. Legacy
   `operations.db` files are rebuilt onto the new primary key on open. The
   file-lock `RunLease` keeps incarnation at 1 so resume after a clean close
