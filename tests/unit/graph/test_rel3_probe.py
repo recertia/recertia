@@ -189,57 +189,184 @@ def test_probe_n_api_sees_legacy_tenant_run() -> None:
     _assert_named(probe.RESULTS[start:], "N API process sees legacy tenant run after upgrade")
 
 
-def _run_r3(fn) -> list[tuple[str, bool, str]]:
+def _r3_records(fn) -> list[tuple[str, bool, str]]:
+    cache = getattr(_r3_records, "_cache", None)
+    if cache is None:
+        cache = {}
+        _r3_records._cache = cache  # type: ignore[attr-defined]
+    key = fn.__name__
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
     start = len(probe.RESULTS)
     probe_r3.scen(fn)
-    new = probe.RESULTS[start:]
-    assert new, f"{fn.__name__} recorded no PASS/FAIL"
-    failed = [(name, detail) for name, ok, detail in new if not ok]
-    assert not failed, "; ".join(f"{name}: {detail}" for name, detail in failed)
-    return new
+    rows = probe.RESULTS[start:]
+    cache[key] = rows
+    return rows
 
 
 def _run_r3_named(fn, name: str) -> None:
-    start = len(probe.RESULTS)
-    probe_r3.scen(fn)
-    new = probe.RESULTS[start:]
-    _assert_named(new, name)
+    _assert_named(_r3_records(fn), name)
 
 
 def test_probe_p_fresh_run_no_lease() -> None:
-    _run_r3(probe_r3.P_fresh_run_no_lease)
+    _run_r3_named(
+        probe_r3.P_fresh_run_no_lease,
+        "P fresh never-leased run, token-less writes allowed",
+    )
 
 
 def test_probe_p3_after_clean_release() -> None:
-    _run_r3(probe_r3.P3_after_clean_release)
+    _run_r3_named(
+        probe_r3.P3_after_clean_release,
+        "P3 token-less ledger append on a RELEASED run is rejected",
+    )
+
+
+def test_probe_p3c_never_leased_control() -> None:
+    _run_r3_named(
+        probe_r3.P3_after_clean_release,
+        "P3c control: token-less ledger append on a never-leased run allowed",
+    )
 
 
 def test_probe_p4_reacquire_after_release() -> None:
-    _run_r3(probe_r3.P4_reacquire_after_release)
+    _run_r3_named(
+        probe_r3.P4_reacquire_after_release,
+        "P4 re-acquire after release writes with new token",
+    )
 
 
 @pytest.mark.skipif(
     not _has_legacy_import(),
-    reason="REL-3 PR #90: busy open must not re-run a finished legacy op",
+    reason="REL-3 PR #90: busy open must raise typed Busy or wait until release",
 )
-def test_probe_o_busy_ops_exactly_once() -> None:
-    _run_r3(probe_r3.O_busy_ops_exactly_once)
+def test_probe_o_a_typed_busy_or_block() -> None:
+    _run_r3_named(
+        probe_r3.O_busy_ops_exactly_once,
+        "O-a open under exclusive RootLock: typed busy error or block-until-release",
+    )
 
 
 @pytest.mark.skipif(
     not _has_legacy_import(),
-    reason="REL-3 PR #90: busy-path rewrite must not wedge the root",
+    reason="REL-3 PR #90: busy open must raise typed Busy or wait until release",
 )
-def test_probe_m3_full_restart_conflict() -> None:
-    _run_r3(probe_r3.M3_full_restart_conflict)
+def test_probe_o_b_nothing_written_during_busy() -> None:
+    _run_r3_named(
+        probe_r3.O_busy_ops_exactly_once,
+        "O-b nothing written during busy window",
+    )
 
 
 @pytest.mark.skipif(
     not _has_legacy_import(),
-    reason="REL-3 PR #90: import must not overwrite busy-path writes",
+    reason="REL-3 PR #90: busy open must raise typed Busy or wait until release",
 )
-def test_probe_m4_busy_write_overwritten() -> None:
-    _run_r3(probe_r3.M4_busy_write_overwritten)
+def test_probe_o_c_no_side_effect_or_double_run() -> None:
+    _run_r3_named(
+        probe_r3.O_busy_ops_exactly_once,
+        "O-c no side effect during busy window, none double-run after",
+    )
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: busy open must raise typed Busy or wait until release",
+)
+def test_probe_o_d_after_release_exact_history() -> None:
+    _run_r3_named(
+        probe_r3.O_busy_ops_exactly_once,
+        "O-d after release fresh open = pre-existing + holder writes exactly",
+    )
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: busy open must raise typed Busy or wait until release",
+)
+def test_probe_m3_a_typed_busy_or_block() -> None:
+    _run_r3_named(
+        probe_r3.M3_full_restart_conflict,
+        "M3-a open under exclusive RootLock: typed busy error or block-until-release",
+    )
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: busy open must raise typed Busy or wait until release",
+)
+def test_probe_m3_b_nothing_written_during_busy() -> None:
+    _run_r3_named(
+        probe_r3.M3_full_restart_conflict,
+        "M3-b nothing written during busy window",
+    )
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: busy open must raise typed Busy or wait until release",
+)
+def test_probe_m3_c_no_side_effect_or_double_run() -> None:
+    _run_r3_named(
+        probe_r3.M3_full_restart_conflict,
+        "M3-c no side effect during busy window, none double-run after",
+    )
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: busy open must raise typed Busy or wait until release",
+)
+def test_probe_m3_d_after_release_exact_history() -> None:
+    _run_r3_named(
+        probe_r3.M3_full_restart_conflict,
+        "M3-d after release fresh open = pre-existing + holder writes exactly",
+    )
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: busy open must raise typed Busy or wait until release",
+)
+def test_probe_m4_a_typed_busy_or_block() -> None:
+    _run_r3_named(
+        probe_r3.M4_busy_write_overwritten,
+        "M4-a open under exclusive RootLock: typed busy error or block-until-release",
+    )
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: busy open must raise typed Busy or wait until release",
+)
+def test_probe_m4_b_nothing_written_during_busy() -> None:
+    _run_r3_named(
+        probe_r3.M4_busy_write_overwritten,
+        "M4-b nothing written during busy window",
+    )
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: busy open must raise typed Busy or wait until release",
+)
+def test_probe_m4_c_no_side_effect_or_double_run() -> None:
+    _run_r3_named(
+        probe_r3.M4_busy_write_overwritten,
+        "M4-c no side effect during busy window, none double-run after",
+    )
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: busy open must raise typed Busy or wait until release",
+)
+def test_probe_m4_d_after_release_exact_history() -> None:
+    _run_r3_named(
+        probe_r3.M4_busy_write_overwritten,
+        "M4-d after release fresh open = pre-existing + holder writes exactly",
+    )
 
 
 @pytest.mark.skipif(
@@ -269,7 +396,10 @@ def test_probe_q2_roll_forward_after_off_writes() -> None:
     reason="REL-3 PR #90: import completion is a runtime.db marker, not leftover files",
 )
 def test_probe_r_legacy_not_pending_after_import() -> None:
-    _run_r3(probe_r3.R_reimport_every_open)
+    _run_r3_named(
+        probe_r3.R_reimport_every_open,
+        "R legacy not 'pending' after a completed import",
+    )
 
 
 @pytest.mark.skipif(
@@ -277,4 +407,7 @@ def test_probe_r_legacy_not_pending_after_import() -> None:
     reason="REL-3 PR #90: backup/restore must refuse while the API holds api.lock",
 )
 def test_probe_s_backup_refused_while_api_up() -> None:
-    _run_r3(probe_r3.S_backup_refused_while_api_up)
+    _run_r3_named(
+        probe_r3.S_backup_refused_while_api_up,
+        "S backup/restore still refused while API process is up",
+    )
