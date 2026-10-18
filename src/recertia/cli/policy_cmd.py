@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Optional
-from uuid import uuid4
 
 import typer
 
@@ -19,25 +18,42 @@ def register_policy_commands(app: typer.Typer) -> None:
     app.add_typer(policy_app, name="policy")
 
 
+def _principal(ctx: typer.Context | None):
+    from recertia.ports.identity import Principal
+
+    if ctx is None or not isinstance(ctx.obj, dict) or ctx.obj.get("principal") is None:
+        return Principal.local_operator()
+    return ctx.obj["principal"]
+
+
 @policy_app.callback(invoke_without_command=True)
 def policy_root(
     ctx: typer.Context,
     path: Optional[Path] = typer.Option(None, "--path", help="Policy JSON; default env/file."),
 ) -> None:
     if ctx.invoked_subcommand is None:
-        policy_show(path)
+        policy_show(ctx, path)
 
 
 @policy_app.command("show")
 def policy_show(
+    ctx: typer.Context,
     path: Optional[Path] = typer.Option(None, "--path", help="Policy JSON; default env/file."),
 ) -> None:
     """Print the loaded Policy document (remaining-work RW-SUR)."""
 
-    from recertia.policy_load import load_policy
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.library import LibraryService
+    from recertia.errors import RecertiaError
 
-    policy = load_policy(path)
-    typer.echo(json.dumps(policy.model_dump(mode="json"), indent=2))
+    try:
+        payload = LibraryService(pdp=PolicyDecisionPoint.load(surface="cli")).get_policy(
+            _principal(ctx), path=path
+        )
+    except RecertiaError as exc:
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    typer.echo(json.dumps(payload, indent=2))
 
 
 def _parse_value(raw: str) -> Any:
@@ -72,6 +88,7 @@ def parse_policy_assignment(raw: str) -> dict[str, Any]:
 
 @policy_app.command("propose")
 def policy_propose(
+    ctx: typer.Context,
     assignment: str = typer.Argument(..., help="dotted.path=value T2 diff, not applied."),
     eval_compare: str = typer.Option(
         ...,
@@ -84,36 +101,33 @@ def policy_propose(
 ) -> None:
     """File a T2 policy proposal. Does not write policy/default.json."""
 
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.library import LibraryService
+    from recertia.errors import RecertiaError
     from recertia.ledger import HashChainLedger
-    from recertia.proposals.store import ProposalRecord, ProposalStore
+    from recertia.proposals.store import ProposalStore
 
     if not eval_compare.strip():
         typer.echo("T2 change requires --eval-compare", err=True)
         raise typer.Exit(code=2)
     policy_diff = parse_policy_assignment(assignment)
     store = ProposalStore(runs_root / "proposals.sqlite")
-    rec = ProposalRecord(
-        proposal_id=uuid4().hex[:12],
-        kind="policy",
-        skill_id="policy",
-        version=0,
-        rationale=eval_compare.strip(),
-        payload={
-            "policy_diff": policy_diff,
-            "tier": "T2",
-            "applied": False,
-            "eval_comparison": eval_compare.strip(),
-        },
-        tenant_id=tenant,
-        created_by_job="policy-cli",
-    )
-    store.add(rec)
-    store.close()
     ledger = HashChainLedger(runs_root / "runs" / tenant / "ledger.jsonl")
-    ledger.append(
-        actor=actor,
-        action="policy_change",
-        target=f"proposal:{rec.proposal_id}",
-        evidence={"kind": "policy_proposal", "applied": False},
-    )
+    try:
+        rec = LibraryService(pdp=PolicyDecisionPoint.load(surface="cli")).propose_policy(
+            _principal(ctx),
+            store=store,
+            tenant_id=tenant,
+            policy_diff=policy_diff,
+            rationale=eval_compare.strip(),
+            actor=actor,
+            ledger=ledger,
+            created_by_job="policy-cli",
+            extra_payload={"eval_comparison": eval_compare.strip()},
+        )
+    except RecertiaError as exc:
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    finally:
+        store.close()
     typer.echo(json.dumps(rec.to_dict(), indent=2))

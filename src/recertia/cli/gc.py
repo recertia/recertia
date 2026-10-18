@@ -12,6 +12,7 @@ def register_gc_commands(app: typer.Typer) -> None:
 
 
 def gc_cmd(
+    ctx: typer.Context,
     runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
     older_than_days: float = typer.Option(
         14.0, "--older-than-days", help="Delete artifacts older than this many days."
@@ -20,11 +21,23 @@ def gc_cmd(
 ) -> None:
     """Remove aged snapshots, transcripts, and workspaces under ``--runs-root``."""
 
-    from recertia.retention import garbage_collect
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.ops_service import OpsService
+    from recertia.errors import RecertiaError
+    from recertia.ports.identity import Principal
 
-    report = garbage_collect(
-        runs_root, older_than_days=older_than_days, dry_run=dry_run
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
     )
+    try:
+        report = OpsService(pdp=PolicyDecisionPoint.load(surface="cli")).gc(
+            principal, root=runs_root, older_than_days=older_than_days, dry_run=dry_run
+        )
+    except RecertiaError as exc:
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
     typer.echo(
         f"gc{' (dry-run)' if dry_run else ''}: "
         f"snapshots={len(report.snapshots)} "

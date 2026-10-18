@@ -319,7 +319,7 @@ skill accretion.
 Plan: [`plans/remediation/README.md`](../plans/remediation/README.md).
 Phase 0 hotfixes (#68) and Phase 1 foundations (#69) shipped. Remaining:
 
-- **Phase 2** — services, PDP action table, run ownership (ARCH-4/6, SEC-2/3/5/7/8/10, REL-3 remainder). ARCH-5 PR-5.1–5.3 shipped (`RunService`, `JobService`, `PromotionService` / `EvalService`); PR-5.4/5.5 remain.
+- **Phase 2** — services, PDP action table, run ownership (ARCH-4/6, SEC-2/3/5/7/8/10, REL-3 remainder). ARCH-5 PR-5.1–5.4 shipped (`RunService`, `JobService`, `PromotionService` / `EvalService`, library/programs/workspaces/keys/ops); PR-5.5 remains (delete `ConsoleContext`, CLI exit-code table).
 - **Phase 3** — durable `RunQueue`, outbox, ledger repair/signing
 - **Phase 4** — paging/SSE, `/ready`, backup/GC, Postgres+RLS, tenant lifecycle, executor service, secrets
 - **Phase 5** — supply-chain review, security-review automation, blocking guardrails

@@ -65,13 +65,25 @@ class ConsoleContext:
 
             pdp = PolicyDecisionPoint.load(surface="api")
         self.pdp = pdp
+        from recertia.app.checkpoints import CheckpointReader
         from recertia.app.evals import EvalService
         from recertia.app.jobs import JobService
+        from recertia.app.keys import KeyService
+        from recertia.app.library import LibraryService
+        from recertia.app.ops_service import OpsService
+        from recertia.app.programs import ProgramService
         from recertia.app.promotion import PromotionService
+        from recertia.app.workspaces import WorkspaceService
 
         self.job_service = JobService(pdp=pdp)
         self.promotion_service = PromotionService(pdp=pdp)
         self.eval_service = EvalService(pdp=pdp)
+        self.library_service = LibraryService(pdp=pdp)
+        self.program_service = ProgramService(pdp=pdp)
+        self.workspace_service = WorkspaceService(pdp=pdp)
+        self.checkpoint_reader = CheckpointReader()
+        self.key_service = KeyService(pdp=pdp)
+        self.ops_service = OpsService(pdp=pdp)
         self.sessions = SessionStore(path=root / "console_sessions.sqlite")
         self.proposals = ProposalStore(root / "proposals.sqlite")
         self.programs = ProgramStore(root / "programs.sqlite")

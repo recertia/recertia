@@ -4,26 +4,21 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, Request
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from recertia.api.console_auth import console_session
 from recertia.api.console_routes import ConsoleContext
 from recertia.api.errors import V1HTTPError
-from recertia.errors import Forbidden
+from recertia.errors import ConfigError, Forbidden, NotFound
 from recertia.evals.store import EvalStore
 from recertia.ledger import HashChainLedger
 from recertia.memory.affordance import AffordanceStore
 from recertia.memory.episodic import EpisodicStore
-from recertia.memory.query import federated_query
 from recertia.memory.semantic import FactStore
 from recertia.paths import PathEscapeError, contained_path, looks_absolute
-from recertia.policy_load import load_policy
 from recertia.ports.identity import ledger_actor
-from recertia.proposals.store import ProposalRecord
-from recertia.trajectory.import_store import ImportRejected, ingest_trajectory
 
 
 class EvalRunBody(BaseModel):
@@ -154,10 +149,7 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
     def list_models(principal=Depends(require_runs)) -> dict[str, Any]:
         """Server-side console model allowlist (OG-11). Never embed this in ``console/static/``."""
 
-        del principal
-        from recertia.solver.model_allowlist import load_model_allowlist
-
-        return {"models": list(load_model_allowlist())}
+        return ctx.library_service.list_models(principal)
 
     @app.post("/v1/evals/runs")
     def evals_runs(
@@ -190,9 +182,7 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
 
     @app.get("/v1/policy")
     def get_policy(principal=Depends(require_runs)) -> dict[str, Any]:
-        del principal
-        policy = load_policy()
-        return policy.model_dump(mode="json")
+        return ctx.library_service.get_policy(principal)
 
     @app.post("/v1/policy/proposals")
     def propose_policy(
@@ -204,23 +194,16 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
         user = console_session(ctx.sessions, request)
         actor = user.user_id if user else ledger_actor(principal)
-        rec = ProposalRecord(
-            proposal_id=uuid4().hex[:12],
-            kind="policy",
-            skill_id="policy",
-            version=0,
-            rationale=body.rationale or "T2 policy proposal",
-            payload={"policy_diff": body.policy_diff, "tier": "T2", "applied": False},
-            tenant_id=tenant_id,
-            created_by_job="policy-http",
-        )
-        ctx.proposals.add(rec)
         ledger = HashChainLedger(ctx.tenant_runs_root(tenant_id) / "ledger.jsonl")
-        ledger.append(
+        rec = ctx.library_service.propose_policy(
+            principal,
+            store=ctx.proposals,
+            tenant_id=tenant_id,
+            policy_diff=body.policy_diff,
+            rationale=body.rationale or "T2 policy proposal",
             actor=actor,
-            action="policy_change",
-            target=f"proposal:{rec.proposal_id}",
-            evidence={"kind": "policy_proposal", "applied": False},
+            ledger=ledger,
+            created_by_job="policy-http",
         )
         return rec.to_dict()
 
@@ -233,11 +216,9 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
-        items = ctx.proposals.list(tenant_id=tenant_id, status=status, limit=limit)
-        return {
-            "alias_of": "proposals",
-            "items": [p.to_dict() for p in items],
-        }
+        return ctx.library_service.list_reviews(
+            principal, store=ctx.proposals, tenant_id=tenant_id, status=status, limit=limit
+        )
 
     @app.post("/v1/reviews/{decision_id}")
     def decide_review(
@@ -248,50 +229,27 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
-        if body.decision not in {"approve", "reject", "request_changes"}:
-            raise V1HTTPError(
-                400, code="invalid_decision", message="approve|reject|request_changes"
-            )
         user = console_session(ctx.sessions, request)
         actor = user.user_id if user else ledger_actor(principal)
-        rec = ctx.proposals.get(decision_id, tenant_id=tenant_id)
-        if rec is None:
-            raise V1HTTPError(404, code="not_found", message="review not found")
-        console_may = user.may("reviewer") if user is not None else None
-        if not ctx.pdp.may_decide_proposal(
-            principal,
-            kind=rec.kind,
-            payload=rec.payload,
-            console_may_review=console_may,
-        ):
-            if user is not None:
-                raise V1HTTPError(403, code="forbidden", message="T2 requires reviewer")
-            raise V1HTTPError(
-                403,
-                code="forbidden",
-                message="T2 requires admin key or reviewer",
-            )
+        ledger = HashChainLedger(ctx.tenant_runs_root(tenant_id) / "ledger.jsonl")
         try:
-            updated = ctx.proposals.decide(
-                decision_id,
+            updated = ctx.library_service.decide_review(
+                principal,
+                store=ctx.proposals,
+                decision_id=decision_id,
                 tenant_id=tenant_id,
                 decision=body.decision,
                 actor=actor,
                 note=body.note,
+                ledger=ledger,
+                console_may_review=user.may("reviewer") if user is not None else None,
             )
-        except ValueError as exc:
-            raise V1HTTPError(400, code="invalid_decision", message=str(exc)) from exc
-        ledger = HashChainLedger(ctx.tenant_runs_root(tenant_id) / "ledger.jsonl")
-        ledger.append(
-            actor=actor,
-            action="policy_change",
-            target=f"review:{decision_id}",
-            evidence={
-                "kind": "review_decision",
-                "decision": body.decision,
-                "lifecycle_approved": False,
-            },
-        )
+        except ConfigError as exc:
+            raise V1HTTPError(400, code="invalid_decision", message=exc.message) from exc
+        except NotFound as exc:
+            raise V1HTTPError(404, code="not_found", message="review not found") from exc
+        except Forbidden as exc:
+            raise V1HTTPError(403, code="forbidden", message=exc.message) from exc
         return updated.to_dict()
 
     @app.get("/v1/facts")
@@ -303,7 +261,7 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
     ) -> dict[str, Any]:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
         store = FactStore(ctx.tenant_runs_root(tenant_id) / "facts")
-        facts = store.list_facts(scope=scope)
+        facts = ctx.library_service.list_facts(principal, store=store, scope=scope)
         return {"items": [f.model_dump(mode="json") for f in facts]}
 
     @app.get("/v1/cases")
@@ -314,7 +272,7 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
     ) -> dict[str, Any]:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
         store = EpisodicStore(ctx.tenant_runs_root(tenant_id) / "episodic")
-        return {"items": store.list_index()}
+        return {"items": ctx.library_service.list_cases(principal, store=store)}
 
     @app.get("/v1/cases/{case_id}")
     def get_case(
@@ -325,9 +283,10 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
     ) -> dict[str, Any]:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
         store = EpisodicStore(ctx.tenant_runs_root(tenant_id) / "episodic")
-        rec = store.get_by_case_id(case_id)
-        if rec is None:
-            raise V1HTTPError(404, code="not_found", message="case not found")
+        try:
+            rec = ctx.library_service.get_case(principal, store=store, case_id=case_id)
+        except NotFound as exc:
+            raise V1HTTPError(404, code="not_found", message=exc.message) from exc
         return rec.model_dump(mode="json")
 
     @app.post("/v1/trajectories/import")
@@ -339,15 +298,15 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
     ) -> dict[str, Any]:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
         try:
-            result = ingest_trajectory(
-                body,
+            return ctx.library_service.import_trajectory(
+                principal,
+                body=body,
                 runs_root=ctx.root,
                 tenant_id=tenant_id,
                 actor=getattr(principal, "key_id", "api"),
             )
-        except (ImportRejected, ValueError) as exc:
-            raise V1HTTPError(400, code="import_rejected", message=str(exc)) from exc
-        return result.as_public_dict()
+        except ConfigError as exc:
+            raise V1HTTPError(400, code="import_rejected", message=exc.message) from exc
 
     @app.post("/v1/trajectories/distill")
     def distill_trajectory(
@@ -356,24 +315,20 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         principal=Depends(require_runs),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
-        from contracts.trajectory_import import TrajectoryImport
-        from recertia.distill.imported import DistillRejected, as_public_dict, distill_imported
         from recertia.memory.procedural.store import SkillStore
 
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
         store = SkillStore(ctx.tenant_skills_root(tenant_id))
         try:
-            imported = TrajectoryImport.model_validate(body.trajectory)
-            version = distill_imported(
-                imported,
-                store,
+            return ctx.library_service.distill_trajectory(
+                principal,
+                store=store,
+                trajectory=body.trajectory,
                 actor=getattr(principal, "key_id", "api"),
                 task_class=body.task_class,
             )
-        except (DistillRejected, ValidationError, ValueError) as exc:
-            raise V1HTTPError(400, code="distill_rejected", message=str(exc)) from exc
-        return as_public_dict(version, store)
-
+        except ConfigError as exc:
+            raise V1HTTPError(400, code="distill_rejected", message=exc.message) from exc
 
     @app.get("/v1/affordances")
     def list_affordances(
@@ -383,26 +338,7 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
     ) -> dict[str, Any]:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
         store = AffordanceStore(ctx.tenant_runs_root(tenant_id) / "affordances.json")
-        return {
-            "tools": [
-                {
-                    "tool": t.tool,
-                    "invocations": t.invocations,
-                    "failures": t.failures,
-                    "failure_rate": t.failure_rate,
-                }
-                for t in store.tools.values()
-            ],
-            "resources": [
-                {
-                    "kind": r.kind,
-                    "id": r.id,
-                    "conflicts": r.conflicts,
-                    "timeouts": r.timeouts,
-                }
-                for r in store.resources.values()
-            ],
-        }
+        return ctx.library_service.list_affordances(principal, store=store)
 
     @app.post("/v1/memory/query")
     def memory_query(
@@ -414,8 +350,9 @@ def register_remaining_routes(app: FastAPI, ctx: ConsoleContext) -> None:
         tenant_id = _tenant(ctx, principal, request, x_recertia_tenant)
         runs_root = ctx.tenant_runs_root(tenant_id)
         workdir = _confine_memory_workdir(runs_root, body.workdir)
-        return federated_query(
-            body.query,
+        return ctx.library_service.query_memory(
+            principal,
+            query=body.query,
             skills_root=ctx.tenant_skills_root(tenant_id),
             facts_root=runs_root / "facts",
             episodic_root=runs_root / "episodic",

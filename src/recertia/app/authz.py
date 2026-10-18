@@ -302,6 +302,63 @@ class PolicyDecisionPoint:
             if not _tenant_matches(principal, res):
                 return Decision(allow=False, status=403, reason="tenant mismatch")
             return Decision(allow=True)
+        if action in {"blobs.read", "blobs.write"}:
+            if not principal.has_scope("blobs"):
+                return Decision(allow=False, status=403, reason="missing scope: blobs")
+            if not _tenant_matches(principal, res):
+                return Decision(allow=False, status=403, reason="tenant mismatch")
+            return Decision(allow=True)
+        if action in {
+            "skills.read",
+            "skills.search",
+            "jobs.read",
+            "proposals.read",
+            "programs.read",
+            "programs.write",
+            "workspaces.read",
+            "policy.read",
+            "ledger.verify",
+        }:
+            if not principal.has_scope("runs"):
+                return Decision(allow=False, status=403, reason="missing scope: runs")
+            if not _tenant_matches(principal, res):
+                return Decision(allow=False, status=403, reason="tenant mismatch")
+            return Decision(allow=True)
+        if action == "proposals.decide":
+            if not principal.has_scope("runs"):
+                return Decision(allow=False, status=403, reason="missing scope: runs")
+            if not _tenant_matches(principal, res):
+                return Decision(allow=False, status=403, reason="tenant mismatch")
+            return Decision(allow=True)
+        if action == "workspaces.write":
+            if not self.may_admin_registry(principal):
+                return Decision(allow=False, status=403, reason="missing scope: admin")
+            return Decision(allow=True)
+        if action in {"keys.issue", "keys.revoke", "keys.read"}:
+            if not (
+                principal.has_scope("admin")
+                or principal.has_role("admin")
+                or _platform_admin(principal)
+            ):
+                return Decision(allow=False, status=403, reason="missing scope: admin")
+            return Decision(allow=True)
+        if action == "tenants.switch":
+            if _platform_admin(principal) or principal.kind == "console_session":
+                return Decision(allow=True)
+            return Decision(allow=False, status=403, reason="missing scope: tenants.switch")
+        if action in {
+            "ops.backup",
+            "ops.restore",
+            "ops.gc",
+            "ops.soak",
+            "ops.tabletop",
+            "ops.systems",
+        }:
+            if not _platform_admin(principal):
+                return Decision(
+                    allow=False, status=403, reason="missing scope: platform_admin"
+                )
+            return Decision(allow=True)
         return Decision(allow=False, status=403, reason=f"unknown action: {action}")
 
     def require(

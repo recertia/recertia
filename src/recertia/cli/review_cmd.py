@@ -14,8 +14,19 @@ def register_review_commands(app: typer.Typer) -> None:
     app.add_typer(review_app, name="review")
 
 
+def _principal(ctx: typer.Context):
+    from recertia.ports.identity import Principal
+
+    return (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
+    )
+
+
 @review_app.command("queue")
 def review_queue(
+    ctx: typer.Context,
     runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
     tenant: str = typer.Option("default", "--tenant"),
     status: str = typer.Option("pending", "--status"),
@@ -23,18 +34,27 @@ def review_queue(
 ) -> None:
     """List pending distill-review decisions (proposal alias)."""
 
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.library import LibraryService
+    from recertia.errors import RecertiaError
     from recertia.proposals.store import ProposalStore
 
     store = ProposalStore(runs_root / "proposals.sqlite")
     try:
-        items = store.list(tenant_id=tenant, status=status, limit=limit)
+        payload = LibraryService(pdp=PolicyDecisionPoint.load(surface="cli")).list_reviews(
+            _principal(ctx), store=store, tenant_id=tenant, status=status, limit=limit
+        )
+    except RecertiaError as exc:
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
     finally:
         store.close()
-    typer.echo(json.dumps({"alias_of": "proposals", "items": [p.to_dict() for p in items]}, indent=2))
+    typer.echo(json.dumps(payload, indent=2))
 
 
 @review_app.command("approve")
 def review_approve(
+    ctx: typer.Context,
     decision_id: str = typer.Argument(...),
     note: str = typer.Option("", "--note"),
     runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
@@ -43,37 +63,31 @@ def review_approve(
 ) -> None:
     """Record a human approve on a proposal. Does not write lifecycle=approved."""
 
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.library import LibraryService
+    from recertia.errors import NotFound, RecertiaError
     from recertia.ledger import HashChainLedger
     from recertia.proposals.store import ProposalStore
 
     store = ProposalStore(runs_root / "proposals.sqlite")
+    ledger = HashChainLedger(runs_root / "runs" / tenant / "ledger.jsonl")
     try:
-        rec = store.get(decision_id, tenant_id=tenant)
-        if rec is None:
-            typer.echo("review not found", err=True)
-            raise typer.Exit(code=1)
-        try:
-            updated = store.decide(
-                decision_id,
-                tenant_id=tenant,
-                decision="approve",
-                actor=actor,
-                note=note,
-            )
-        except ValueError as exc:
-            typer.echo(str(exc), err=True)
-            raise typer.Exit(code=1) from exc
+        updated = LibraryService(pdp=PolicyDecisionPoint.load(surface="cli")).decide_review(
+            _principal(ctx),
+            store=store,
+            decision_id=decision_id,
+            tenant_id=tenant,
+            decision="approve",
+            actor=actor,
+            note=note,
+            ledger=ledger,
+        )
+    except NotFound as exc:
+        typer.echo("review not found", err=True)
+        raise typer.Exit(code=1) from exc
+    except RecertiaError as exc:
+        typer.echo(str(exc.message), err=True)
+        raise typer.Exit(code=1) from exc
     finally:
         store.close()
-    ledger = HashChainLedger(runs_root / "runs" / tenant / "ledger.jsonl")
-    ledger.append(
-        actor=actor,
-        action="policy_change",
-        target=f"review:{decision_id}",
-        evidence={
-            "kind": "review_decision",
-            "decision": "approve",
-            "lifecycle_approved": False,
-        },
-    )
     typer.echo(json.dumps(updated.to_dict(), indent=2))

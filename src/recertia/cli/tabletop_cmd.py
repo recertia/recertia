@@ -14,6 +14,7 @@ def register_tabletop_commands(app: typer.Typer) -> None:
 
 
 def tabletop_cmd(
+    ctx: typer.Context,
     run_id: str = typer.Argument(...),
     runs_root: Path = typer.Option(Path(".recertia"), "--runs-root"),
     tenant: str = typer.Option("default", "--tenant"),
@@ -24,16 +25,29 @@ def tabletop_cmd(
 ) -> None:
     """Walk ledger → transcript → failure class; optionally restore a backup."""
 
-    from recertia.ops.tabletop import run_tabletop
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.ops_service import OpsService
+    from recertia.errors import RecertiaError
+    from recertia.ports.identity import Principal
 
-    log = run_tabletop(
-        run_id,
-        runs_root=runs_root,
-        tenant=tenant,
-        restore_from=restore_from,
-        restore_dest=restore_dest,
-        follow_up=follow_up,
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
     )
+    try:
+        log = OpsService(pdp=PolicyDecisionPoint.load(surface="cli")).tabletop(
+            principal,
+            run_id=run_id,
+            root=runs_root,
+            tenant=tenant,
+            restore_from=restore_from,
+            restore_dest=restore_dest,
+            follow_up=follow_up,
+        )
+    except RecertiaError as exc:
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
     text = json.dumps(log, indent=2)
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)

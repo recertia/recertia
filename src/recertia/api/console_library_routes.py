@@ -10,7 +10,6 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from contracts.goal import compile_goal
 from recertia.api.console_deps import RouteState
 from recertia.api.console_routes import (
     GoalPreview,
@@ -20,22 +19,15 @@ from recertia.api.console_routes import (
     ProposalDecision,
 )
 from recertia.app.jobs import JobDispatch
-from recertia.console_compose import suggest_criteria
-from recertia.console_templates import get_template_goal, list_templates
 from recertia.errors import ConfigError, Forbidden, NotFound
-from recertia.evals.metrics import build_metric_report
 from recertia.evals.store import EvalStore
-from recertia.graph.engine import GraphOrchestrator
 from recertia.jobs import JobBudget, build_job_runner
 from recertia.jobs.enablement import attach_enablement
 from recertia.ledger import HashChainLedger
-from recertia.memory.procedural.active_set import recompute_active_set
-from recertia.memory.procedural.composition import mean_composition_depth
 from recertia.memory.procedural.promote import PromotionError
 from recertia.memory.procedural.store import SkillStore
 from recertia.ports.identity import ledger_actor
 from recertia.proposals.store import ProposalRecord
-from recertia.review.autonomy_config import DEFAULT_AUTONOMY
 from recertia.solver.transcript import TranscriptStore
 from recertia.trajectory.store import TrajectoryStore
 
@@ -56,33 +48,23 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
     require_metrics = rs.require_metrics
     _optional_console_user = rs.optional_console_user
     _resolve_tenant = rs.resolve_tenant
-    _require_workspace_admin = rs.require_workspace_admin
     _require_library_write = rs.require_library_write
-    _public_user = rs.public_user
 
     # ----- C0 goals / templates -----
     @app.post("/v1/goals/preview")
     def goals_preview(body: GoalPreview, principal=Depends(require_runs)) -> dict[str, Any]:
-        del principal
-        criteria = compile_goal(body.goal)
-        return {
-            "goal": body.goal.model_dump(mode="json"),
-            "criteria": [c.model_dump(mode="json") for c in criteria],
-        }
+        return ctx.library_service.preview_goal(principal, goal=body.goal)
 
     @app.post("/v1/goals/suggest")
     def goals_suggest(body: GoalSuggest, principal=Depends(require_runs)) -> dict[str, Any]:
         """Pilot Compose: draft desired states (never locks criteria)."""
 
-        del principal
-        result = suggest_criteria(
+        return ctx.library_service.suggest_goal(
+            principal,
             context=body.context,
             task_class=body.task_class or "repo-chore",
             use_model=body.use_model,
         )
-        payload = result.to_dict()
-        payload["blocked"] = any(w["severity"] == "block" for w in payload["warnings"])
-        return payload
 
     @app.post("/v1/goals/probe")
     def goals_probe(
@@ -93,8 +75,6 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         """Read-only inventory assist for Compose / programs (never locks criteria)."""
 
-        from recertia.programs.probe import probe_workdir
-
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         rel = body.workdir.strip().lstrip("/")
         if ".." in Path(rel).parts or Path(rel).is_absolute():
@@ -104,21 +84,18 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
             root.relative_to((ctx.root / "workspaces" / tenant_id).resolve())
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="workdir escapes tenant root") from exc
-        return {"probe": probe_workdir(root), "locked": False}
+        return ctx.library_service.probe_goal(principal, workdir=root)
 
     @app.get("/v1/templates")
     def templates(principal=Depends(require_runs)) -> dict[str, Any]:
-        del principal
-        return {"templates": list_templates()}
+        return ctx.library_service.list_templates(principal)
 
     @app.get("/v1/templates/{template_id}")
     def template_detail(template_id: str, principal=Depends(require_runs)) -> dict[str, Any]:
-        del principal
         try:
-            goal = get_template_goal(template_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="template not found") from exc
-        return {"id": template_id, "goal": goal.model_dump(mode="json")}
+            return ctx.library_service.get_template(principal, template_id)
+        except NotFound as exc:
+            raise HTTPException(status_code=404, detail=exc.message) from exc
 
     # ----- C0 runs list / transcript / trajectory -----
     @app.get("/v1/runs")
@@ -150,14 +127,12 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         run_id = ctx.validate_run_id(run_id)
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
-        orch = GraphOrchestrator(ctx.tenant_runs_root(tenant_id))
-        try:
-            latest = orch.checkpoints.latest(run_id)
-            if latest is None:
-                raise HTTPException(status_code=404, detail="run not found")
-            state = latest[3]
-        finally:
-            orch.close()
+        latest = ctx.checkpoint_reader.latest_row(
+            tenant_id, run_id, runs_root=ctx.tenant_runs_root(tenant_id)
+        )
+        if latest is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        state = latest[3]
         ref = state.transcript_ref
         store = TranscriptStore(ctx.tenant_runs_root(tenant_id) / "transcripts")
         if not ref:
@@ -229,41 +204,20 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         store = SkillStore(ctx.tenant_skills_root(tenant_id))
-        streaks: dict[tuple[str, int], int] = {}
         eval_db = ctx.tenant_runs_root(tenant_id) / "evals.db"
-        if eval_db.exists():
-            eval_store = EvalStore(eval_db)
-            try:
-                streaks = eval_store.field_failure_streaks()
-            finally:
-                eval_store.close()
-        from recertia.memory.procedural.live_mix import live_mix_view
-
-        items = []
-        for ver, status, stats in store.iter_loaded():
-            if task_class and ver.task_class != task_class:
-                continue
-            if lifecycle and status.lifecycle != lifecycle:
-                continue
-            if active is not None and status.active != active:
-                continue
-            streak = streaks.get((ver.skill_id, ver.version), 0)
-            items.append(
-                {
-                    "skill_id": ver.skill_id,
-                    "version": ver.version,
-                    "title": ver.title,
-                    "task_class": ver.task_class,
-                    "lifecycle": status.lifecycle,
-                    "active": status.active,
-                    "live_mix": live_mix_view(
-                        ver, status, stats, consecutive_field_failures=streak
-                    ),
-                    "contribution": stats.contribution.model_dump(mode="json")
-                    if stats.contribution
-                    else None,
-                }
+        eval_store = EvalStore(eval_db) if eval_db.exists() else None
+        try:
+            items = ctx.library_service.list_skills(
+                principal,
+                store=store,
+                eval_store=eval_store,
+                task_class=task_class,
+                lifecycle=lifecycle,
+                active=active,
             )
+        finally:
+            if eval_store is not None:
+                eval_store.close()
         return {"items": items}
 
     @app.get("/v1/skills/{skill_id}/versions/{version}")
@@ -276,32 +230,22 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         store = SkillStore(ctx.tenant_skills_root(tenant_id))
-        try:
-            ver = store.get_version(skill_id, version)
-            status = store.get_status(skill_id, version)
-            stats = store.get_stats(skill_id, version)
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=404, detail="skill not found") from exc
-        from recertia.memory.procedural.apply_diversity import skill_identity
-        from recertia.memory.procedural.live_mix import live_mix_view
-
-        streak = 0
         eval_db = ctx.tenant_runs_root(tenant_id) / "evals.db"
-        if eval_db.exists():
-            eval_store = EvalStore(eval_db)
-            try:
-                streak = eval_store.field_failure_streaks().get((skill_id, version), 0)
-            finally:
+        eval_store = EvalStore(eval_db) if eval_db.exists() else None
+        try:
+            return ctx.library_service.get_skill(
+                principal,
+                store=store,
+                skill_id=skill_id,
+                version=version,
+                eval_store=eval_store,
+                include_identity=True,
+            )
+        except NotFound as exc:
+            raise HTTPException(status_code=404, detail="skill not found") from exc
+        finally:
+            if eval_store is not None:
                 eval_store.close()
-        return {
-            "version": ver.model_dump(mode="json"),
-            "status": status.model_dump(mode="json"),
-            "stats": stats.model_dump(mode="json"),
-            "identity": skill_identity(ver, stats),
-            "live_mix": live_mix_view(
-                ver, status, stats, consecutive_field_failures=streak
-            ),
-        }
 
     @app.post("/v1/skills/search")
     def skills_search(
@@ -318,19 +262,9 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         from recertia.retrieval.index import SkillIndex
 
         index = SkillIndex(index_path)
-        try:
-            entries = list(store.iter_loaded())
-            index.rebuild(entries, library_fingerprint=store.library_fingerprint())
-            hits = index.lexical_top_k(query, limit)
-        finally:
-            if hasattr(index, "close"):
-                index.close()  # type: ignore[attr-defined]
-        return {
-            "query": query,
-            "hits": [
-                {"skill_id": sid, "version": ver, "score": score} for sid, ver, score in hits
-            ],
-        }
+        return ctx.library_service.search_skills(
+            principal, store=store, index=index, query=query, limit=limit
+        )
 
     @app.post("/v1/skills/{skill_id}/versions/{version}/promote")
     def promote_skill(
@@ -462,7 +396,7 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
             from recertia.settings import load_settings
 
             full = load_settings().ledger_verify_full
-            report = ledger.verify(full=full)
+            report = ctx.library_service.verify_ledger(principal, ledger=ledger, full=full)
             return {
                 "ok": report.ok,
                 "entries": report.entries,
@@ -484,8 +418,13 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
-        items = ctx.proposals.list(
-            tenant_id=tenant_id, status=status, kind=kind, limit=limit
+        items = ctx.library_service.list_proposals(
+            principal,
+            store=ctx.proposals,
+            tenant_id=tenant_id,
+            status=status,
+            kind=kind,
+            limit=limit,
         )
         return {"items": [p.to_dict() for p in items]}
 
@@ -497,9 +436,12 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
-        rec = ctx.proposals.get(proposal_id, tenant_id=tenant_id)
-        if rec is None:
-            raise HTTPException(status_code=404, detail="proposal not found")
+        try:
+            rec = ctx.library_service.get_proposal(
+                principal, store=ctx.proposals, proposal_id=proposal_id, tenant_id=tenant_id
+            )
+        except NotFound as exc:
+            raise HTTPException(status_code=404, detail=exc.message) from exc
         return rec.to_dict()
 
     @app.post("/v1/proposals/{proposal_id}/decision")
@@ -512,42 +454,26 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         user = _optional_console_user(request)
-        rec = ctx.proposals.get(proposal_id, tenant_id=tenant_id)
-        if rec is None:
-            raise HTTPException(status_code=404, detail="proposal not found")
-        console_may = user.may("reviewer") if user is not None else None
-        if not ctx.pdp.may_decide_proposal(
-            principal,
-            kind=rec.kind,
-            payload=rec.payload,
-            console_may_review=console_may,
-        ):
-            if user is not None:
-                raise HTTPException(status_code=403, detail="T2 requires reviewer")
-            raise HTTPException(status_code=403, detail="T2 requires admin key or reviewer")
         actor = user.user_id if user else ledger_actor(principal)
+        ledger = HashChainLedger(ctx.tenant_runs_root(tenant_id) / "ledger.jsonl")
         try:
-            updated = ctx.proposals.decide(
-                proposal_id,
+            updated = ctx.library_service.decide_proposal(
+                principal,
+                store=ctx.proposals,
+                proposal_id=proposal_id,
                 tenant_id=tenant_id,
                 decision=body.decision,
                 actor=actor,
                 note=body.note,
+                ledger=ledger,
+                console_may_review=user.may("reviewer") if user is not None else None,
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        ledger = HashChainLedger(ctx.tenant_runs_root(tenant_id) / "ledger.jsonl")
-        ledger.append(
-            actor=actor,
-            action="policy_change",
-            target=f"proposal:{proposal_id}",
-            evidence={
-                "kind": "proposal_decision",
-                "decision": body.decision,
-                "note": body.note,
-                "proposal_kind": rec.kind,
-            },
-        )
+        except NotFound as exc:
+            raise HTTPException(status_code=404, detail=exc.message) from exc
+        except Forbidden as exc:
+            raise HTTPException(status_code=403, detail=exc.message) from exc
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=exc.message) from exc
         return updated.to_dict()
 
     @app.get("/v1/jobs")
@@ -692,32 +618,17 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
 
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         skill_store = SkillStore(ctx.tenant_skills_root(tenant_id))
-        _u, pressure = recompute_active_set(skill_store, config=DEFAULT_AUTONOMY)
-        mean_pressure = sum(pressure.values()) / len(pressure) if pressure else 0.0
         eval_db = ctx.tenant_runs_root(tenant_id) / "evals.db"
-        practice_conversion = None
-        unavailable = None
-        if eval_db.exists():
-            store = EvalStore(eval_db)
-            try:
-                rows = store.metric_rows()
-                report = build_metric_report(
-                    rows,
-                    snapshot_id="tower",
-                    active_cap_pressure=mean_pressure,
-                    mean_composition_depth=mean_composition_depth(skill_store),
-                )
-                practice_conversion = report.practice_conversion
-                unavailable = report.unavailable.get("practice_conversion")
-            finally:
-                store.close()
-        pending = ctx.proposals.list(tenant_id=tenant_id, status="pending", limit=100)
-        return {
-            "active_cap_pressure": mean_pressure,
-            "pressure_by_class": pressure,
-            "mean_composition_depth": mean_composition_depth(skill_store),
-            "practice_conversion": practice_conversion,
-            "practice_conversion_unavailable": unavailable,
-            "pending_proposals": len(pending),
-        }
+        eval_store = EvalStore(eval_db) if eval_db.exists() else None
+        try:
+            return ctx.library_service.tower_summary(
+                principal,
+                skill_store=skill_store,
+                eval_store=eval_store,
+                proposals=ctx.proposals,
+                tenant_id=tenant_id,
+            )
+        finally:
+            if eval_store is not None:
+                eval_store.close()
 

@@ -10,7 +10,7 @@ from contracts.policy import IsolationSettings, Policy
 from recertia.app.authz import PolicyDecisionPoint, Resource
 from recertia.bootstrap import build_default_orchestrator
 from recertia.errors import ExecutionUnavailable, Forbidden, NotFound
-from recertia.ports.identity import Principal
+from recertia.ports.identity import Principal, TenantId
 from recertia.settings import Settings
 
 
@@ -273,3 +273,29 @@ def test_skill_promote_seed_denied_for_tenant_admin() -> None:
     )
     with pytest.raises(Forbidden):
         pdp.require(tenant_admin, "skill.promote_seed")
+
+
+def test_library_ops_actions_match_existing_scopes() -> None:
+    pdp = _pdp()
+    runs = _runs_only()
+    resource = Resource(tenant_id="t1")
+    pdp.require(runs, "skills.read", resource)
+    pdp.require(runs, "programs.read", resource)
+    pdp.require(runs, "policy.read", resource)
+    with pytest.raises(Forbidden):
+        pdp.require(runs, "keys.issue")
+    blobs = Principal.from_api_key(
+        key_id="blobs", tenant_id="t1", scopes=frozenset({"blobs"})
+    )
+    pdp.require(blobs, "blobs.read", resource)
+    pdp.require(Principal.local_operator(), "ops.gc")
+    tenant = TenantId("t1")
+    session = Principal(
+        subject="u",
+        kind="console_session",
+        tenant=tenant,
+        tenants=(tenant,),
+        scopes=frozenset({"runs"}),
+        roles=frozenset({"operator"}),
+    )
+    pdp.require(session, "tenants.switch")

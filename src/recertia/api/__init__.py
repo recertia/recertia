@@ -51,7 +51,7 @@ from recertia.graph.engine import GraphOrchestrator
 from recertia.graph.store import CheckpointStore
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.paths import HostRootError, looks_absolute, resolve_under_host_root
-from recertia.store.blobs import FilesystemBlobStore, normalize_blob_digest
+from recertia.store.blobs import FilesystemBlobStore
 from recertia.workspaces.registry import WorkspaceRegistry
 
 _log = logging.getLogger("recertia.api")
@@ -479,6 +479,8 @@ def create_app(
         payload: dict[str, Any],
         principal: Principal = Depends(require_scope("blobs", key_store)),
     ) -> dict[str, str]:
+        from recertia.errors import NotFound as RecertiaNotFound
+
         blobs = blobs_by_tenant.setdefault(
             principal.tenant_id, FilesystemBlobStore(_tenant_blob_root(root, principal.tenant_id))
         )
@@ -488,25 +490,31 @@ def create_app(
                 status_code=413,
                 detail=f"blob exceeds max size of {_max_blob_bytes()} bytes",
             )
-        digest = blobs.put(data, content_type=str(payload.get("content_type", "text/plain")))
-        return {"digest": digest}
+        try:
+            return console_ctx.library_service.put_blob(
+                principal,
+                store=blobs,
+                data=data,
+                content_type=str(payload.get("content_type", "text/plain")),
+            )
+        except RecertiaNotFound as exc:
+            raise HTTPException(status_code=404, detail=exc.message) from exc
 
     @app.get("/v1/blobs/{digest}")
     def get_blob(
         digest: str, principal: Principal = Depends(require_scope("blobs", key_store))
     ) -> dict[str, Any]:
-        try:
-            key = normalize_blob_digest(digest)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail="blob not found") from exc
+        from recertia.errors import NotFound as RecertiaNotFound
+
         blobs = blobs_by_tenant.setdefault(
             principal.tenant_id, FilesystemBlobStore(_tenant_blob_root(root, principal.tenant_id))
         )
         try:
-            data = blobs.get(key)
-        except (FileNotFoundError, ValueError) as exc:
-            raise HTTPException(status_code=404, detail="blob not found") from exc
-        return {"digest": key, "size": len(data), "text": data.decode(errors="replace")[:8000]}
+            return console_ctx.library_service.get_blob(
+                principal, store=blobs, digest=digest
+            )
+        except RecertiaNotFound as exc:
+            raise HTTPException(status_code=404, detail=exc.message) from exc
 
     @app.get("/v1/metrics/dashboard")
     def dashboard(
