@@ -14,6 +14,7 @@ from recertia.graph.lease import RunLease
 from recertia.graph.store import CheckpointStore
 from tests.probes import rel3_probe as probe
 from tests.probes import rel3_probe_d as probe_d
+from tests.probes import rel3_probe_r3 as probe_r3
 
 
 def _has_persisted_leases() -> bool:
@@ -186,3 +187,94 @@ def test_probe_n_api_sees_legacy_tenant_run() -> None:
     start = len(probe.RESULTS)
     import tests.probes.rel3_probe_api_busy  # noqa: F401
     _assert_named(probe.RESULTS[start:], "N API process sees legacy tenant run after upgrade")
+
+
+def _run_r3(fn) -> list[tuple[str, bool, str]]:
+    start = len(probe.RESULTS)
+    probe_r3.scen(fn)
+    new = probe.RESULTS[start:]
+    assert new, f"{fn.__name__} recorded no PASS/FAIL"
+    failed = [(name, detail) for name, ok, detail in new if not ok]
+    assert not failed, "; ".join(f"{name}: {detail}" for name, detail in failed)
+    return new
+
+
+def _run_r3_named(fn, name: str) -> None:
+    start = len(probe.RESULTS)
+    probe_r3.scen(fn)
+    new = probe.RESULTS[start:]
+    _assert_named(new, name)
+
+
+def test_probe_p_fresh_run_no_lease() -> None:
+    _run_r3(probe_r3.P_fresh_run_no_lease)
+
+
+def test_probe_p3_after_clean_release() -> None:
+    _run_r3(probe_r3.P3_after_clean_release)
+
+
+def test_probe_p4_reacquire_after_release() -> None:
+    _run_r3(probe_r3.P4_reacquire_after_release)
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: busy open must not re-run a finished legacy op",
+)
+def test_probe_o_busy_ops_exactly_once() -> None:
+    _run_r3(probe_r3.O_busy_ops_exactly_once)
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: busy-path rewrite must not wedge the root",
+)
+def test_probe_m3_full_restart_conflict() -> None:
+    _run_r3(probe_r3.M3_full_restart_conflict)
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: import must not overwrite busy-path writes",
+)
+def test_probe_m4_busy_write_overwritten() -> None:
+    _run_r3(probe_r3.M4_busy_write_overwritten)
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: migrate=off after import must see post-import writes",
+)
+def test_probe_q_off_after_import_sees_new_writes() -> None:
+    _run_r3_named(
+        probe_r3.Q_off_after_import_sees_new_writes,
+        "Q migrate=off (rollback) sees writes made after import",
+    )
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: migrate=off after import must see post-import writes",
+)
+def test_probe_q2_roll_forward_after_off_writes() -> None:
+    _run_r3_named(
+        probe_r3.Q_off_after_import_sees_new_writes,
+        "Q2 roll forward again (auto) after off-mode writes",
+    )
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: import completion is a runtime.db marker, not leftover files",
+)
+def test_probe_r_legacy_not_pending_after_import() -> None:
+    _run_r3(probe_r3.R_reimport_every_open)
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="REL-3 PR #90: backup/restore must refuse while the API holds api.lock",
+)
+def test_probe_s_backup_refused_while_api_up() -> None:
+    _run_r3(probe_r3.S_backup_refused_while_api_up)

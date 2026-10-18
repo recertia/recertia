@@ -24,10 +24,21 @@ def require_lease_token(
     Fail closed (``missing_row='reject'``): a missing database, missing
     ``run_leases`` table, missing row, or mismatched/absent token all raise.
     ``missing_row='allow'`` is for hash-chain appends whose ``target`` may be a
-    skill id, and for token-less writes of runs that were never leased: no
-    db/table/row is not a live fence. A row that exists — held or released —
-    is always checked against the highest token ever issued. A released row
-    is not treated as missing.
+    skill id, and for token-less writes of runs that were never leased.
+
+    Token-less writes to a **released** run (the post-completion rule):
+
+    * Never-leased (no row): allowed when ``missing_row='allow'``.
+    * ``status='held'``: rejected (a live owner exists).
+    * ``status='released'`` and ``incarnation == 1`` (clean completion, never
+      stolen): allowed when ``missing_row='allow'`` so reviewers / MEA can
+      append after the holder released.
+    * ``status='released'`` and ``incarnation > 1`` (stolen, then released):
+      rejected. A stolen run stays fail-closed.
+
+    An explicit token on a **released** row is always rejected, including the
+    released holder's own last token. That token is dead; a later acquire
+    issues a new one.
 
     When ``conn`` is supplied the check runs on that connection so it can share
     a ``BEGIN IMMEDIATE`` with a write. Attached ``lease`` schemas are searched
@@ -65,8 +76,9 @@ def require_lease_token(
             for row in conn.execute(f"PRAGMA {schema}.table_info(run_leases)")
         }
         if "status" in cols:
+            inc_sql = ", incarnation" if "incarnation" in cols else ", 1"
             row = conn.execute(
-                f"SELECT fencing_token, status FROM {schema}.run_leases "
+                f"SELECT fencing_token, status{inc_sql} FROM {schema}.run_leases "
                 "WHERE tenant_id=? AND run_id=?",
                 (tenant_id, run_id),
             ).fetchone()
@@ -76,7 +88,7 @@ def require_lease_token(
                 "WHERE tenant_id=? AND run_id=?",
                 (tenant_id, run_id),
             ).fetchone()
-            row = None if token_row is None else (token_row[0], "held")
+            row = None if token_row is None else (token_row[0], "held", 1)
     finally:
         if owned:
             conn.close()
@@ -84,9 +96,20 @@ def require_lease_token(
         if missing_row == "allow":
             return
         _reject()
-    # Highest token ever issued lives on the row after release. A stale
-    # token (or a token-less write) must not land once any holder existed.
-    if fencing_token is None or int(row[0]) != int(fencing_token):
+    stored_token = int(row[0])
+    status = str(row[1] or "held")
+    incarnation = int(row[2] or 1) if len(row) > 2 else 1
+    if status == "held":
+        if fencing_token is None or int(fencing_token) != stored_token:
+            _reject()
+        return
+    # Released: the holder's last token is dead. Token-less is allowed only
+    # after a clean (never-stolen) completion when missing_row='allow'.
+    if fencing_token is not None:
+        _reject()
+    if incarnation > 1:
+        _reject()
+    if missing_row != "allow":
         _reject()
 
 
