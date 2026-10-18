@@ -11,6 +11,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from contracts.run import RunState
 from recertia.persistence.db import open_db
@@ -117,7 +118,10 @@ class CheckpointStore:
     ) -> None:
         with self._lock:
             lease_db = self._lease_db
-            fenced = fencing_token is not None and lease_db is not None
+            fenced = lease_db is not None
+            missing_row: Literal["reject", "allow"] = (
+                "allow" if fencing_token is None else "reject"
+            )
             if fenced:
                 from recertia.graph.lease import (
                     attach_lease_schema,
@@ -128,11 +132,14 @@ class CheckpointStore:
                 assert lease_db is not None
                 # First check is load-bearing: callers (and the REL-3 probe) may
                 # steal the row after this returns. The write transaction re-checks.
+                # Token-less writes still fence: a held or released run_id must
+                # not skip the compare (89-B).
                 require_lease_token(
                     lease_db,
                     tenant_id=self._tenant_id,
                     run_id=run_id,
                     fencing_token=fencing_token,
+                    missing_row=missing_row,
                 )
                 if lease_db.exists() and not lease_paths_equal(lease_db, self._db_path):
                     attach_lease_schema(self._conn, lease_db)
@@ -148,6 +155,7 @@ class CheckpointStore:
                         run_id=run_id,
                         fencing_token=fencing_token,
                         conn=self._conn,
+                        missing_row=missing_row,
                     )
                 self._conn.execute(
                     "INSERT INTO checkpoints ("

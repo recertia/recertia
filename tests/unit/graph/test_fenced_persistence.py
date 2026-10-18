@@ -105,6 +105,62 @@ def test_stale_token_rejects_operation(tmp_path: Path) -> None:
     ops.close()
 
 
+def test_stale_ledger_token_rejected_after_steal_and_release(tmp_path: Path) -> None:
+    """89-A: a released row is still fail-closed against the highest token issued."""
+
+    root = tmp_path
+    lock = root / "locks" / "r-steal.lock"
+    db = root / "runtime.db"
+    holder = RunLease(lock, db_path=db, run_id="r-steal")
+    stale = holder.acquire()
+    holder.release()
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "UPDATE run_leases SET fencing_token=fencing_token+1, incarnation=incarnation+1, "
+        "status='released'"
+    )
+    conn.commit()
+    highest = conn.execute("SELECT fencing_token FROM run_leases").fetchone()[0]
+    conn.close()
+    assert highest == stale + 1
+    ledger = HashChainLedger(root / "ledger.jsonl", lease_db=db)
+    with pytest.raises(LeaseLost):
+        ledger.append(actor="stale", action="write", target="r-steal", fencing_token=stale)
+    with pytest.raises(LeaseLost):
+        ledger.append(actor="stale", action="write", target="r-steal")
+    skill = HashChainLedger(root / "other.jsonl", lease_db=db)
+    skill.append(actor="ci", action="write", target="skill-1")
+
+
+def test_tokenless_held_run_writes_rejected(tmp_path: Path) -> None:
+    """89-B: checkpoint, operations, and ledger require a token on a held run."""
+
+    root = tmp_path
+    persist = open_run_persistence(root)
+    lock = root / "locks" / "r-held.lock"
+    db = root / "runtime.db"
+    holder = RunLease(lock, db_path=db, run_id="r-held")
+    token = holder.acquire()
+    try:
+        with pytest.raises(LeaseLost):
+            persist.checkpoints.save("r-held", 1, "n", None, _state("r-held"))
+        assert persist.checkpoints.latest("r-held") is None
+        effect: list[int] = []
+        with pytest.raises(LeaseLost):
+            persist.operations.run_once(
+                "r-held", 1, "solve", 0, lambda: effect.append(1) or {"stale": True}
+            )
+        assert effect == []
+        with pytest.raises(LeaseLost):
+            persist.ledger.append(actor="stale", action="write", target="r-held")
+        persist.checkpoints.save(
+            "r-held", 1, "n", None, _state("r-held"), fencing_token=token
+        )
+    finally:
+        holder.release()
+        persist.close()
+
+
 def test_held_run_ledger_append_requires_token(tmp_path: Path) -> None:
     """D3: hash-chain append targeting a held run_id is rejected without a token."""
 

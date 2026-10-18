@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -183,13 +184,13 @@ class HashChainLedger:
         if fencing_token is None and self._default_fencing_token is not None:
             fencing_token = self._default_fencing_token()
         with self._held():
-            self._require_run_fence(target, fencing_token)
-            return self._append_locked(
+            return self._append_fenced(
                 actor=actor,
                 action=action,
                 target=target,
                 evidence=evidence,
                 at=at,
+                fencing_token=fencing_token,
             )
 
     def set_default_fencing_token(self, getter: Callable[[], int | None] | None) -> None:
@@ -197,23 +198,67 @@ class HashChainLedger:
 
         self._default_fencing_token = getter
 
-    def _require_run_fence(self, target: str, fencing_token: int | None) -> None:
-        """Reject appends that target a currently held run without a matching token.
+    def _append_fenced(
+        self,
+        *,
+        actor: str,
+        action: LedgerAction,
+        target: str,
+        evidence: dict | None,
+        at: datetime | None,
+        fencing_token: int | None,
+    ) -> LedgerEntry:
+        """Fence against ``run_leases`` in the same critical section as the append.
 
-        Skill ids and other non-run targets have no ``run_leases`` row, so a
-        missing row (or missing sibling ``runtime.db``) is allowed.
+        ``BEGIN IMMEDIATE`` on the lease database serializes with steal, so the
+        token compare cannot race the JSONL write. Skill-id targets still use
+        ``missing_row='allow'`` (no row). A released row is fail-closed against
+        the highest token ever issued.
         """
 
+        from recertia.persistence.db import open_db
         from recertia.persistence.fence import require_lease_token
 
         lease_db = self._lease_db if self._lease_db is not None else self._path.parent / "runtime.db"
-        require_lease_token(
-            lease_db,
-            tenant_id=self._tenant_id,
-            run_id=target,
-            fencing_token=fencing_token,
-            missing_row="allow",
-        )
+        if not Path(lease_db).exists():
+            require_lease_token(
+                lease_db,
+                tenant_id=self._tenant_id,
+                run_id=target,
+                fencing_token=fencing_token,
+                missing_row="allow",
+            )
+            return self._append_locked(
+                actor=actor, action=action, target=target, evidence=evidence, at=at
+            )
+        conn = open_db(lease_db)
+        try:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError:
+                conn.rollback()
+                conn.execute("BEGIN IMMEDIATE")
+            require_lease_token(
+                lease_db,
+                tenant_id=self._tenant_id,
+                run_id=target,
+                fencing_token=fencing_token,
+                conn=conn,
+                missing_row="allow",
+            )
+            entry = self._append_locked(
+                actor=actor, action=action, target=target, evidence=evidence, at=at
+            )
+            conn.commit()
+            return entry
+        except Exception:
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            conn.close()
 
     def _append_locked(
         self,
