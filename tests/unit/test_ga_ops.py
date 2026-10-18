@@ -13,7 +13,6 @@ from typer.testing import CliRunner
 from recertia.cli.main import app
 from recertia.evals.canary import LiveCanaryError, run_judge_canary, run_live_verifier_canary
 from recertia.ops.backup import BackupError, backup_tree, restore_tree, verify_archive
-from recertia.persistence.root_lock import RootLock
 from recertia.solver.model import StubModelClient
 
 runner = CliRunner()
@@ -129,35 +128,25 @@ def test_verify_archive_detects_tamper(tmp_path: Path) -> None:
 
 
 def test_backup_and_restore_refused_while_api_holds_lock(tmp_path: Path) -> None:
+    from recertia.api import create_app
+
     root = tmp_path / "recertia"
     root.mkdir()
     (root / "note.txt").write_text("x", encoding="utf-8")
     archive = tmp_path / "ok.tar.gz"
     backup_tree(root, archive)
 
-    held = RootLock(root / ".lock")
-    held.acquire_shared()
+    create_app(root=root)
     try:
-        try:
-            backup_tree(root, tmp_path / "again.tar.gz")
-            raise AssertionError("expected backup refusal")
-        except BackupError as exc:
-            assert "backup refused: the API holds the root lock" in str(exc)
-    finally:
-        held.release()
-
-    dest = tmp_path / "restored"
-    dest.mkdir()
-    dest_lock = RootLock(dest / ".lock")
-    dest_lock.acquire_shared()
+        backup_tree(root, tmp_path / "again.tar.gz")
+        raise AssertionError("expected backup refusal")
+    except BackupError as exc:
+        assert "backup refused: the API holds the root lock" in str(exc)
     try:
-        try:
-            restore_tree(archive, dest, overwrite=True)
-            raise AssertionError("expected restore refusal")
-        except BackupError as exc:
-            assert "restore refused: the API holds the root lock" in str(exc)
-    finally:
-        dest_lock.release()
+        restore_tree(archive, root, overwrite=True)
+        raise AssertionError("expected restore refusal")
+    except BackupError as exc:
+        assert "restore refused: the API holds the root lock" in str(exc)
 
 
 def test_tabletop_walks_run_and_restore(tmp_path: Path) -> None:
