@@ -29,7 +29,7 @@ class _Ledger:
 
 
 class _Ops:
-    def run_once(self, run_id, attempt_no, node, op_seq, fn, fencing_token=None):
+    def run_once(self, run_id, attempt_no, node, op_seq, fn, fencing_token=None, incarnation=1):
         return fn()
 
 

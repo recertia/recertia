@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **REL-3 incarnation** — operation identity includes `incarnation`. Legacy
+  `operations.db` files are rebuilt onto the new primary key on open. The
+  file-lock `RunLease` keeps incarnation at 1 so resume after a clean close
+  still replays ops; steal bumps wait on `run_leases` rows.
 - **ARCH-5 PR-5.5 AppState and CLI exits** — `ConsoleContext` is gone. `create_app`
   stores one `AppState` on `app.state.recertia`. HTTP handlers live in
   `api/routes/*.py` and share `api/schemas.py`. CLI errors go through

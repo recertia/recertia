@@ -22,12 +22,14 @@ def test_acquire_heartbeat_release_advances_token(tmp_path: Path) -> None:
     path = tmp_path / "locks" / "run-1.lock"
     first = RunLease(path)
     assert first.acquire() == 1
+    assert first.incarnation == 1
     first.heartbeat()
     assert path.read_text(encoding="ascii").strip() == "1"
     first.release()
 
     second = RunLease(path)
     assert second.acquire() == 2
+    assert second.incarnation == 1
     second.release()
 
 

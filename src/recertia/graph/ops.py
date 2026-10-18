@@ -1,7 +1,7 @@
 """Stable operation ids and at-least-once execution (M0; refactor-plan B6).
 
 Every side-effecting call a node makes — a tool invocation, a ledger append — is keyed by
-``(run_id, attempt_no, node, op_seq)``. Before performing the side effect, the caller checks
+``(run_id, incarnation, attempt_no, node, op_seq)``. Before performing the side effect, the caller checks
 whether that key already has a recorded result; if so, it returns the stored result instead
 of repeating the effect. This is what makes "kill the process mid-run and resume" safe: a
 resumed run re-enters a node from its last checkpoint and may re-call the same operations, but
@@ -11,12 +11,12 @@ each one either no-ops (already applied) or runs exactly once (not yet applied) 
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 import time
 from pathlib import Path
 from typing import Callable, TypeVar
 
-from recertia.graph.store import _ensure_column
 from recertia.persistence.db import open_db
 
 T = TypeVar("T")
@@ -25,7 +25,7 @@ _PENDING_SENTINEL: dict[str, bool] = {"__pending__": True}
 _PENDING_POLL_S = 0.01
 _PENDING_TIMEOUT_S = 5.0
 
-OpKey = tuple[str, int, str, int]
+OpKey = tuple[str, int, int, str, int]
 
 
 def _is_pending(result: object) -> bool:
@@ -62,25 +62,20 @@ class OperationLedger:
         self._live_claims: dict[OpKey, _LiveClaim] = {}
         self._conn = open_db(self._db_path)
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS operations (
-                run_id TEXT NOT NULL,
-                attempt_no INTEGER NOT NULL,
-                node TEXT NOT NULL,
-                op_seq INTEGER NOT NULL,
-                result_json TEXT NOT NULL,
-                PRIMARY KEY (run_id, attempt_no, node, op_seq)
-            )
-            """
-        )
-        self._conn.commit()
-        _ensure_column(self._conn, "operations", "fencing_token", "INTEGER")
+        _init_operations_table(self._conn)
 
     def close(self) -> None:
         self._conn.close()
 
-    def get(self, run_id: str, attempt_no: int, node: str, op_seq: int) -> tuple[bool, object]:
+    def get(
+        self,
+        run_id: str,
+        attempt_no: int,
+        node: str,
+        op_seq: int,
+        *,
+        incarnation: int = 1,
+    ) -> tuple[bool, object]:
         """Returns ``(already_applied, result)``. ``result`` is ``None`` when not applied.
 
         A crash-left ``__pending__`` sentinel is treated as not applied so resume can retry.
@@ -88,8 +83,9 @@ class OperationLedger:
 
         with self._lock:
             row = self._conn.execute(
-                "SELECT result_json FROM operations WHERE run_id=? AND attempt_no=? AND node=? AND op_seq=?",
-                (run_id, attempt_no, node, op_seq),
+                "SELECT result_json FROM operations "
+                "WHERE run_id=? AND incarnation=? AND attempt_no=? AND node=? AND op_seq=?",
+                (run_id, incarnation, attempt_no, node, op_seq),
             ).fetchone()
         if row is None:
             return False, None
@@ -98,14 +94,24 @@ class OperationLedger:
             return False, None
         return True, result
 
-    def put(self, run_id: str, attempt_no: int, node: str, op_seq: int, result: object) -> None:
+    def put(
+        self,
+        run_id: str,
+        attempt_no: int,
+        node: str,
+        op_seq: int,
+        result: object,
+        *,
+        incarnation: int = 1,
+    ) -> None:
         if _is_pending(result):
             raise ValueError("refusing to persist pending sentinel as a durable result")
         with self._lock:
             self._conn.execute(
-                "INSERT OR REPLACE INTO operations (run_id, attempt_no, node, op_seq, result_json) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (run_id, attempt_no, node, op_seq, json.dumps(result)),
+                "INSERT INTO operations "
+                "(run_id, incarnation, attempt_no, node, op_seq, result_json) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (run_id, incarnation, attempt_no, node, op_seq, json.dumps(result)),
             )
             self._conn.commit()
 
@@ -118,8 +124,9 @@ class OperationLedger:
         fn: Callable[[], T],
         *,
         fencing_token: int | None = None,
+        incarnation: int = 1,
     ) -> T:
-        """Execute ``fn`` only if ``(run_id, attempt_no, node, op_seq)`` has not already run.
+        """Execute ``fn`` only if ``(run_id, incarnation, attempt_no, node, op_seq)`` has not already run.
 
         ``fn``'s return value MUST be JSON-serialisable — it is the durable record that lets a
         resumed run skip re-executing the side effect.
@@ -131,7 +138,7 @@ class OperationLedger:
         applied.
         """
 
-        key: OpKey = (run_id, attempt_no, node, op_seq)
+        key: OpKey = (run_id, incarnation, attempt_no, node, op_seq)
         wait_deadline = time.monotonic() + max(30.0, float(self._pending_timeout_s) * 6.0)
         while True:
             claimed = False
@@ -141,8 +148,8 @@ class OperationLedger:
                 try:
                     row = self._conn.execute(
                         "SELECT result_json FROM operations "
-                        "WHERE run_id=? AND attempt_no=? AND node=? AND op_seq=?",
-                        (run_id, attempt_no, node, op_seq),
+                        "WHERE run_id=? AND incarnation=? AND attempt_no=? AND node=? AND op_seq=?",
+                        (run_id, incarnation, attempt_no, node, op_seq),
                     ).fetchone()
                     if row is not None:
                         stored = json.loads(row[0])
@@ -156,10 +163,12 @@ class OperationLedger:
                         else:
                             self._conn.execute(
                                 "UPDATE operations SET result_json=? "
-                                "WHERE run_id=? AND attempt_no=? AND node=? AND op_seq=?",
+                                "WHERE run_id=? AND incarnation=? AND attempt_no=? "
+                                "AND node=? AND op_seq=?",
                                 (
                                     json.dumps(_PENDING_SENTINEL),
                                     run_id,
+                                    incarnation,
                                     attempt_no,
                                     node,
                                     op_seq,
@@ -170,10 +179,12 @@ class OperationLedger:
                             claimed = True
                     else:
                         self._conn.execute(
-                            "INSERT INTO operations (run_id, attempt_no, node, op_seq, result_json) "
-                            "VALUES (?, ?, ?, ?, ?)",
+                            "INSERT INTO operations "
+                            "(run_id, incarnation, attempt_no, node, op_seq, result_json) "
+                            "VALUES (?, ?, ?, ?, ?, ?)",
                             (
                                 run_id,
+                                incarnation,
                                 attempt_no,
                                 node,
                                 op_seq,
@@ -210,8 +221,16 @@ class OperationLedger:
             with self._lock:
                 self._conn.execute(
                     "UPDATE operations SET result_json=?, fencing_token=? "
-                    "WHERE run_id=? AND attempt_no=? AND node=? AND op_seq=?",
-                    (json.dumps(result), fencing_token, run_id, attempt_no, node, op_seq),
+                    "WHERE run_id=? AND incarnation=? AND attempt_no=? AND node=? AND op_seq=?",
+                    (
+                        json.dumps(result),
+                        fencing_token,
+                        run_id,
+                        incarnation,
+                        attempt_no,
+                        node,
+                        op_seq,
+                    ),
                 )
                 self._conn.commit()
                 self._release_claim(key)
@@ -220,9 +239,11 @@ class OperationLedger:
             with self._lock:
                 self._conn.execute(
                     "DELETE FROM operations "
-                    "WHERE run_id=? AND attempt_no=? AND node=? AND op_seq=? AND result_json=?",
+                    "WHERE run_id=? AND incarnation=? AND attempt_no=? AND node=? "
+                    "AND op_seq=? AND result_json=?",
                     (
                         run_id,
+                        incarnation,
                         attempt_no,
                         node,
                         op_seq,
@@ -233,12 +254,14 @@ class OperationLedger:
                 self._release_claim(key)
             raise
 
-    def count_for_node(self, run_id: str, attempt_no: int, node: str) -> int:
+    def count_for_node(
+        self, run_id: str, attempt_no: int, node: str, *, incarnation: int = 1
+    ) -> int:
         with self._lock:
             row = self._conn.execute(
-                "SELECT COUNT(*) FROM operations WHERE run_id=? AND attempt_no=? AND node=? "
-                "AND result_json != ?",
-                (run_id, attempt_no, node, json.dumps(_PENDING_SENTINEL)),
+                "SELECT COUNT(*) FROM operations WHERE run_id=? AND incarnation=? "
+                "AND attempt_no=? AND node=? AND result_json != ?",
+                (run_id, incarnation, attempt_no, node, json.dumps(_PENDING_SENTINEL)),
             ).fetchone()
         return int(row[0]) if row else 0
 
@@ -264,3 +287,49 @@ class OperationLedger:
         claim = self._live_claims.pop(key, None)
         if claim is not None:
             claim.done.set()
+
+
+_OPERATIONS_DDL = """
+CREATE TABLE operations (
+    run_id TEXT NOT NULL,
+    incarnation INTEGER NOT NULL DEFAULT 1,
+    attempt_no INTEGER NOT NULL,
+    node TEXT NOT NULL,
+    op_seq INTEGER NOT NULL,
+    result_json TEXT NOT NULL,
+    fencing_token INTEGER,
+    PRIMARY KEY (run_id, incarnation, attempt_no, node, op_seq)
+)
+"""
+
+
+def _init_operations_table(conn: sqlite3.Connection) -> None:
+    """Create or rebuild ``operations`` so incarnation is in the primary key."""
+
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='operations'"
+    ).fetchone()
+    if exists is None:
+        conn.execute(_OPERATIONS_DDL)
+        conn.commit()
+        return
+    info = list(conn.execute("PRAGMA table_info(operations)"))
+    pk = [row[1] for row in sorted((r for r in info if r[5]), key=lambda r: r[5])]
+    if pk == ["run_id", "incarnation", "attempt_no", "node", "op_seq"]:
+        return
+    cols = {row[1] for row in info}
+    incarnation = "incarnation" if "incarnation" in cols else "1"
+    fencing = "fencing_token" if "fencing_token" in cols else "NULL"
+    conn.execute(_OPERATIONS_DDL.replace("operations", "operations_rel3", 1))
+    conn.execute(
+        f"""
+        INSERT INTO operations_rel3 (
+            run_id, incarnation, attempt_no, node, op_seq, result_json, fencing_token
+        )
+        SELECT run_id, {incarnation}, attempt_no, node, op_seq, result_json, {fencing}
+        FROM operations
+        """
+    )
+    conn.execute("DROP TABLE operations")
+    conn.execute("ALTER TABLE operations_rel3 RENAME TO operations")
+    conn.commit()

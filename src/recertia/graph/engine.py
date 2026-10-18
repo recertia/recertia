@@ -139,6 +139,7 @@ class GraphOrchestrator:
         self.capability_warn = capability_warn
         self.tenant_id = "local"
         self._fencing_token: int | None = None
+        self._incarnation: int = 1
         self._lease: RunLease | None = None
         self._last_hop_ended: float | None = None
         self._offload_handles: dict[str, OffloadHandle] = {}
@@ -228,6 +229,7 @@ class GraphOrchestrator:
             reviewer=self.reviewer,
             one_off_log=self.one_off_log,
             fencing_token=self._fencing_token,
+            incarnation=self._incarnation,
             deterministic_guide=bool(
                 self.policy is not None and self.policy.improvement.deterministic_guide
             ),
@@ -289,12 +291,14 @@ class GraphOrchestrator:
         safe = run_id.replace("/", "_").replace("..", "_")
         lease = RunLease(self.runs_root / "locks" / f"{safe}.lock")
         self._fencing_token = lease.acquire()
+        self._incarnation = lease.incarnation
         self._lease = lease
         try:
             yield
         finally:
             self._lease = None
             self._fencing_token = None
+            self._incarnation = 1
             lease.release()
 
     def start(

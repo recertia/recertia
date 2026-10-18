@@ -31,6 +31,7 @@ class RunLease:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.token: int | None = None
+        self.incarnation: int = 1
         self._fd: int | None = None
         self._held = False
         self._thread = _thread_lock(str(path))
@@ -61,6 +62,10 @@ class RunLease:
             raise
         self._fd = fd
         self.token = token
+        # File-lock acquire cannot tell RELEASED from STEALABLE. Incarnation
+        # stays 1 so resume after a clean close still replays operations.
+        # Steal bumps wait on run_leases rows (rel3_runtime_db).
+        self.incarnation = 1
         return token
 
     def heartbeat(self) -> None:
@@ -76,6 +81,7 @@ class RunLease:
         fd = self._fd
         self._fd = None
         self.token = None
+        self.incarnation = 1
         if fd is not None:
             try:
                 _flock_unlock(fd)
