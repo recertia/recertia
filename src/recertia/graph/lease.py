@@ -200,6 +200,42 @@ class RunLease:
             self._thread.release()
 
 
+def require_lease_token(
+    db_path: Path,
+    *,
+    tenant_id: str,
+    run_id: str,
+    fencing_token: int,
+) -> None:
+    """Raise ``LeaseLost`` when the caller is not the current ``run_leases`` holder."""
+
+    from recertia.runtime.errors import LeaseLost
+
+    path = Path(db_path)
+    if not path.exists():
+        return
+    conn = open_db(path)
+    try:
+        names = {
+            str(row[0])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if "run_leases" not in names:
+            return
+        row = conn.execute(
+            "SELECT fencing_token FROM run_leases WHERE tenant_id=? AND run_id=?",
+            (tenant_id, run_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None or int(row[0]) != int(fencing_token):
+        raise LeaseLost(
+            "lease lost",
+            run_id=run_id,
+            details={"tenant_id": tenant_id, "fencing_token": fencing_token},
+        )
+
+
 def _read_token(fd: int) -> int:
     os.lseek(fd, 0, os.SEEK_SET)
     raw = os.read(fd, 64).decode("ascii", errors="replace").strip()

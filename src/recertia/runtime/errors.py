@@ -13,6 +13,7 @@ __all__ = [
     "RunIdExists",
     "StateCorrupt",
     "WorkspaceBusy",
+    "LeaseLost",
 ]
 
 
@@ -53,3 +54,13 @@ class WorkspaceBusy(Busy):
     http_status = 409
     retryable = True
     exit_code = 6
+
+
+class LeaseLost(Busy):
+    """A write lost the fencing compare; the lease was stolen."""
+
+    code = "lease_lost"
+    http_status = 409
+    retryable = True
+    exit_code = 6
+

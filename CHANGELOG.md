@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **REL-3 FencedRunPersistence** — checkpoint writes compare the caller's
+  fencing token to `run_leases`. A stale token raises `LeaseLost` (409,
+  exit 6). `CheckpointStore` opened via `open_run_persistence` checks the
+  tenant `runtime.db`.
 - **REL-3 run_leases** — `RunLease` records a row in `runtime.db`. A clean
   `release` deletes the row so resume keeps incarnation 1. A crash that
   leaves the row with a free flock is a steal and bumps incarnation.

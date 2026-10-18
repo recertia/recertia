@@ -41,8 +41,16 @@ class EvalOutboxPending:
 class CheckpointStore:
     """SQLite-backed: one row per ``(run_id, seq)``, monotonically increasing per run."""
 
-    def __init__(self, db_path: Path | str) -> None:
+    def __init__(
+        self,
+        db_path: Path | str,
+        *,
+        lease_db: Path | str | None = None,
+        tenant_id: str = "local",
+    ) -> None:
         self._db_path = Path(db_path)
+        self._lease_db = Path(lease_db) if lease_db is not None else None
+        self._tenant_id = tenant_id
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._conn = open_db(self._db_path)
@@ -107,6 +115,15 @@ class CheckpointStore:
         fencing_token: int | None = None,
         eval_outbox: EvalOutboxWrite | None = None,
     ) -> None:
+        if fencing_token is not None and self._lease_db is not None:
+            from recertia.graph.lease import require_lease_token
+
+            require_lease_token(
+                self._lease_db,
+                tenant_id=self._tenant_id,
+                run_id=run_id,
+                fencing_token=fencing_token,
+            )
         with self._lock:
             try:
                 self._conn.execute(

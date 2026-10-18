@@ -21,7 +21,7 @@ from recertia.graph.engine import RunIdExistsError
 from recertia.graph.lease import RunBusy
 from recertia.persistence.layout import RuntimeLayout
 from recertia.ports.identity import Principal
-from recertia.runtime.errors import RunIdExists
+from recertia.runtime.errors import LeaseLost, RunIdExists
 from recertia.runtime.registry import RunRegistry
 from recertia.runtime.workspace_lock import WorkspaceLock, WorkspaceLockHandle
 from recertia.solver.container import ensure_api_execution_ready
@@ -387,7 +387,7 @@ class RunService:
                 )
                 cost_usd = float(state.spent.cost_usd or 0.0)
                 succeeded = True
-            except (RunIdExistsError, RunBusy):
+            except (RunIdExistsError, RunBusy, LeaseLost):
                 raise
             except Exception as exc:
                 get_telemetry().emit(
@@ -554,7 +554,7 @@ class RunService:
                 )
                 bundle.orchestrator.max_criterion_timeout_s = ctx.max_criterion_timeout_s()
                 state = bundle.orchestrator.resume(run_id, workdir=workdir)
-            except RunBusy:
+            except (RunBusy, LeaseLost):
                 raise
             except ValueError as exc:
                 raise NotFound(str(exc)) from exc
