@@ -189,6 +189,34 @@ def test_runs_read_requires_runs_scope() -> None:
         pdp.require(metrics, "runs.read", resource)
 
 
+def test_skills_promote_requires_promote_scope() -> None:
+    pdp = _pdp()
+    resource = Resource(tenant_id="t1")
+    promote = Principal.from_api_key(
+        key_id="promote", tenant_id="t1", scopes=frozenset({"promote"})
+    )
+    pdp.require(promote, "skills.promote", resource)
+    pdp.require(promote, "skill.promote", resource)
+    with pytest.raises(Forbidden):
+        pdp.require(_runs_only(), "skills.promote", resource)
+
+
+def test_evals_run_accepts_metrics_or_evals_scope() -> None:
+    pdp = _pdp()
+    resource = Resource(tenant_id="t1")
+    metrics = Principal.from_api_key(
+        key_id="metrics", tenant_id="t1", scopes=frozenset({"metrics"})
+    )
+    evals = Principal.from_api_key(
+        key_id="evals", tenant_id="t1", scopes=frozenset({"evals"})
+    )
+    pdp.require(metrics, "evals.run", resource)
+    pdp.require(evals, "eval.run", resource)
+    pdp.require(metrics, "metrics.read", resource)
+    with pytest.raises(Forbidden):
+        pdp.require(_runs_only(), "evals.run", resource)
+
+
 def test_jobs_run_requires_jobs_scope() -> None:
     pdp = _pdp()
     resource = Resource(tenant_id="t1")

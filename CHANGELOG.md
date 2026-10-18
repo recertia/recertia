@@ -61,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ARCH-5 PR-5.3 promotion and evals** — `PromotionService.promote` runs the
+  golden gate through `GateRunner`. `EvalService` owns `POST /v1/evals/runs`,
+  `GET /v1/metrics/report|canary|dashboard`, and the CLI `skills promote`,
+  `eval run`, `canary`, `metrics`, `lift`, and `probes run` paths.
+  `pdp.require` uses `skills.promote` and `evals.run` / `metrics.read`.
 - **ARCH-5 PR-5.2 job registry** — `JobService` is the one name table (`default_job_specs`).
   `recertia jobs run` and `POST /v1/jobs/{job}/run` call `JobService.run` with
   `pdp.require(jobs.run)`. Alias chains (`mine|miner`, `hex|practice_hex`, …)

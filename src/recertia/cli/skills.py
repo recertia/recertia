@@ -87,6 +87,7 @@ def skills_search(
 
 @skills_app.command("promote")
 def skills_promote(
+    ctx: typer.Context,
     skill_id: str = typer.Argument(..., help="Skill id to promote."),
     version: int = typer.Option(..., "--version", help="Immutable version number."),
     skills_root: Path = typer.Option(Path("skills"), "--skills-root"),
@@ -105,20 +106,31 @@ def skills_promote(
 ) -> None:
     """Promote a skill to approved after the golden regression gate (specs §8)."""
 
-    from recertia.memory.procedural.promote import PromotionError, promote_to_approved
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.promotion import PromotionService
+    from recertia.errors import RecertiaError
+    from recertia.memory.procedural.promote import PromotionError
     from recertia.memory.procedural.store import SkillStore
+    from recertia.ports.identity import Principal
 
     if golden_dir is None and golden_root is None:
         typer.echo("provide --golden-dir and/or --golden-root", err=True)
         raise typer.Exit(code=2)
 
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
+    )
     store = SkillStore(skills_root)
     repo_root = Path.cwd()
+    service = PromotionService(pdp=PolicyDecisionPoint.load(surface="cli"))
     try:
-        status = promote_to_approved(
-            store,
+        status = service.promote(
+            principal,
             skill_id,
             version,
+            store=store,
             golden_dir=golden_dir,
             golden_root=golden_root,
             runs_root=runs_root,
@@ -127,6 +139,9 @@ def skills_promote(
             repo_root=repo_root,
             require_task_class_gate=require_task_class_gate,
         )
+    except RecertiaError as exc:
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
     except PromotionError as exc:
         typer.echo(f"PROMOTION FAILED: {exc}", err=True)
         if exc.failing_fixtures:

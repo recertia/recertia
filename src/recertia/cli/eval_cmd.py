@@ -16,6 +16,7 @@ def register_eval_commands(app: typer.Typer) -> None:
 
 @eval_app.command("run")
 def eval_run(
+    ctx: typer.Context,
     task_class: str = typer.Option("repo-chore", "--task-class"),
     golden_root: Path = typer.Option(Path("evals/golden"), "--golden-root"),
     golden_dir: Optional[Path] = typer.Option(None, "--golden-dir"),
@@ -28,37 +29,37 @@ def eval_run(
 
     import json
 
-    from recertia.evals.golden import run_eval_suite
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.evals import EvalService
+    from recertia.errors import RecertiaError
     from recertia.evals.store import EvalStore
-    from recertia.review.gate import default_golden_factory
+    from recertia.ports.identity import Principal
 
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
+    )
+    service = EvalService(pdp=PolicyDecisionPoint.load(surface="cli"))
     store = EvalStore(eval_db)
     try:
-        report = run_eval_suite(
-            task_class=task_class,
-            golden_root=golden_root,
-            skills_root=skills_root,
-            runs_root=runs_root,
-            eval_store=store,
-            snapshot_id=snapshot_id,
-            golden_dir=golden_dir,
-            factory=default_golden_factory(),
-        )
+        try:
+            report = service.run_eval_suite(
+                principal,
+                task_class=task_class,
+                golden_root=golden_root,
+                skills_root=skills_root,
+                runs_root=runs_root,
+                eval_store=store,
+                snapshot_id=snapshot_id,
+                golden_dir=golden_dir,
+            )
+        except RecertiaError as exc:
+            typer.echo(f"{exc.code}: {exc.message}", err=True)
+            raise typer.Exit(code=exc.exit_code) from exc
     finally:
         store.close()
-    payload = {
-        "all_passed": report.all_passed,
-        "results": [
-            {
-                "skill_id": r.skill_id,
-                "passed": r.passed,
-                "terminal": r.terminal,
-                "run_id": r.run_id,
-                "detail": r.detail,
-            }
-            for r in report.results
-        ],
-    }
+    payload = service.suite_payload(report)
     typer.echo(json.dumps(payload, indent=2))
     if not report.all_passed:
         raise typer.Exit(code=1)

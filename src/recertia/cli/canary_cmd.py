@@ -14,6 +14,7 @@ def register_canary_commands(app: typer.Typer) -> None:
 
 
 def canary_cmd(
+    ctx: typer.Context,
     live: bool = typer.Option(
         False,
         "--live",
@@ -26,9 +27,18 @@ def canary_cmd(
 ) -> None:
     """Run the planted-failure canary. Default is the local shell verifier."""
 
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.evals import EvalService
     from recertia.config import load_model_config
-    from recertia.evals.canary import LiveCanaryError, run_judge_canary, run_live_verifier_canary
+    from recertia.errors import RecertiaError
+    from recertia.evals.canary import LiveCanaryError
+    from recertia.ports.identity import Principal
 
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
+    )
     cfg = load_model_config()
     if cfg.verifier_model_id and cfg.model_id and cfg.verifier_model_id == cfg.model_id:
         typer.echo(
@@ -37,11 +47,17 @@ def canary_cmd(
             err=True,
         )
 
+    service = EvalService(pdp=PolicyDecisionPoint.load(surface="cli"))
     try:
-        if live:
-            report = run_live_verifier_canary(root=canary_root)
-        else:
-            report = run_judge_canary(root=canary_root, model_version=cfg.verifier_model_id)
+        report = service.run_canary(
+            principal,
+            live=live,
+            canary_root=canary_root,
+            model_version=None if live else cfg.verifier_model_id,
+        )
+    except RecertiaError as exc:
+        typer.echo(f"{exc.code}: {exc.message}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
     except LiveCanaryError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc

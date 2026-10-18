@@ -13,6 +13,7 @@ def register_lift_commands(app: typer.Typer) -> None:
 
 
 def lift_cmd(
+    ctx: typer.Context,
     task_class: str = typer.Option("repo-chore", "--task-class"),
     eval_db: Path = typer.Option(Path(".recertia/evals.db"), "--eval-db"),
     snapshot_id: Optional[str] = typer.Option(None, "--snapshot-id"),
@@ -22,34 +23,40 @@ def lift_cmd(
 
     from datetime import datetime, timezone
 
-    from contracts.eval import BinomialSample
-    from recertia.evals.statistics import causal_lift
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.evals import EvalService
+    from recertia.errors import RecertiaError
     from recertia.evals.store import EvalStore
     from recertia.policy_load import load_policy
+    from recertia.ports.identity import Principal
 
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
+    )
     policy = load_policy()
+    service = EvalService(pdp=PolicyDecisionPoint.load(surface="cli"))
     store = EvalStore(eval_db)
     try:
-        counts = store.arm_counts(task_class=task_class, snapshot_id=snapshot_id)
-        treatment = counts.get("treatment", BinomialSample(successes=0, trials=0))
-        control = counts.get("control", BinomialSample(successes=0, trials=0))
-        t_rates, c_rates, paired, series_kind = store.variance_inputs(
-            task_class=task_class, snapshot_id=snapshot_id
-        )
-        result = causal_lift(
-            treatment,
-            control,
-            task_class=task_class,
-            snapshot_id=snapshot_id,
-            min_independent_runs=policy.min_independent_runs,
-            treatment_rates=t_rates or None,
-            control_rates=c_rates or None,
-            paired_lifts=paired,
-        )
+        try:
+            report = service.lift(
+                principal,
+                eval_store=store,
+                task_class=task_class,
+                snapshot_id=snapshot_id,
+                min_independent_runs=policy.min_independent_runs,
+            )
+        except RecertiaError as exc:
+            typer.echo(f"{exc.code}: {exc.message}", err=True)
+            raise typer.Exit(code=exc.exit_code) from exc
     finally:
         store.close()
 
-    typer.echo(f"task_class={task_class}")
+    treatment = report.treatment
+    control = report.control
+    result = report.result
+    typer.echo(f"task_class={report.task_class}")
     typer.echo(f"treatment={treatment.successes}/{treatment.trials}")
     typer.echo(f"control={control.successes}/{control.trials}")
     typer.echo(
@@ -66,9 +73,9 @@ def lift_cmd(
                 f"level={result.interval.level} method={result.interval.method}"
             )
         typer.echo(f"status={result.render_status()}")
-    _echo_variance("treatment", result.treatment_variance, series_kind)
-    _echo_variance("control", result.control_variance, series_kind)
-    _echo_variance("lift", result.lift_variance, series_kind)
+    _echo_variance("treatment", result.treatment_variance, report.series_kind)
+    _echo_variance("control", result.control_variance, report.series_kind)
+    _echo_variance("lift", result.lift_variance, report.series_kind)
     if result.status == "not_established":
         typer.echo("claim=not established (interval includes zero)")
     elif result.status == "low_run_count":

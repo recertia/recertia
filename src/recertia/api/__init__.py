@@ -52,7 +52,6 @@ from recertia.graph.store import CheckpointStore
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.paths import HostRootError, looks_absolute, resolve_under_host_root
 from recertia.store.blobs import FilesystemBlobStore, normalize_blob_digest
-from recertia.telemetry import get_telemetry, render_dashboard
 from recertia.workspaces.registry import WorkspaceRegistry
 
 _log = logging.getLogger("recertia.api")
@@ -513,15 +512,11 @@ def create_app(
     def dashboard(
         principal: Principal = Depends(require_scope("metrics", key_store)),
     ) -> dict[str, Any]:
-        payload = render_dashboard(get_telemetry(), tenant_id=principal.tenant_id)
-        payload["panels"].append(
-            {
-                "id": "tenant_quota",
-                "type": "stat",
-                "values": quota_store.snapshot(principal.tenant_id),
-            }
+        return console_ctx.eval_service.metrics_dashboard(
+            principal,
+            tenant_id=principal.tenant_id,
+            quota_snapshot=quota_store.snapshot(principal.tenant_id),
         )
-        return payload
 
     app.state.root = root
     app.state.root_lock = root_lock

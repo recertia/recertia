@@ -23,9 +23,7 @@ from recertia.app.jobs import JobDispatch
 from recertia.console_compose import suggest_criteria
 from recertia.console_templates import get_template_goal, list_templates
 from recertia.errors import ConfigError, Forbidden, NotFound
-from recertia.evals.canary import run_judge_canary
 from recertia.evals.metrics import build_metric_report
-from recertia.evals.report import assemble_metric_report
 from recertia.evals.store import EvalStore
 from recertia.graph.engine import GraphOrchestrator
 from recertia.jobs import JobBudget, build_job_runner
@@ -33,7 +31,7 @@ from recertia.jobs.enablement import attach_enablement
 from recertia.ledger import HashChainLedger
 from recertia.memory.procedural.active_set import recompute_active_set
 from recertia.memory.procedural.composition import mean_composition_depth
-from recertia.memory.procedural.promote import PromotionError, promote_to_approved
+from recertia.memory.procedural.promote import PromotionError
 from recertia.memory.procedural.store import SkillStore
 from recertia.ports.identity import ledger_actor
 from recertia.proposals.store import ProposalRecord
@@ -357,15 +355,17 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         runs_root = ctx.tenant_runs_root(tenant_id)
         log_dir = runs_root / "promotion_logs"
         try:
-            status = promote_to_approved(
-                store,
+            status = ctx.promotion_service.promote(
+                principal,
                 skill_id,
                 version,
+                store=store,
                 golden_root=Path("evals/golden"),
                 runs_root=runs_root,
                 log_dir=log_dir,
                 require_task_class_gate=False,
                 golden_dir=Path("evals/golden") / "repo-chore" / skill_id,
+                console_roles=frozenset(user.roles) if user is not None else None,
             )
             if status.lifecycle != "approved":
                 raise PromotionError(
@@ -386,6 +386,12 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
                 "error": str(exc),
                 "failing_fixtures": list(exc.failing_fixtures),
             }
+        except Forbidden as exc:
+            job.status = "failed"
+            job.error = exc.message
+            job.finished_at = datetime.now(timezone.utc).isoformat()
+            ctx.job_runs.save(job)
+            raise HTTPException(status_code=403, detail=exc.message) from exc
         except Exception as exc:  # noqa: BLE001
             job.status = "failed"
             job.error = str(exc)
@@ -421,8 +427,9 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
         store = EvalStore(eval_db)
         try:
             skill_store = SkillStore(ctx.tenant_skills_root(tenant_id))
-            report = assemble_metric_report(
-                store,
+            report = ctx.eval_service.metrics_report(
+                principal,
+                eval_store=store,
                 skill_store=skill_store,
                 task_class=task_class,
                 snapshot_id=snapshot_id,
@@ -434,8 +441,7 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
 
     @app.get("/v1/metrics/canary")
     def metrics_canary(principal=Depends(require_metrics)) -> dict[str, Any]:
-        del principal
-        report = run_judge_canary()
+        report = ctx.eval_service.run_canary(principal)
         return {
             "trials": report.trials,
             "false_passes": report.false_passes,

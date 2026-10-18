@@ -14,6 +14,7 @@ def register_metrics_commands(app: typer.Typer) -> None:
 
 
 def metrics_cmd(
+    ctx: typer.Context,
     task_class: str = typer.Option("repo-chore", "--task-class"),
     eval_db: Path = typer.Option(Path(".recertia/evals.db"), "--eval-db"),
     snapshot_id: Optional[str] = typer.Option(None, "--snapshot-id"),
@@ -26,21 +27,35 @@ def metrics_cmd(
 ) -> None:
     """Build a MetricReport from the eval store (honest unavailable reasons when sparse)."""
 
-    from recertia.evals.report import assemble_metric_report
+    from recertia.app.authz import PolicyDecisionPoint
+    from recertia.app.evals import EvalService
+    from recertia.errors import RecertiaError
     from recertia.evals.store import EvalStore
     from recertia.memory.procedural.store import SkillStore
+    from recertia.ports.identity import Principal
 
+    principal = (
+        ctx.obj["principal"]
+        if isinstance(ctx.obj, dict) and ctx.obj.get("principal") is not None
+        else Principal.local_operator()
+    )
+    service = EvalService(pdp=PolicyDecisionPoint.load(surface="cli"))
     store = EvalStore(eval_db)
     try:
-        skill_store = SkillStore(skills_root)
-        report = assemble_metric_report(
-            store,
-            skill_store=skill_store,
-            task_class=task_class,
-            snapshot_id=snapshot_id,
-            model_version=model_version,
-            canary_root=canary_root,
-        )
+        try:
+            skill_store = SkillStore(skills_root)
+            report = service.metrics_report(
+                principal,
+                eval_store=store,
+                skill_store=skill_store,
+                task_class=task_class,
+                snapshot_id=snapshot_id,
+                model_version=model_version,
+                canary_root=canary_root,
+            )
+        except RecertiaError as exc:
+            typer.echo(f"{exc.code}: {exc.message}", err=True)
+            raise typer.Exit(code=exc.exit_code) from exc
     finally:
         store.close()
 
