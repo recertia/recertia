@@ -109,8 +109,8 @@ def open_run_persistence(
     leftover files (a copy, not a rename) for one-release rollback. After an
     import has been recorded in ``schema_migrations``, ``off`` reads
     ``runtime.db`` so post-import writes cannot vanish. ``manual`` refuses to
-    start while leftover files are still pending. A busy root lock waits with
-    a timeout and then raises; it never writes somewhere else.
+    start while leftover files are still pending. A busy root lock overlays
+    leftover reads onto ``runtime.db`` writes so unimported rows stay visible.
     """
 
     del durability
@@ -122,7 +122,7 @@ def open_run_persistence(
         layout = RuntimeLayout(path).local_runs()
     tenant = str(layout.tenant) if layout.tenant is not None else "local"
     mode = migrate if migrate is not None else load_settings().runtime_db_migrate
-    use_runtime = _resolve_runtime_db(layout, mode)
+    use_runtime, read_fallback, ops_fallback = _resolve_runtime_db(layout, mode)
     leftover_lock: RootLock | None = None
     if not use_runtime:
         leftover_lock = RootLock(layout.parent.root_lock)
@@ -147,12 +147,14 @@ def open_run_persistence(
                 checkpoint_db,
                 lease_db=layout.runtime_db,
                 tenant_id=tenant,
+                read_fallback=read_fallback,
             ),
             operations=OperationLedger(
                 operations_db,
                 lease_db=layout.runtime_db,
                 tenant_id=tenant,
                 schema_lock=use_runtime,
+                read_fallback=ops_fallback,
             ),
             ledger=HashChainLedger(
                 layout.ledger_path,
@@ -171,25 +173,29 @@ def open_run_persistence(
             leftover_lock.release()
 
 
-def _resolve_runtime_db(layout: RunsRootLayout, mode: MigrateMode) -> bool:
+def _resolve_runtime_db(
+    layout: RunsRootLayout, mode: MigrateMode
+) -> tuple[bool, Path | None, Path | None]:
     if mode == "off":
         # After import, runtime.db is the source of truth even though leftover
         # files are kept for rollback (probe K / Q).
         if legacy_import_complete(layout.runtime_db):
-            return True
+            return True, None, None
         if layout.checkpoints_db.is_file() or layout.operations_db.is_file():
-            return False
+            return False, None, None
         if sqlite_has_table(layout.runtime_db, "checkpoints") or sqlite_has_table(
             layout.runtime_db, "operations"
         ):
-            return True
-        return False
+            return True, None, None
+        return False, None, None
     if mode == "manual":
         if legacy_sqlite_pending(layout):
             raise MigrationChecksumError(
                 "pending legacy runtime files; run recertia migrate apply",
                 details={"action": "recertia migrate apply"},
             )
-        return True
-    import_legacy_runtime(layout)
-    return True
+        return True, None, None
+    imported = import_legacy_runtime(layout)
+    ckpt_fb = layout.checkpoints_db if not imported and layout.checkpoints_db.is_file() else None
+    ops_fb = layout.operations_db if not imported and layout.operations_db.is_file() else None
+    return True, ckpt_fb, ops_fb

@@ -66,9 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RECERTIA_RUNTIME_DB_MIGRATE=auto` (default), then copies the sources to
   `*.db.migrated` without renaming them away. Import completion is a
   `schema_migrations` row (`runtime.import_legacy_checkpoints`), not leftover
-  file presence. A busy root lock waits with a timeout and then raises
-  `RootLockBusy`; there is no overlay and no write to a second path.
-  Leftover writers take a shared root lock so import cannot race them.
+  file presence. A busy root lock skips import and overlays leftover reads
+  onto `runtime.db` writes so unimported rows stay visible. Leftover writers
+  take a shared root lock so import cannot race them.
   `off` keeps unused legacy files for one release; after an import has
   landed, `off` reads `runtime.db` so post-import writes cannot vanish.
   `manual` refuses to start while leftover files are still pending
