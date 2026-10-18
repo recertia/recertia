@@ -61,9 +61,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **REL-3 run_leases** — `RunLease` records a row in `runtime.db`. A clean
-  `release` deletes the row so resume keeps incarnation 1. A crash that
-  leaves the row with a free flock is a steal and bumps incarnation.
+- **REL-3 run_leases** — `RunLease` records a row in `runtime.db`. A crash that
+  leaves a HELD row on the same lock inode is a resume (incarnation stays,
+  fencing token advances) so finished operations are not re-run. A clean
+  `release` marks the row released and keeps incarnation/token so they cannot
+  go backwards. Steal is an expired heartbeat plus a new lock inode (unlink
+  while live is `RunBusy` until TTL). Heartbeat uses `time.monotonic()` plus
+  wall clock. Tokens are seeded from the row, so wiping `locks/` cannot
+  restart at 1.
 - **REL-3 incarnation** — operation identity includes `incarnation`. Legacy
   `operations.db` files are rebuilt onto the new primary key on open. The
   rebuild is one SQLite transaction under the runs-root lock and is resumable
