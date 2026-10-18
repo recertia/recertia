@@ -195,7 +195,7 @@ class HashChainLedger:
         missing row (or missing sibling ``runtime.db``) is allowed.
         """
 
-        from recertia.graph.lease import require_lease_token
+        from recertia.persistence.fence import require_lease_token
 
         lease_db = self._lease_db if self._lease_db is not None else self._path.parent / "runtime.db"
         require_lease_token(
