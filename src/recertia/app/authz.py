@@ -258,7 +258,7 @@ class PolicyDecisionPoint:
                     allow=False, status=403, reason="missing scope: platform_admin"
                 )
             return Decision(allow=True)
-        if action == "job.run":
+        if action in {"job.run", "jobs.run"}:
             if not principal.has_scope("jobs"):
                 return Decision(allow=False, status=403, reason="missing scope: jobs")
             return Decision(allow=True)

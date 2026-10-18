@@ -19,8 +19,10 @@ from recertia.api.console_routes import (
     JobTrigger,
     ProposalDecision,
 )
+from recertia.app.jobs import JobDispatch
 from recertia.console_compose import suggest_criteria
 from recertia.console_templates import get_template_goal, list_templates
+from recertia.errors import ConfigError, Forbidden, NotFound
 from recertia.evals.canary import run_judge_canary
 from recertia.evals.metrics import build_metric_report
 from recertia.evals.report import assemble_metric_report
@@ -28,15 +30,6 @@ from recertia.evals.store import EvalStore
 from recertia.graph.engine import GraphOrchestrator
 from recertia.jobs import JobBudget, build_job_runner
 from recertia.jobs.enablement import attach_enablement
-from recertia.jobs.workers import (
-    correction_miner_from_reviewer_edits,
-    curator_active_set_and_dedup,
-    load_reviewer_edits,
-    mine_from_repo_hints,
-    propose_hex_search,
-    propose_parallelise,
-    propose_serialise,
-)
 from recertia.ledger import HashChainLedger
 from recertia.memory.procedural.active_set import recompute_active_set
 from recertia.memory.procedural.composition import mean_composition_depth
@@ -586,12 +579,10 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         _require_library_write(request, principal, scope="jobs", min_role="reviewer")
-        from recertia.app.jobs import JobDispatch, canonical_job, run_named_job
-
-        name = canonical_job(job) or ""
         from recertia.memory.procedural.lineage import LineageServices
         from recertia.policy_load import load_policy
 
+        user = _optional_console_user(request)
         policy = load_policy()
         runs_root = ctx.tenant_runs_root(tenant_id)
         lineage = LineageServices.open(runs_root / "lineage")
@@ -607,83 +598,56 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
             skills_root=ctx.tenant_skills_root(tenant_id),
         )
         budget = JobBudget(max_proposals=body.max_proposals)
+        resolved = ctx.job_service.resolve(job)
         job_rec = ctx.job_runs.create(
-            name, tenant_id=tenant_id, dry_run=body.dry_run
+            resolved.name if resolved is not None else job,
+            tenant_id=tenant_id,
+            dry_run=body.dry_run,
         )
         job_rec.status = "running"
         ctx.job_runs.save(job_rec)
-        traj = TrajectoryStore(runs_root / "trajectories")
         try:
-            if name in {"mine", "miner"}:
-                hints = list(body.hint or ["README.md chore hints"])
-                result = runner.run(
-                    "mine", lambda: mine_from_repo_hints(store, hints=hints), budget=budget
-                )
-            elif name in {"curator", "curate"}:
-                result = runner.run(
-                    "curator",
-                    lambda: curator_active_set_and_dedup(
-                        store,
-                        trajectory_store=traj,
-                        proposals_path=runs_root / "proposals.jsonl",
-                    ),
+            result = ctx.job_service.run(
+                principal,
+                job,
+                dispatch=JobDispatch(
+                    store=store,
+                    runner=runner,
                     budget=budget,
-                )
-            elif name in {"practice", "recertify", "shadow", "compress"}:
-                dispatched = run_named_job(
-                    name,
-                    JobDispatch(
-                        store=store,
-                        runner=runner,
-                        budget=budget,
-                        policy=policy,
-                        runs_root=runs_root,
-                        lineage=lineage,
-                        dry_run=body.dry_run,
-                        one_off=list(body.one_off) if body.one_off else None,
-                        tool_upgraded=body.tool_upgraded,
-                    ),
-                )
-                if dispatched is None:
-                    raise HTTPException(status_code=404, detail=f"unknown job {job}")
-                result = dispatched
-            elif name in {"parallelise", "parallelize"}:
-                if not body.skill_id:
-                    raise HTTPException(status_code=400, detail="skill_id required")
-                result = runner.run(
-                    "parallelise",
-                    lambda: propose_parallelise(
-                        body.skill_id,  # type: ignore[arg-type]
-                        body.skill_version,
-                        fake_edge_failures=body.fake_edge_failures or None,
-                    ),
-                    budget=budget,
-                )
-            elif name in {"serialise", "serialize"}:
-                if not body.skill_id:
-                    raise HTTPException(status_code=400, detail="skill_id required")
-                result = runner.run(
-                    "serialise",
-                    lambda: propose_serialise(
-                        body.skill_id,  # type: ignore[arg-type]
-                        body.skill_version,
-                        merge_conflict_count=body.merge_conflicts or None,
-                    ),
-                    budget=budget,
-                )
-            elif name in {"correction", "correction_miner"}:
-                edits = load_reviewer_edits(runs_root / "reviewer_edits.jsonl")
-                result = runner.run(
-                    "correction",
-                    lambda: correction_miner_from_reviewer_edits(edits),
-                    budget=budget,
-                )
-            elif name in {"hex", "practice_hex"}:
-                result = runner.run("practice_hex", propose_hex_search, budget=budget)
-            else:
-                raise HTTPException(status_code=404, detail=f"unknown job {job}")
+                    policy=policy,
+                    runs_root=runs_root,
+                    lineage=lineage,
+                    dry_run=body.dry_run,
+                    one_off=list(body.one_off) if body.one_off else None,
+                    tool_upgraded=body.tool_upgraded,
+                    hint=list(body.hint) if body.hint else None,
+                    skill_id=body.skill_id,
+                    skill_version=body.skill_version,
+                    fake_edge_failures=body.fake_edge_failures,
+                    merge_conflicts=body.merge_conflicts,
+                ),
+                console_roles=frozenset(user.roles) if user is not None else None,
+            )
         except HTTPException:
             raise
+        except NotFound as exc:
+            job_rec.status = "failed"
+            job_rec.error = exc.message
+            job_rec.finished_at = datetime.now(timezone.utc).isoformat()
+            ctx.job_runs.save(job_rec)
+            raise HTTPException(status_code=404, detail=exc.message) from exc
+        except Forbidden as exc:
+            job_rec.status = "failed"
+            job_rec.error = exc.message
+            job_rec.finished_at = datetime.now(timezone.utc).isoformat()
+            ctx.job_runs.save(job_rec)
+            raise HTTPException(status_code=403, detail=exc.message) from exc
+        except ConfigError as exc:
+            job_rec.status = "failed"
+            job_rec.error = exc.message
+            job_rec.finished_at = datetime.now(timezone.utc).isoformat()
+            ctx.job_runs.save(job_rec)
+            raise HTTPException(status_code=400, detail=exc.message) from exc
         except Exception as exc:  # noqa: BLE001
             job_rec.status = "failed"
             job_rec.error = str(exc)

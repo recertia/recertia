@@ -57,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ARCH-5 PR-5.2 job registry** — `JobService` is the one name table (`default_job_specs`).
+  `recertia jobs run` and `POST /v1/jobs/{job}/run` call `JobService.run` with
+  `pdp.require(jobs.run)`. Alias chains (`mine|miner`, `hex|practice_hex`, …)
+  no longer live in the CLI and HTTP dispatchers.
 - **ARCH-5 PR-5.1 run admission** — `POST /v1/runs`, `GET /v1/runs/{id}`, and
   resume call `RunService.create` / `get` / `resume`. Quota admit and
   `pdp.require` (`runs.create`, `runs.script`, `runs.resume`, `runs.read`) live
