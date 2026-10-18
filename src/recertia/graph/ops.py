@@ -58,6 +58,7 @@ class OperationLedger:
         pending_poll_s: float = _PENDING_POLL_S,
         lease_db: Path | str | None = None,
         tenant_id: str = "local",
+        schema_lock: bool = True,
     ) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,7 +72,10 @@ class OperationLedger:
         self._live_claims: dict[OpKey, _LiveClaim] = {}
         self._conn = open_db(self._db_path)
         self._conn.execute("PRAGMA journal_mode=WAL")
-        _init_operations_table(self._conn, self._db_path)
+        if schema_lock:
+            _init_operations_table(self._conn, self._db_path)
+        else:
+            ensure_operations_schema(self._conn)
 
     def close(self) -> None:
         self._conn.close()

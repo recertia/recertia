@@ -64,14 +64,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **REL-3 runtime.db** — `open_run_persistence` imports leftover
   `checkpoints.db` / `operations.db` into `runtime.db` when
   `RECERTIA_RUNTIME_DB_MIGRATE=auto` (default), then copies the sources to
-  `*.db.migrated` without renaming them away. A busy root lock skips the copy
-  but leftover rows stay visible via a read overlay and new writes still go to
-  `runtime.db` so concurrent writers are not stranded on files the importer
-  will retire. `off` keeps unused legacy files for one release; after an
-  import has landed, `off` keeps reading `runtime.db` so state is not lost.
-  `manual` refuses to start while legacy files remain (`state_corrupt`,
-  action `recertia migrate apply`). Pending operation sentinels are dropped
-  on import. Readers (list, tabletop, operator brief) prefer `runtime.db`.
+  `*.db.migrated` without renaming them away. Import completion is a
+  `schema_migrations` row (`runtime.import_legacy_checkpoints`), not leftover
+  file presence. A busy root lock waits with a timeout and then raises
+  `RootLockBusy`; there is no overlay and no write to a second path.
+  Leftover writers take a shared root lock so import cannot race them.
+  `off` keeps unused legacy files for one release; after an import has
+  landed, `off` reads `runtime.db` so post-import writes cannot vanish.
+  `manual` refuses to start while leftover files are still pending
+  (`state_corrupt`, action `recertia migrate apply`). Backup and restore
+  take exclusive `api.lock` then `.lock`. Pending operation sentinels are
+  dropped on import. Readers (list, tabletop, operator brief) prefer
+  `runtime.db`.
 - **REL-3 FencedRunPersistence** — checkpoint, operation, and hash-chain
   writes compare the caller's fencing token to `run_leases`. A stale token
   raises `LeaseLost` (409, exit 6). `CheckpointStore.save` re-checks the

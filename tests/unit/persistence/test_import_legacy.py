@@ -15,9 +15,13 @@ from recertia.graph.ops import OperationLedger
 from recertia.graph.persistence import open_run_persistence
 from recertia.graph.store import CheckpointStore
 from recertia.persistence.db import MigrationChecksumError
-from recertia.persistence.import_legacy import IMPORT_ID, import_legacy_runtime
+from recertia.persistence.import_legacy import (
+    IMPORT_ID,
+    import_legacy_runtime,
+    legacy_sqlite_pending,
+)
 from recertia.persistence.layout import RuntimeLayout
-from recertia.persistence.root_lock import RootLock
+from recertia.persistence.root_lock import RootLock, RootLockBusy
 from recertia.runtime.errors import StateCorrupt
 
 
@@ -127,7 +131,7 @@ def test_equal_checkpoint_is_kept_once(tmp_path: Path) -> None:
     assert (tmp_path / "checkpoints.db.migrated").is_file()
 
 
-def test_root_lock_busy_skips_import(tmp_path: Path) -> None:
+def test_root_lock_busy_fails_import(tmp_path: Path) -> None:
     layout = RuntimeLayout(tmp_path).local_runs()
     store = CheckpointStore(layout.checkpoints_db)
     try:
@@ -137,14 +141,16 @@ def test_root_lock_busy_skips_import(tmp_path: Path) -> None:
     held = RootLock(layout.parent.root_lock)
     held.try_exclusive()
     try:
-        assert import_legacy_runtime(layout) is False
+        with pytest.raises(RootLockBusy, match="cannot import leftover runtime files"):
+            import_legacy_runtime(layout, timeout_s=0)
         assert layout.checkpoints_db.is_file()
+        assert not (tmp_path / "runtime.db").exists()
     finally:
         held.release()
 
 
-def test_lock_busy_open_writes_runtime_db_not_legacy(tmp_path: Path) -> None:
-    """CRITICAL: a busy root lock must not fall back to files the importer will retire."""
+def test_lock_busy_open_raises_without_writing_elsewhere(tmp_path: Path) -> None:
+    """A busy root lock must not open a second path or write a ghost runtime.db."""
 
     root = tmp_path / "runs"
     p0 = open_run_persistence(root, migrate="off")
@@ -155,21 +161,38 @@ def test_lock_busy_open_writes_runtime_db_not_legacy(tmp_path: Path) -> None:
     lock = RootLock(root / ".lock")
     lock.try_exclusive()
     try:
-        busy = open_run_persistence(root)
-        try:
-            assert busy.checkpoints.latest_seq("old-run") == 1
-            busy.checkpoints.save("p2-run", 1, "n", None, _state("p2-run"))
-            assert busy.checkpoints._db_path == root / "runtime.db"
-        finally:
-            busy.close()
+        with pytest.raises(RootLockBusy, match="cannot import leftover runtime files"):
+            open_run_persistence(root)
+        assert not (root / "runtime.db").exists()
     finally:
         lock.release()
     imported = open_run_persistence(root)
     try:
-        ids = sorted(imported.checkpoints.list_run_ids())
-        assert ids == ["old-run", "p2-run"]
+        assert imported.checkpoints.list_run_ids() == ["old-run"]
+        assert imported.checkpoints.latest_seq("old-run") == 1
     finally:
         imported.close()
+
+
+def test_migrate_off_after_import_sees_post_import_writes(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    legacy = open_run_persistence(root, migrate="off")
+    try:
+        for seq in (1, 2, 3):
+            legacy.checkpoints.save("legacy-run", seq, "n", None, _state("legacy-run"))
+    finally:
+        legacy.close()
+    imported = open_run_persistence(root)
+    try:
+        imported.checkpoints.save("legacy-run", 4, "post-import", None, _state("legacy-run"))
+    finally:
+        imported.close()
+    off = open_run_persistence(root, migrate="off")
+    try:
+        assert off.checkpoints.latest_seq("legacy-run") == 4
+        assert off.checkpoints._db_path == root / "runtime.db"
+    finally:
+        off.close()
 
 
 def test_migrate_off_after_import_still_sees_state(tmp_path: Path) -> None:
@@ -272,8 +295,8 @@ def test_open_run_persistence_auto_imports_then_reads(tmp_path: Path) -> None:
         persistence.close()
 
 
-def test_lock_busy_legacy_visible_then_import_keeps_latest(tmp_path: Path) -> None:
-    """L/M: leftover seqs stay visible while the root lock is busy, and import keeps them."""
+def test_lock_busy_open_then_import_keeps_legacy(tmp_path: Path) -> None:
+    """Busy open fails closed; after unlock, import still sees leftover seqs."""
 
     root = tmp_path / "runs"
     p0 = open_run_persistence(root, migrate="off")
@@ -285,13 +308,8 @@ def test_lock_busy_legacy_visible_then_import_keeps_latest(tmp_path: Path) -> No
     lock = RootLock(root / ".lock")
     lock.try_exclusive()
     try:
-        busy = open_run_persistence(root)
-        try:
-            assert busy.checkpoints.latest_seq("legacy-run") == 3
-            busy.checkpoints.save("legacy-run", 1, "n1-new", None, _state("legacy-run"))
-            assert busy.checkpoints._db_path == root / "runtime.db"
-        finally:
-            busy.close()
+        with pytest.raises(RootLockBusy):
+            open_run_persistence(root)
     finally:
         lock.release()
     imported = open_run_persistence(root)
@@ -299,6 +317,31 @@ def test_lock_busy_legacy_visible_then_import_keeps_latest(tmp_path: Path) -> No
         assert imported.checkpoints.latest_seq("legacy-run") == 3
     finally:
         imported.close()
+
+
+def test_legacy_writer_holds_root_lock_against_import(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    writer = open_run_persistence(root, migrate="off")
+    try:
+        writer.checkpoints.save("legacy", 1, "n", None, _state("legacy"))
+        with pytest.raises(RootLockBusy):
+            import_legacy_runtime(RuntimeLayout(root).local_runs(), timeout_s=0)
+    finally:
+        writer.close()
+    assert import_legacy_runtime(RuntimeLayout(root).local_runs()) is True
+
+
+def test_legacy_not_pending_after_completed_import(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    layout = RuntimeLayout(root).local_runs()
+    p0 = open_run_persistence(root, migrate="off")
+    try:
+        p0.checkpoints.save("legacy", 1, "n", None, _state("legacy"))
+    finally:
+        p0.close()
+    open_run_persistence(root).close()
+    assert layout.checkpoints_db.is_file()
+    assert legacy_sqlite_pending(layout) is False
 
 
 def test_api_presence_lock_does_not_block_legacy_import(tmp_path: Path) -> None:

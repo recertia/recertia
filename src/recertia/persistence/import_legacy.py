@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
 from datetime import datetime, timezone
@@ -72,8 +73,33 @@ CREATE TABLE IF NOT EXISTS runs (
 """
 
 
+def legacy_import_complete(runtime_db: Path) -> bool:
+    """True when ``runtime.db`` recorded ``IMPORT_ID`` in ``schema_migrations``."""
+
+    if not runtime_db.is_file():
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{_uri_path(runtime_db)}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return False
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE version=? LIMIT 1",
+            (IMPORT_ID,),
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+    return row is not None
+
+
 def legacy_sqlite_pending(layout: RunsRootLayout) -> bool:
-    return layout.checkpoints_db.is_file() or layout.operations_db.is_file()
+    """Leftover files still need import. Kept files after a completed import are not pending."""
+
+    if not (layout.checkpoints_db.is_file() or layout.operations_db.is_file()):
+        return False
+    return not legacy_import_complete(layout.runtime_db)
 
 
 def checkpoint_db_candidates(runs_root: Path | str) -> list[Path]:
@@ -141,22 +167,37 @@ def checkpoint_has_run(db: Path, run_id: str) -> bool:
     return row is not None
 
 
-def import_legacy_runtime(layout: RunsRootLayout) -> bool:
+def _import_lock_timeout_s() -> float:
+    raw = os.environ.get("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "5")
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 5.0
+
+
+def import_legacy_runtime(
+    layout: RunsRootLayout, *, timeout_s: float | None = None
+) -> bool:
     """Copy legacy SQLite files into ``runtime.db``.
 
     Returns ``True`` when the dest is ready (imported, already done, or nothing
-    to import). Returns ``False`` when the exclusive root lock is busy so the
-    caller should keep using the legacy files. Conflicting rows raise
-    :class:`StateCorrupt` and leave the legacy files in place.
+    to import). A busy exclusive root lock is waited out for ``timeout_s``
+    (default ``RECERTIA_IMPORT_LOCK_TIMEOUT_S``, 5s) and then raised as
+    :class:`RootLockBusy` — the caller must not write somewhere else.
+    Conflicting rows raise :class:`StateCorrupt` and leave the legacy files
+    in place.
     """
 
     if not legacy_sqlite_pending(layout):
         return True
+    wait = _import_lock_timeout_s() if timeout_s is None else max(0.0, timeout_s)
     lock = RootLock(layout.parent.root_lock)
     try:
-        lock.try_exclusive()
-    except RootLockBusy:
-        return False
+        lock.acquire_exclusive(timeout_s=wait)
+    except RootLockBusy as exc:
+        raise RootLockBusy(
+            f"cannot import leftover runtime files while the root lock is held: {lock.path}"
+        ) from exc
     try:
         return _import_under_lock(layout)
     finally:
@@ -323,10 +364,6 @@ def _copy_checkpoints(dest: sqlite3.Connection, src_path: Path) -> None:
         ).fetchall()
     finally:
         src.close()
-    src_max: dict[str, int] = {}
-    for run_id, seq, *_rest in rows:
-        key = str(run_id)
-        src_max[key] = max(src_max.get(key, -1), int(seq))
     for run_id, seq, node, next_node, state_json, created_at, fencing_token in rows:
         existing = dest.execute(
             "SELECT node, next_node, state_json, fencing_token FROM checkpoints "
@@ -336,19 +373,6 @@ def _copy_checkpoints(dest: sqlite3.Connection, src_path: Path) -> None:
         incoming = (node, next_node, state_json, fencing_token)
         if existing is not None:
             if _row_equal(existing, incoming):
-                continue
-            dest_max_row = dest.execute(
-                "SELECT MAX(seq) FROM checkpoints WHERE run_id=?",
-                (run_id,),
-            ).fetchone()
-            dest_max = -1 if dest_max_row is None or dest_max_row[0] is None else int(dest_max_row[0])
-            if src_max[str(run_id)] > dest_max:
-                # Leftover history is longer than a busy-path ghost write.
-                dest.execute(
-                    "UPDATE checkpoints SET node=?, next_node=?, state_json=?, "
-                    "created_at=?, fencing_token=? WHERE run_id=? AND seq=?",
-                    (node, next_node, state_json, created_at, fencing_token, run_id, seq),
-                )
                 continue
             raise StateCorrupt(
                 f"checkpoint conflict during import ({run_id!r}, seq={seq})",

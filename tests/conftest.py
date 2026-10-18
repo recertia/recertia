@@ -14,6 +14,8 @@ os.environ.setdefault("RECERTIA_EXECUTION_BACKEND", "local")
 os.environ.setdefault("RECERTIA_API_ALLOW_LOCAL_EXEC", "1")
 # CI / non-Windows hosts: allow POSIX absolute registered roots (RW0 tests).
 os.environ.setdefault("RECERTIA_ALLOW_POSIX_WORKSPACE_ROOTS", "1")
+# Busy-lock import waits then raises. Keep the wait short in the suite.
+os.environ.setdefault("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
 
 
 # --- Repo-wide no-external-network guard (PR5) --------------------------------------
