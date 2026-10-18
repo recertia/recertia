@@ -106,7 +106,7 @@ def test_stale_token_rejects_operation(tmp_path: Path) -> None:
 
 
 def test_stale_ledger_token_rejected_after_steal_and_release(tmp_path: Path) -> None:
-    """89-A: a released row is still fail-closed against the highest token issued."""
+    """89-A: after steal+release, stale and token-less hash-chain appends fail closed."""
 
     root = tmp_path
     lock = root / "locks" / "r-steal.lock"
@@ -128,8 +128,43 @@ def test_stale_ledger_token_rejected_after_steal_and_release(tmp_path: Path) -> 
         ledger.append(actor="stale", action="write", target="r-steal", fencing_token=stale)
     with pytest.raises(LeaseLost):
         ledger.append(actor="stale", action="write", target="r-steal")
+    with pytest.raises(LeaseLost):
+        ledger.append(actor="released", action="write", target="r-steal", fencing_token=highest)
     skill = HashChainLedger(root / "other.jsonl", lease_db=db)
     skill.append(actor="ci", action="write", target="skill-1")
+
+
+def test_released_holder_token_rejected_tokenless_ledger_allowed(tmp_path: Path) -> None:
+    """Clean completion: token-less ledger appends are allowed; the old token is dead."""
+
+    root = tmp_path
+    persist = open_run_persistence(root)
+    lock = root / "locks" / "done.lock"
+    db = root / "runtime.db"
+    holder = RunLease(lock, db_path=db, run_id="done")
+    token = holder.acquire()
+    persist.checkpoints.save("done", 1, "n", None, _state("done"), fencing_token=token)
+    holder.release()
+    with pytest.raises(LeaseLost):
+        persist.ledger.append(actor="old", action="write", target="done", fencing_token=token)
+    entry = persist.ledger.append(actor="reviewer", action="write", target="done")
+    assert entry.target == "done"
+    persist.close()
+
+
+def test_hashchain_append_keeps_fence_in_immediate_txn() -> None:
+    """Fails if the hash-chain rework (BEGIN IMMEDIATE + conn= fence) is reverted."""
+
+    import inspect
+
+    from recertia.ledger.hashchain import HashChainLedger
+
+    source = inspect.getsource(HashChainLedger._append_fenced)
+    assert "BEGIN IMMEDIATE" in source
+    assert "conn=conn" in source or "conn = conn" in source
+    assert "require_lease_token" in source
+    assert source.index("BEGIN IMMEDIATE") < source.index("require_lease_token")
+    assert source.index("require_lease_token") < source.index("_append_locked")
 
 
 def test_tokenless_held_run_writes_rejected(tmp_path: Path) -> None:

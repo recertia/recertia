@@ -67,10 +67,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token inside the same `BEGIN IMMEDIATE` as the `INSERT` (ATTACH when
   `runtime.db` is a second file). A missing lease database fails closed.
   Hash-chain appends that target a held `run_id` require a matching token;
-  skill-id targets with no lease row still append. A released or stolen run
-  is fail-closed against the highest fencing token ever issued (token-less
-  writes included). The ledger compare runs in the same `BEGIN IMMEDIATE`
-  as the JSONL append.
+  skill-id targets with no lease row still append. A **held** run is
+  fail-closed (token-less writes included). After a clean release
+  (`status='released'`, `incarnation == 1`) token-less ledger writes are
+  allowed so reviewers / MEA can append; the released holder's own token
+  is dead and is always rejected. A stolen-then-released run
+  (`incarnation > 1`) stays fail-closed. The ledger compare runs in the
+  same `BEGIN IMMEDIATE` as the JSONL append.
 - **REL-3 run_leases** — `RunLease` records a row in `runtime.db`. A crash that
   leaves a HELD row on the same lock inode is a resume (incarnation stays,
   fencing token advances) so finished operations are not re-run. A clean

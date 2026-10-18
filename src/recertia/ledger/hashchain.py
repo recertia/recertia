@@ -212,8 +212,8 @@ class HashChainLedger:
 
         ``BEGIN IMMEDIATE`` on the lease database serializes with steal, so the
         token compare cannot race the JSONL write. Skill-id targets still use
-        ``missing_row='allow'`` (no row). A released row is fail-closed against
-        the highest token ever issued.
+        ``missing_row='allow'`` (no row). A released holder's token is dead;
+        token-less appends after a clean (never-stolen) release are allowed.
         """
 
         from recertia.persistence.db import open_db
