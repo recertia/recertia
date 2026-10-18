@@ -24,21 +24,17 @@ def require_lease_token(
     Fail closed (``missing_row='reject'``): a missing database, missing
     ``run_leases`` table, missing row, or mismatched/absent token all raise.
     ``missing_row='allow'`` is for hash-chain appends whose ``target`` may be a
-    skill id, and for token-less writes of runs that were never leased.
+    skill id, and for token-less writes of runs that were **never leased**.
 
-    Token-less writes to a **released** run (the post-completion rule):
+    Token-less writes are allowed only when there is no ``run_leases`` row
+    (never leased) and ``missing_row='allow'``. A **released** run is not
+    never-leased:
 
     * Never-leased (no row): allowed when ``missing_row='allow'``.
-    * ``status='held'``: rejected (a live owner exists).
-    * ``status='released'`` and ``incarnation == 1`` (clean completion, never
-      stolen): allowed when ``missing_row='allow'`` so reviewers / MEA can
-      append after the holder released.
-    * ``status='released'`` and ``incarnation > 1`` (stolen, then released):
-      rejected. A stolen run stays fail-closed.
-
-    An explicit token on a **released** row is always rejected, including the
-    released holder's own last token. That token is dead; a later acquire
-    issues a new one.
+    * ``status='held'``: rejected unless the caller's token matches.
+    * ``status='released'``: always rejected, token-less included. Completing
+      a run does not reopen token-less writes. The holder's last token is
+      dead; a later acquire issues a new one.
 
     When ``conn`` is supplied the check runs on that connection so it can share
     a ``BEGIN IMMEDIATE`` with a write. Attached ``lease`` schemas are searched
@@ -98,19 +94,13 @@ def require_lease_token(
         _reject()
     stored_token = int(row[0])
     status = str(row[1] or "held")
-    incarnation = int(row[2] or 1) if len(row) > 2 else 1
     if status == "held":
         if fencing_token is None or int(fencing_token) != stored_token:
             _reject()
         return
-    # Released: the holder's last token is dead. Token-less is allowed only
-    # after a clean (never-stolen) completion when missing_row='allow'.
-    if fencing_token is not None:
-        _reject()
-    if incarnation > 1:
-        _reject()
-    if missing_row != "allow":
-        _reject()
+    # Released: never-leased is the only token-less path. A released row is
+    # not never-leased, and the holder's last token is dead.
+    _reject()
 
 
 def lease_paths_equal(left: Path, right: Path) -> bool:
