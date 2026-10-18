@@ -28,10 +28,23 @@ def _thread_lock(key: str) -> threading.Lock:
 class RunLease:
     """Exclusive lease held for the duration of start or resume."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        db_path: Path | None = None,
+        tenant_id: str = "local",
+        run_id: str | None = None,
+        owner_id: str | None = None,
+    ) -> None:
         self.path = path
         self.token: int | None = None
         self.incarnation: int = 1
+        # Accepted for stacked REL-3 PRs; file-lock acquire still keeps incarnation at 1.
+        self._db_path = Path(db_path) if db_path is not None else None
+        self._tenant_id = tenant_id
+        self._run_id = run_id
+        self._owner_id = owner_id or f"pid:{os.getpid()}"
         self._fd: int | None = None
         self._held = False
         self._thread = _thread_lock(str(path))

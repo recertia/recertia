@@ -63,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **REL-3 incarnation** — operation identity includes `incarnation`. Legacy
   `operations.db` files are rebuilt onto the new primary key on open. The
+  rebuild is one SQLite transaction under the runs-root lock and is resumable
+  if `operations_rel3` was left behind by a crash. Duplicate `put()` raises
+  `OperationConflict` rather than `INSERT OR REPLACE`, so a recorded result
+  cannot be silently overwritten (`run_once` is the idempotent path). The
   file-lock `RunLease` keeps incarnation at 1 so resume after a clean close
   still replays ops; steal bumps wait on `run_leases` rows.
 - **ARCH-5 PR-5.5 AppState and CLI exits** — `ConsoleContext` is gone. `create_app`
