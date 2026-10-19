@@ -11,6 +11,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Literal
 
 from contracts.run import RunState
 from recertia.persistence.db import open_db
@@ -41,8 +42,18 @@ class EvalOutboxPending:
 class CheckpointStore:
     """SQLite-backed: one row per ``(run_id, seq)``, monotonically increasing per run."""
 
-    def __init__(self, db_path: Path | str) -> None:
+    def __init__(
+        self,
+        db_path: Path | str,
+        *,
+        lease_db: Path | str | None = None,
+        tenant_id: str = "local",
+        read_fallback: Path | str | None = None,
+    ) -> None:
         self._db_path = Path(db_path)
+        self._lease_db = Path(lease_db) if lease_db is not None else None
+        self._read_fallback = Path(read_fallback) if read_fallback is not None else None
+        self._tenant_id = tenant_id
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._conn = open_db(self._db_path)
@@ -108,7 +119,46 @@ class CheckpointStore:
         eval_outbox: EvalOutboxWrite | None = None,
     ) -> None:
         with self._lock:
+            lease_db = self._lease_db
+            fenced = lease_db is not None
+            missing_row: Literal["reject", "allow"] = (
+                "allow" if fencing_token is None else "reject"
+            )
+            if fenced:
+                from recertia.graph.lease import (
+                    attach_lease_schema,
+                    lease_paths_equal,
+                    require_lease_token,
+                )
+
+                assert lease_db is not None
+                # First check is load-bearing: callers (and the REL-3 probe) may
+                # steal the row after this returns. The write transaction re-checks.
+                # Token-less writes still fence: a held or released run_id must
+                # not skip the compare (89-B).
+                require_lease_token(
+                    lease_db,
+                    tenant_id=self._tenant_id,
+                    run_id=run_id,
+                    fencing_token=fencing_token,
+                    missing_row=missing_row,
+                )
+                if lease_db.exists() and not lease_paths_equal(lease_db, self._db_path):
+                    attach_lease_schema(self._conn, lease_db)
+                self._begin_immediate()
             try:
+                if fenced:
+                    from recertia.graph.lease import require_lease_token
+
+                    assert lease_db is not None
+                    require_lease_token(
+                        lease_db,
+                        tenant_id=self._tenant_id,
+                        run_id=run_id,
+                        fencing_token=fencing_token,
+                        conn=self._conn,
+                        missing_row=missing_row,
+                    )
                 self._conn.execute(
                     "INSERT INTO checkpoints ("
                     "run_id, seq, node, next_node, state_json, created_at, fencing_token"
@@ -139,6 +189,16 @@ class CheckpointStore:
                 raise CheckpointConflict(
                     f"checkpoint ({run_id!r}, seq={seq}) already exists"
                 ) from exc
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def _begin_immediate(self) -> None:
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError:
+            self._conn.rollback()
+            self._conn.execute("BEGIN IMMEDIATE")
 
     def _upsert_summary(self, state: RunState) -> None:
         terminal = str(state.terminal) if state.terminal else None
@@ -240,10 +300,18 @@ class CheckpointStore:
                 "WHERE run_id=? ORDER BY seq DESC LIMIT 1",
                 (run_id,),
             ).fetchone()
-        if row is None:
-            return None
-        seq, node, next_node, state_json = row
-        return seq, node, next_node, RunState.model_validate_json(state_json)
+        primary = None if row is None else (
+            int(row[0]),
+            str(row[1]),
+            None if row[2] is None else str(row[2]),
+            RunState.model_validate_json(row[3]),
+        )
+        fallback = self._fallback_latest(run_id)
+        if fallback is None:
+            return primary
+        if primary is None or fallback[0] > primary[0]:
+            return fallback
+        return primary
 
     def latest_seq(self, run_id: str) -> int | None:
         """Latest checkpoint ``seq`` for ``run_id`` without parsing the state payload."""
@@ -253,7 +321,13 @@ class CheckpointStore:
                 "SELECT seq FROM checkpoints WHERE run_id=? ORDER BY seq DESC LIMIT 1",
                 (run_id,),
             ).fetchone()
-        return int(row[0]) if row is not None else None
+        primary = int(row[0]) if row is not None else None
+        fallback = self._fallback_latest_seq(run_id)
+        if primary is None:
+            return fallback
+        if fallback is None:
+            return primary
+        return max(primary, fallback)
 
     def history(self, run_id: str) -> list[tuple[int, str, str | None, RunState]]:
         with self._lock:
@@ -262,14 +336,93 @@ class CheckpointStore:
                 "WHERE run_id=? ORDER BY seq ASC",
                 (run_id,),
             ).fetchall()
-        return [(seq, node, next_node, RunState.model_validate_json(sj)) for seq, node, next_node, sj in rows]
+        by_seq = {
+            int(seq): (
+                int(seq),
+                str(node),
+                None if next_node is None else str(next_node),
+                RunState.model_validate_json(sj),
+            )
+            for seq, node, next_node, sj in rows
+        }
+        for item in self._fallback_history(run_id):
+            by_seq.setdefault(item[0], item)
+        return [by_seq[seq] for seq in sorted(by_seq)]
 
     def list_run_ids(self) -> list[str]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT DISTINCT run_id FROM checkpoints ORDER BY run_id"
             ).fetchall()
-        return [r[0] for r in rows]
+        ids = {str(r[0]) for r in rows}
+        ids.update(self._fallback_run_ids())
+        return sorted(ids)
+
+    def _fallback_latest_seq(self, run_id: str) -> int | None:
+        row = self._fallback_query(
+            "SELECT seq FROM checkpoints WHERE run_id=? ORDER BY seq DESC LIMIT 1",
+            (run_id,),
+        )
+        return int(row[0]) if row is not None else None
+
+    def _fallback_latest(self, run_id: str) -> tuple[int, str, str | None, RunState] | None:
+        row = self._fallback_query(
+            "SELECT seq, node, next_node, state_json FROM checkpoints "
+            "WHERE run_id=? ORDER BY seq DESC LIMIT 1",
+            (run_id,),
+        )
+        if row is None:
+            return None
+        return (
+            int(row[0]),
+            str(row[1]),
+            None if row[2] is None else str(row[2]),
+            RunState.model_validate_json(row[3]),
+        )
+
+    def _fallback_history(self, run_id: str) -> list[tuple[int, str, str | None, RunState]]:
+        rows = self._fallback_query_all(
+            "SELECT seq, node, next_node, state_json FROM checkpoints "
+            "WHERE run_id=? ORDER BY seq ASC",
+            (run_id,),
+        )
+        return [
+            (
+                int(seq),
+                str(node),
+                None if next_node is None else str(next_node),
+                RunState.model_validate_json(sj),
+            )
+            for seq, node, next_node, sj in rows
+        ]
+
+    def _fallback_run_ids(self) -> set[str]:
+        rows = self._fallback_query_all("SELECT DISTINCT run_id FROM checkpoints")
+        return {str(row[0]) for row in rows}
+
+    def _fallback_query(self, sql: str, params: tuple[object, ...] = ()) -> tuple[Any, ...] | None:
+        rows = self._fallback_query_all(sql, params)
+        return rows[0] if rows else None
+
+    def _fallback_query_all(
+        self, sql: str, params: tuple[object, ...] = ()
+    ) -> list[tuple[Any, ...]]:
+        path = self._read_fallback
+        if path is None or not path.is_file():
+            return []
+        try:
+            conn = sqlite3.connect(
+                f"file:{path.resolve().as_posix().replace('?', '%3F')}?mode=ro",
+                uri=True,
+            )
+        except sqlite3.Error:
+            return []
+        try:
+            return list(conn.execute(sql, params))
+        except sqlite3.Error:
+            return []
+        finally:
+            conn.close()
 
     def list_summaries(
         self,

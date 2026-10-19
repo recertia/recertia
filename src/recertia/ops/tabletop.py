@@ -11,6 +11,7 @@ from recertia.graph.store import CheckpointStore
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.ledger import HashChainLedger, LedgerVerificationError
 from recertia.ops.backup import BackupError, restore_tree
+from recertia.persistence.import_legacy import live_checkpoint_db
 from recertia.solver.transcript import TranscriptStore
 
 
@@ -76,8 +77,8 @@ def inspect_run(run_id: str, *, runs_root: Path, tenant: str = "default") -> dic
 
     state = None
     for orch_root in _orchestrator_roots(runs_root, tenant):
-        db = orch_root / "checkpoints.db"
-        if not db.is_file():
+        db = live_checkpoint_db(orch_root)
+        if db is None:
             continue
         store = CheckpointStore(db)
         try:

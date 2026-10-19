@@ -1,4 +1,9 @@
-"""Lease token stub for REL-3 fencing. Full ``RunLease`` lives in a later slice."""
+"""Lease token for REL-3 fencing.
+
+``run_leases`` persists incarnation and the fencing-token high-water mark.
+Crash-resume on the same lock inode keeps incarnation; a steal after TTL
+plus a new inode bumps it.
+"""
 
 from __future__ import annotations
 

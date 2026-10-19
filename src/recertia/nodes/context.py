@@ -39,6 +39,7 @@ class OperationRunner(Protocol):
         fn: Callable[[], T],
         *,
         fencing_token: int | None = None,
+        incarnation: int = 1,
     ) -> T: ...
 
 
@@ -185,6 +186,7 @@ class NodeContext:
     # API ceiling applied after compile_goal. None keeps the contract maximum.
     max_criterion_timeout_s: int | None = None
     fencing_token: int | None = None
+    incarnation: int = 1
 
     def op_once(self, op_seq: int, fn: Callable[[], T]) -> T:
         return self.ops.run_once(
@@ -194,4 +196,5 @@ class NodeContext:
             op_seq,
             fn,
             fencing_token=self.fencing_token,
+            incarnation=self.incarnation,
         )

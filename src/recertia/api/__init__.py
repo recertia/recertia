@@ -47,7 +47,6 @@ from recertia.api.schemas import RunRecord
 from recertia.bootstrap import build_default_orchestrator as build_default_orchestrator
 from recertia.config import ModelConfig
 from recertia.graph.engine import GraphOrchestrator
-from recertia.graph.store import CheckpointStore
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.paths import HostRootError, looks_absolute, resolve_under_host_root
 from recertia.store.blobs import FilesystemBlobStore
@@ -134,14 +133,10 @@ def _validate_run_id(run_id: str) -> str:
 def _tenant_has_checkpoints(root: Path, tenant_id: str, run_id: str) -> bool:
     """True when durable checkpoints already exist for this tenant's run id."""
 
-    db = root / "runs" / tenant_id / "checkpoints.db"
-    if not db.is_file():
-        return False
-    store = CheckpointStore(db)
-    try:
-        return store.latest_seq(run_id) is not None
-    finally:
-        store.close()
+    from recertia.persistence.import_legacy import checkpoint_db_candidates, checkpoint_has_run
+
+    tenant_root = root / "runs" / tenant_id
+    return any(checkpoint_has_run(db, run_id) for db in checkpoint_db_candidates(tenant_root))
 
 
 def _clamp_criteria_for_api(criteria: list[TaskCriterion]) -> list[TaskCriterion]:
@@ -366,9 +361,12 @@ def create_app(
     os.umask(0o077)
     root = root or DEFAULT_ROOT
     root.mkdir(parents=True, exist_ok=True)
+    from recertia.persistence.layout import RuntimeLayout
     from recertia.persistence.root_lock import RootLock
 
-    root_lock = RootLock(root / ".lock")
+    # Presence lock is api.lock, not root/.lock, so leftover import can take
+    # exclusive root/.lock while the API process is up (probe N).
+    root_lock = RootLock(RuntimeLayout(root).api_lock)
     root_lock.acquire_shared()
     from recertia.persistence.migrate_run_events import migrate_run_events
 

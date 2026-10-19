@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -130,9 +132,14 @@ class HashChainLedger:
         durability: str | Durability | None = None,
         hook: LedgerHook | None = None,
         lock_timeout_s: float | None = None,
+        lease_db: Path | str | None = None,
+        tenant_id: str = "local",
     ) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._lease_db = Path(lease_db) if lease_db is not None else None
+        self._tenant_id = tenant_id
+        self._default_fencing_token: Callable[[], int | None] | None = None
         self._hook = hook
         self._tip: tuple[int, str] | None = None
         self.lines_parsed = 0
@@ -170,17 +177,89 @@ class HashChainLedger:
         target: str,
         evidence: dict | None = None,
         at: datetime | None = None,
+        fencing_token: int | None = None,
     ) -> LedgerEntry:
         """Append one entry. Returns the entry as written, with ``seq`` and hashes filled in."""
 
+        if fencing_token is None and self._default_fencing_token is not None:
+            fencing_token = self._default_fencing_token()
         with self._held():
-            return self._append_locked(
+            return self._append_fenced(
                 actor=actor,
                 action=action,
                 target=target,
                 evidence=evidence,
                 at=at,
+                fencing_token=fencing_token,
             )
+
+    def set_default_fencing_token(self, getter: Callable[[], int | None] | None) -> None:
+        """Use the current run's token when ``append`` is not given one (engine path)."""
+
+        self._default_fencing_token = getter
+
+    def _append_fenced(
+        self,
+        *,
+        actor: str,
+        action: LedgerAction,
+        target: str,
+        evidence: dict | None,
+        at: datetime | None,
+        fencing_token: int | None,
+    ) -> LedgerEntry:
+        """Fence against ``run_leases`` in the same critical section as the append.
+
+        ``BEGIN IMMEDIATE`` on the lease database serializes with steal, so the
+        token compare cannot race the JSONL write. Skill-id targets still use
+        ``missing_row='allow'`` (no row). Token-less appends are allowed only
+        for a never-leased target. A released run rejects token-less appends
+        and the holder's last token.
+        """
+
+        from recertia.persistence.db import open_db
+        from recertia.persistence.fence import require_lease_token
+
+        lease_db = self._lease_db if self._lease_db is not None else self._path.parent / "runtime.db"
+        if not Path(lease_db).exists():
+            require_lease_token(
+                lease_db,
+                tenant_id=self._tenant_id,
+                run_id=target,
+                fencing_token=fencing_token,
+                missing_row="allow",
+            )
+            return self._append_locked(
+                actor=actor, action=action, target=target, evidence=evidence, at=at
+            )
+        conn = open_db(lease_db)
+        try:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError:
+                conn.rollback()
+                conn.execute("BEGIN IMMEDIATE")
+            require_lease_token(
+                lease_db,
+                tenant_id=self._tenant_id,
+                run_id=target,
+                fencing_token=fencing_token,
+                conn=conn,
+                missing_row="allow",
+            )
+            entry = self._append_locked(
+                actor=actor, action=action, target=target, evidence=evidence, at=at
+            )
+            conn.commit()
+            return entry
+        except Exception:
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            conn.close()
 
     def _append_locked(
         self,

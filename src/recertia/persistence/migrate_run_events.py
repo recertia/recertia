@@ -5,11 +5,10 @@ A second call is a no-op once every legacy file has been moved or quarantined.
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from recertia.persistence.db import open_db
+from recertia.persistence.import_legacy import checkpoint_db_candidates, checkpoint_has_run
 
 
 @dataclass(frozen=True)
@@ -67,26 +66,9 @@ def _owners(root: Path, run_id: str) -> list[str]:
         if (tenant_dir / run_id / "workdir.json").is_file():
             found.append(tenant_dir.name)
             continue
-        db = tenant_dir / "checkpoints.db"
-        if db.is_file() and _checkpoint_has_run(db, run_id):
+        if any(checkpoint_has_run(db, run_id) for db in checkpoint_db_candidates(tenant_dir)):
             found.append(tenant_dir.name)
     return found
-
-
-def _checkpoint_has_run(db: Path, run_id: str) -> bool:
-    try:
-        conn = open_db(db)
-    except sqlite3.Error:
-        return False
-    try:
-        row = conn.execute(
-            "SELECT 1 FROM checkpoints WHERE run_id = ? LIMIT 1", (run_id,)
-        ).fetchone()
-    except sqlite3.Error:
-        return False
-    finally:
-        conn.close()
-    return row is not None
 
 
 def _place(src: Path, dest: Path) -> bool:

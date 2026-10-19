@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 import time
 from pathlib import Path
 
 import pytest
 
-from recertia.graph.ops import _PENDING_SENTINEL, OperationLedger
+from recertia.graph.ops import _PENDING_SENTINEL, OperationConflict, OperationLedger
+from recertia.persistence.root_lock import RootLock
 
 
 def test_run_once_executes_exactly_once_across_calls(tmp_path: Path) -> None:
@@ -187,3 +189,161 @@ def test_live_owner_pending_not_reclaimed_after_legacy_timeout(tmp_path: Path) -
     assert not errors
     assert calls == ["A"]
     assert results == [{"owner": "A"}, {"owner": "A"}]
+
+
+def test_legacy_operations_table_gains_incarnation_pk(tmp_path: Path) -> None:
+    db = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """
+        CREATE TABLE operations (
+            run_id TEXT NOT NULL,
+            attempt_no INTEGER NOT NULL,
+            node TEXT NOT NULL,
+            op_seq INTEGER NOT NULL,
+            result_json TEXT NOT NULL,
+            PRIMARY KEY (run_id, attempt_no, node, op_seq)
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO operations VALUES ('run-1', 1, 'solve', 0, '{\"ok\": true}')"
+    )
+    conn.commit()
+    conn.close()
+
+    ops = OperationLedger(db)
+    applied, stored = ops.get("run-1", 1, "solve", 0, incarnation=1)
+    assert applied is True
+    assert stored == {"ok": True}
+    replay = ops.run_once("run-1", 1, "solve", 0, lambda: {"ok": False}, incarnation=1)
+    assert replay == {"ok": True}
+
+
+def test_new_incarnation_does_not_replay_prior_owner_ops(tmp_path: Path) -> None:
+    """A stolen lease bumps incarnation, so the new owner does not reuse old op rows."""
+
+    ops = OperationLedger(tmp_path / "ops.db")
+    first = ops.run_once(
+        "run-1", 1, "solve", 0, lambda: {"owner": "A"}, incarnation=1
+    )
+    calls: list[str] = []
+
+    def owner_b() -> dict:
+        calls.append("B")
+        return {"owner": "B"}
+
+    second = ops.run_once("run-1", 1, "solve", 0, owner_b, incarnation=2)
+    assert first == {"owner": "A"}
+    assert second == {"owner": "B"}
+    assert calls == ["B"]
+    applied, stored = ops.get("run-1", 1, "solve", 0, incarnation=1)
+    assert applied is True
+    assert stored == {"owner": "A"}
+
+
+def test_duplicate_put_raises_and_does_not_overwrite(tmp_path: Path) -> None:
+    """put() is write-once. Overwrite would hide a double-applied side effect."""
+
+    ops = OperationLedger(tmp_path / "ops.db")
+    ops.put("run-1", 1, "solve", 0, {"value": 1})
+    with pytest.raises(OperationConflict, match="already exists"):
+        ops.put("run-1", 1, "solve", 0, {"value": 2})
+    applied, stored = ops.get("run-1", 1, "solve", 0)
+    assert applied is True
+    assert stored == {"value": 1}
+
+
+def test_ops_rebuild_resumable_after_operations_rel3_exists(tmp_path: Path) -> None:
+    """Crash after CREATE operations_rel3 must not fail every later open."""
+
+    db = tmp_path / "operations.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """
+        CREATE TABLE operations (
+            run_id TEXT NOT NULL,
+            attempt_no INTEGER NOT NULL,
+            node TEXT NOT NULL,
+            op_seq INTEGER NOT NULL,
+            result_json TEXT NOT NULL,
+            PRIMARY KEY (run_id, attempt_no, node, op_seq)
+        )
+        """
+    )
+    conn.execute("INSERT INTO operations VALUES ('old', 1, 'n', 0, '{\"v\": 1}')")
+    conn.commit()
+    from recertia.graph import ops as ops_mod
+
+    conn.execute(ops_mod._OPERATIONS_DDL.replace("operations", "operations_rel3", 1))
+    conn.commit()
+    conn.close()
+
+    ops = OperationLedger(db)
+    applied, stored = ops.get("old", 1, "n", 0)
+    assert applied is True
+    assert stored == {"v": 1}
+    leftover = sqlite3.connect(db).execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='operations_rel3'"
+    ).fetchone()
+    assert leftover is None
+
+
+def test_ops_rebuild_resumable_after_drop_before_rename(tmp_path: Path) -> None:
+    db = tmp_path / "operations.db"
+    conn = sqlite3.connect(db)
+    from recertia.graph import ops as ops_mod
+
+    conn.execute(ops_mod._OPERATIONS_DDL.replace("operations", "operations_rel3", 1))
+    conn.execute(
+        "INSERT INTO operations_rel3 "
+        "(run_id, incarnation, attempt_no, node, op_seq, result_json) "
+        "VALUES ('old', 1, 1, 'n', 0, '{\"v\": 2}')"
+    )
+    conn.commit()
+    conn.close()
+
+    ops = OperationLedger(db)
+    applied, stored = ops.get("old", 1, "n", 0)
+    assert applied is True
+    assert stored == {"v": 2}
+
+
+def test_ops_rebuild_waits_for_root_lock(tmp_path: Path) -> None:
+    db = tmp_path / "operations.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """
+        CREATE TABLE operations (
+            run_id TEXT NOT NULL,
+            attempt_no INTEGER NOT NULL,
+            node TEXT NOT NULL,
+            op_seq INTEGER NOT NULL,
+            result_json TEXT NOT NULL,
+            PRIMARY KEY (run_id, attempt_no, node, op_seq)
+        )
+        """
+    )
+    conn.execute("INSERT INTO operations VALUES ('old', 1, 'n', 0, '{\"v\": 1}')")
+    conn.commit()
+    conn.close()
+
+    lock = RootLock(tmp_path / ".lock")
+    lock.try_exclusive()
+    done = threading.Event()
+    errors: list[BaseException] = []
+
+    def opener() -> None:
+        try:
+            OperationLedger(db).close()
+            done.set()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    worker = threading.Thread(target=opener)
+    worker.start()
+    assert not done.wait(0.4)
+    lock.release()
+    assert done.wait(2.0)
+    worker.join(timeout=2.0)
+    assert not errors

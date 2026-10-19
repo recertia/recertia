@@ -114,6 +114,7 @@ class GraphOrchestrator:
         self.checkpoints = self.persistence.checkpoints
         self.ops = self.persistence.operations
         self.ledger = self.persistence.ledger
+        self.ledger.set_default_fencing_token(lambda: self._fencing_token)
         self.workspaces = self.persistence.workspaces
         self.retriever = retriever
         self.store = store
@@ -139,6 +140,7 @@ class GraphOrchestrator:
         self.capability_warn = capability_warn
         self.tenant_id = "local"
         self._fencing_token: int | None = None
+        self._incarnation: int = 1
         self._lease: RunLease | None = None
         self._last_hop_ended: float | None = None
         self._offload_handles: dict[str, OffloadHandle] = {}
@@ -228,6 +230,7 @@ class GraphOrchestrator:
             reviewer=self.reviewer,
             one_off_log=self.one_off_log,
             fencing_token=self._fencing_token,
+            incarnation=self._incarnation,
             deterministic_guide=bool(
                 self.policy is not None and self.policy.improvement.deterministic_guide
             ),
@@ -287,14 +290,21 @@ class GraphOrchestrator:
         """Acquire the run flock for start/resume and release it on the way out."""
 
         safe = run_id.replace("/", "_").replace("..", "_")
-        lease = RunLease(self.runs_root / "locks" / f"{safe}.lock")
+        lease = RunLease(
+            self.runs_root / "locks" / f"{safe}.lock",
+            db_path=self.runs_root / "runtime.db",
+            tenant_id=self.tenant_id,
+            run_id=run_id,
+        )
         self._fencing_token = lease.acquire()
+        self._incarnation = lease.incarnation
         self._lease = lease
         try:
             yield
         finally:
             self._lease = None
             self._fencing_token = None
+            self._incarnation = 1
             lease.release()
 
     def start(

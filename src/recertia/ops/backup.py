@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from recertia.persistence.layout import RuntimeLayout
 from recertia.persistence.root_lock import RootLock, RootLockBusy
 
 MANIFEST_NAME = "MANIFEST.json"
@@ -71,7 +72,7 @@ def backup_tree(root: Path, archive: Path) -> Path:
         pass
     else:
         raise BackupError("archive path must not be inside the backup root")
-    lock = _exclusive_lock(source / ".lock", action="backup")
+    api_lock, lock = _exclusive_root_locks(source, action="backup")
     try:
         with tempfile.TemporaryDirectory() as tmp:
             snap_root = Path(tmp)
@@ -93,6 +94,7 @@ def backup_tree(root: Path, archive: Path) -> Path:
         return dest
     finally:
         lock.release()
+        api_lock.release()
 
 
 def restore_tree(archive: Path, dest: Path, *, overwrite: bool = False) -> Path:
@@ -105,7 +107,7 @@ def restore_tree(archive: Path, dest: Path, *, overwrite: bool = False) -> Path:
     if target.exists() and any(target.iterdir()) and not overwrite:
         raise BackupError(f"restore dest is not empty: {target} (pass overwrite=True)")
     target.mkdir(parents=True, exist_ok=True)
-    lock = _exclusive_lock(target / ".lock", action="restore")
+    api_lock, lock = _exclusive_root_locks(target, action="restore")
     try:
         with tarfile.open(src, "r:*") as tar:
             members: list[tarfile.TarInfo] = []
@@ -125,6 +127,7 @@ def restore_tree(archive: Path, dest: Path, *, overwrite: bool = False) -> Path:
         return target
     finally:
         lock.release()
+        api_lock.release()
 
 
 def verify_archive(archive: Path) -> dict[str, Any]:
@@ -180,6 +183,19 @@ def _exclusive_lock(path: Path, *, action: str) -> RootLock:
     except RootLockBusy as exc:
         raise BackupError(f"{action} refused: the API holds the root lock") from exc
     return lock
+
+
+def _exclusive_root_locks(root: Path, *, action: str) -> tuple[RootLock, RootLock]:
+    """Exclusive on ``api.lock`` (the API presence lock) then ``.lock`` (importers)."""
+
+    layout = RuntimeLayout(root)
+    api_lock = _exclusive_lock(layout.api_lock, action=action)
+    try:
+        root_lock = _exclusive_lock(layout.root_lock, action=action)
+    except Exception:
+        api_lock.release()
+        raise
+    return api_lock, root_lock
 
 
 def _add_file(tar: tarfile.TarFile, path: Path, arcname: str, entries: list[dict[str, Any]]) -> None:
