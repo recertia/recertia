@@ -1,7 +1,7 @@
 """R4 probes for 9b33b36's same-thread exclusive-holder exception. Each scenario uses a fresh root."""
 import sys, os, tempfile, sqlite3, threading, asyncio, traceback, subprocess
 from pathlib import Path
-from tests.probes.rel3_probe import state, record, RESULTS
+from tests.probes.rel3_probe import state, record, RESULTS, subprocess_exclusive
 from recertia.graph.persistence import open_run_persistence
 from recertia.persistence.root_lock import RootLock
 
@@ -25,32 +25,51 @@ def scen(f):
 
 def T1_same_thread_ops_double_run():
     root = Path(tempfile.mkdtemp()); eff = legacy(root, op=True)
-    lk = RootLock(root / ".lock"); lk.try_exclusive()          # e.g. importer/backup in this thread
+    holder = subprocess_exclusive(root / ".lock")          # importer/backup in a separate process
+    busy = tw(lambda: open_run_persistence(root))
+    holder.release()
     p = open_run_persistence(root)
-    p.operations.run_once("legacy-run", 1, "solve", 0, lambda: eff.append("same-thread-rerun") or {"v": 2}); p.close(); lk.release()
-    record("T1 same-thread holder: op done in legacy not re-executed", eff == ["legacy"], f"side effects={eff}")
+    p.operations.run_once("legacy-run", 1, "solve", 0, lambda: eff.append("same-thread-rerun") or {"v": 2}); p.close()
+    record("T1 same-thread holder: op done in legacy not re-executed", eff == ["legacy"], f"side effects={eff}; busy_open={busy}")
+    root2 = Path(tempfile.mkdtemp()); legacy(root2, op=True)
+    lk = RootLock(root2 / ".lock"); lk.try_exclusive()
+    r = tw(lambda: open_run_persistence(root2)); lk.release()
+    record("T1 same-thread open while holding exclusive is RootBusy", "Busy" in str(r), f"open={r}")
 
 def T2_same_thread_ghost_write():
     root = Path(tempfile.mkdtemp()); legacy(root)
-    lk = RootLock(root / ".lock"); lk.try_exclusive()
+    holder = subprocess_exclusive(root / ".lock")
+    busy = tw(lambda: open_run_persistence(root))
+    holder.release()
     p = open_run_persistence(root)
-    r = tw(lambda: p.checkpoints.save("legacy-run", 1, "GHOST", None, state("legacy-run"))); p.close(); lk.release()
+    r = tw(lambda: p.checkpoints.save("legacy-run", 1, "GHOST", None, state("legacy-run"))); p.close()
     h = hist(root)
     record("T2 same-thread holder: write at a seq that exists in leftover is rejected, nothing lost",
-           r != "ACCEPTED" and h == [(1, "n1"), (2, "n2"), (3, "n3")], f"save={r}; history after import={h}")
+           r != "ACCEPTED" and h == [(1, "n1"), (2, "n2"), (3, "n3")], f"save={r}; history after import={h}; busy_open={busy}")
+    root2 = Path(tempfile.mkdtemp()); legacy(root2)
+    lk = RootLock(root2 / ".lock"); lk.try_exclusive()
+    r2 = tw(lambda: open_run_persistence(root2)); lk.release()
+    record("T2 same-thread open while holding exclusive is RootBusy", "Busy" in str(r2), f"open={r2}")
 
 def T3_stale_holder_identity():
-    """Holder identity lives in the lock file text. A crashed holder (SIGKILL) leaves it behind;
-    a later process with the same pid/thread-ident (PID 1 in a container, pthread ident reuse) is
-    treated as the holder WITHOUT holding the flock."""
+    """Holder identity must not live in lock-file text. The helper is gone; leftover pid/tid
+    without the flock never grants holder status."""
+    try:
+        from recertia.persistence.root_lock import exclusive_held_by_this_thread
+        record("T3 exclusive_held_by_this_thread is absent from root_lock", False, "symbol still importable")
+    except (ImportError, AttributeError) as e:
+        record("T3 exclusive_held_by_this_thread is absent from root_lock", True, f"{type(e).__name__}: {e}")
     root = Path(tempfile.mkdtemp()); legacy(root)
     (root / ".lock").write_text(f"{os.getpid()} {threading.get_ident()}\n")   # leftover text, no flock held
-    from recertia.persistence.root_lock import exclusive_held_by_this_thread
-    spoof = exclusive_held_by_this_thread(root / ".lock")
+    granted = False
+    try:
+        lk = RootLock(root / ".lock"); lk.try_exclusive(); lk.release()
+    except Exception:
+        granted = True
     p = open_run_persistence(root); imported = not (root / "checkpoints.db").is_file() or _complete(root)
     p.checkpoints.save("legacy-run", 4, "n4", None, state("legacy-run")); p.close()
-    record("T3 identity text without the flock is not treated as holder", not spoof and imported,
-           f"exclusive_held_by_this_thread={spoof}; import ran={imported}")
+    record("T3 identity text without the flock is not treated as holder", not granted and imported,
+           f"leftover-text-grants-holder={granted}; import ran={imported}")
 
 def _complete(root):
     from recertia.persistence.import_legacy import legacy_import_complete

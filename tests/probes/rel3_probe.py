@@ -233,10 +233,16 @@ def scen_import_split_brain():
     # old-format state
     p0 = open_run_persistence(root, migrate="off"); p0.checkpoints.save("old-run", 1, "n", None, state("old-run")); p0.close()
     lock = subprocess_exclusive(root / ".lock")          # e.g. backup/another importer holds it
-    p2 = open_run_persistence(root)                                 # lock busy -> falls back to legacy files
+    p2 = None
+    try:
+        p2 = open_run_persistence(root)                             # exclusive held -> RootBusy (no overlay)
+    except Exception:
+        p2 = None
     lock.release()
-    p1 = open_run_persistence(root)                                 # imports + retires legacy files
-    p2.checkpoints.save("p2-run", 1, "n", None, state("p2-run"))    # p2 still writing legacy handle
+    if p2 is None:
+        p2 = open_run_persistence(root)                             # leftover still present after the busy window
+    p1 = open_run_persistence(root)
+    p2.checkpoints.save("p2-run", 1, "n", None, state("p2-run"))
     p2.close(); p1.close()
     p3 = open_run_persistence(root)
     ids = sorted(p3.checkpoints.list_run_ids()) if hasattr(p3.checkpoints, "list_run_ids") else None

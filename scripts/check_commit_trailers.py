@@ -2,8 +2,9 @@
 """Allow-list author, committer, and Co-authored-by emails on the PR range.
 
 Uses the pull-request base and head SHAs (``BASE`` / ``HEAD``), not GitHub's
-merge commit. Historical commits outside the allow-list fail this check;
-they are not rewritten here.
+merge commit. Every commit in ``BASE..HEAD`` is checked. The allow-list is the
+Cursor agent address and GitHub noreply suffixes only (built at runtime so this
+file does not contain a store-time email literal).
 """
 
 from __future__ import annotations
@@ -13,14 +14,10 @@ import re
 import subprocess
 import sys
 
-_ALLOWED_EXACT = frozenset(
-    {
-        "cursoragent@" + "cursor.com",
-        "robs@" + "gatech.edu",
-    }
-)
+_ALLOWED_EXACT = frozenset({"cursoragent@" + "cursor.com"})
 _ALLOWED_SUFFIX = "@users.noreply." + "github.com"
 _COAUTHOR = re.compile(r"^Co-authored-by:\s*.*<([^>]+)>\s*$", re.IGNORECASE)
+_EMAIL = re.compile(r"<([^>]+)>")
 
 
 def _allowed(email: str) -> bool:
@@ -62,11 +59,18 @@ def _emails_for(commit: str) -> list[tuple[str, str]]:
     if len(lines) > 1:
         rows.append(("committer", lines[1]))
     for line in lines[2:]:
-        match = _COAUTHOR.match(line.strip())
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = _COAUTHOR.match(stripped)
         if match:
             rows.append(("Co-authored-by", match.group(1)))
-        elif line.strip():
-            rows.append(("Co-authored-by", line.strip()))
+            continue
+        angle = _EMAIL.search(stripped)
+        if angle:
+            rows.append(("Co-authored-by", angle.group(1)))
+        else:
+            rows.append(("Co-authored-by", stripped))
     return rows
 
 

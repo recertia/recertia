@@ -26,6 +26,7 @@ os.environ.setdefault("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
 
 import ipaddress  # noqa: E402
 import socket  # noqa: E402
+import sys  # noqa: E402
 from typing import Any  # noqa: E402
 
 _LOOPBACK_NAMES = {"localhost", "localhost.localdomain", "ip6-localhost", ""}
@@ -102,6 +103,42 @@ def pytest_unconfigure(config: Any) -> None:
     setattr(socket.socket, "connect_ex", _REAL["connect_ex"])
     setattr(socket, "getaddrinfo", _REAL["getaddrinfo"])
     setattr(socket, "create_connection", _REAL["create_connection"])
+
+
+_REL3_GUARD_FILES = (
+    "tests/unit/graph/test_rel3_probe.py",
+    "tests/unit/graph/test_fenced_persistence.py",
+    "tests/unit/persistence/test_import_legacy.py",
+)
+_rel3_skip_xfail: list[str] = []
+
+
+def _rel3_guard_match(nodeid: str) -> bool:
+    normalized = nodeid.replace("\\", "/")
+    return any(path in normalized for path in _REL3_GUARD_FILES)
+
+
+def pytest_runtest_logreport(report: Any) -> None:
+    """Fail the session if a REL-3 probe or regression test skipped or xfailed."""
+
+    nodeid = getattr(report, "nodeid", "")
+    if not _rel3_guard_match(nodeid):
+        return
+    wasxfail = bool(getattr(report, "wasxfail", False))
+    if report.outcome == "skipped" or wasxfail:
+        kind = "xfail" if wasxfail else "skipped"
+        _rel3_skip_xfail.append(f"{kind}: {nodeid}")
+
+
+def pytest_sessionfinish(session: Any, exitstatus: int) -> None:
+    if not _rel3_skip_xfail:
+        return
+    seen = list(dict.fromkeys(_rel3_skip_xfail))
+    sys.stderr.write("REL-3 skip/xfail guard failed:\n")
+    for line in seen:
+        sys.stderr.write(f"  {line}\n")
+    if exitstatus == 0:
+        session.exitstatus = 1
 
 
 def pytest_runtest_setup(item: Any) -> None:

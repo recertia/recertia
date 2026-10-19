@@ -6,8 +6,9 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, fix/rel3-fix-forward]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   ci:
@@ -106,6 +107,9 @@ jobs:
             RANGE="$BASE..${{ github.sha }}"
           fi
           ./gitleaks git --redact --exit-code 1 --log-opts="$RANGE" .
+
+      - name: REL-3 probes and regressions must not skip or xfail
+        run: python3 scripts/check_rel3_not_skipped.py
 
       - name: Test suite (contracts, M0–M9, hardening, API, import boundary)
         run: pytest -v

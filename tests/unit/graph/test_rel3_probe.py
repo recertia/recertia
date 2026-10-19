@@ -1,7 +1,7 @@
 """Wire the REL-3 adversarial probe into pytest (one test per scenario).
 
-Scenarios that need code from a later stacked PR are skipped here and enabled
-on that PR. Probe assertions are not edited.
+Scenarios that need code from a later stacked PR stay behind skipif. Probe
+assertions are not edited. Unconditional skip of I/L/M/M2/T1/T2 is not allowed.
 """
 
 from __future__ import annotations
@@ -119,12 +119,6 @@ def test_probe_h_ops_rebuild_resumable_after_crash() -> None:
     _run(probe.scen_ops_rebuild_crash)
 
 
-@pytest.mark.skip(
-    reason=(
-        "R2 I expects leftover overlay while .lock is exclusive; "
-        "R3 O/M3/M4 require typed RootBusy or block-until-release"
-    ),
-)
 @pytest.mark.skipif(
     not _has_legacy_import(),
     reason="owned by REL-3 PR #90: open_run_persistence(migrate=) and leftover import",
@@ -181,12 +175,6 @@ def _assert_named(rows: list[tuple[str, bool, str]], name: str) -> None:
     assert not failed, "; ".join(f"{n}: {detail}" for n, detail in failed)
 
 
-@pytest.mark.skip(
-    reason=(
-        "R2 L expects leftover overlay while .lock is exclusive; "
-        "R3 O/M3/M4 require typed RootBusy or block-until-release"
-    ),
-)
 @pytest.mark.skipif(
     not _has_legacy_import(),
     reason="owned by REL-3 PR #90: open_run_persistence(migrate=) and leftover import",
@@ -195,12 +183,6 @@ def test_probe_l_legacy_visible_while_lock_busy() -> None:
     _assert_named(_busy_records(), "L legacy state visible while root lock busy")
 
 
-@pytest.mark.skip(
-    reason=(
-        "R2 M expects leftover overlay while .lock is exclusive; "
-        "R3 O/M3/M4 require typed RootBusy or block-until-release"
-    ),
-)
 @pytest.mark.skipif(
     not _has_legacy_import(),
     reason="owned by REL-3 PR #90: open_run_persistence(migrate=) and leftover import",
@@ -209,12 +191,6 @@ def test_probe_m_import_after_busy_keeps_state() -> None:
     _assert_named(_busy_records(), "M later import after busy-path write keeps all state")
 
 
-@pytest.mark.skip(
-    reason=(
-        "R2 M2 is recorded from the L/M overlay path; "
-        "R3 O/M3/M4 require typed RootBusy or block-until-release"
-    ),
-)
 @pytest.mark.skipif(
     not _has_legacy_import(),
     reason="owned by REL-3 PR #90: open_run_persistence(migrate=) and leftover import",
@@ -477,12 +453,6 @@ def _run_r4_named(fn, name: str) -> None:
     _assert_named(_r4_records(fn), name)
 
 
-@pytest.mark.skip(
-    reason=(
-        "T1/T2 need a same-thread overlay; 86c9969 dropped pid/tid identity "
-        "so a busy open is always RootBusy (T4/T5)"
-    ),
-)
 def test_probe_t1_same_thread_ops_not_rerun() -> None:
     _run_r4_named(
         probe_r4.T1_same_thread_ops_double_run,
@@ -490,16 +460,31 @@ def test_probe_t1_same_thread_ops_not_rerun() -> None:
     )
 
 
-@pytest.mark.skip(
-    reason=(
-        "T1/T2 need a same-thread overlay; 86c9969 dropped pid/tid identity "
-        "so a busy open is always RootBusy (T4/T5)"
-    ),
-)
+def test_probe_t1_same_thread_open_is_root_busy() -> None:
+    _run_r4_named(
+        probe_r4.T1_same_thread_ops_double_run,
+        "T1 same-thread open while holding exclusive is RootBusy",
+    )
+
+
 def test_probe_t2_same_thread_ghost_write_rejected() -> None:
     _run_r4_named(
         probe_r4.T2_same_thread_ghost_write,
         "T2 same-thread holder: write at a seq that exists in leftover is rejected, nothing lost",
+    )
+
+
+def test_probe_t2_same_thread_open_is_root_busy() -> None:
+    _run_r4_named(
+        probe_r4.T2_same_thread_ghost_write,
+        "T2 same-thread open while holding exclusive is RootBusy",
+    )
+
+
+def test_probe_t3_helper_absent_from_root_lock() -> None:
+    _run_r4_named(
+        probe_r4.T3_stale_holder_identity,
+        "T3 exclusive_held_by_this_thread is absent from root_lock",
     )
 
 
