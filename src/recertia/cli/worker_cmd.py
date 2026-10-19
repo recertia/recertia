@@ -17,7 +17,7 @@ def worker_cmd(
     once: bool = typer.Option(False, "--once", help="Claim and run at most one item, then exit."),
     concurrency: int = typer.Option(1, "--concurrency"),
 ) -> None:
-    """Execute queued runs. The default API path does not wait on this process."""
+    """Execute queued runs. The API thread never drives the orchestrator."""
 
     from recertia.errors import RecertiaError
     from recertia.settings import load_settings

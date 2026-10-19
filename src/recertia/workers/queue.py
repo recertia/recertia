@@ -1,7 +1,7 @@
 """SQLite ``run_queue`` with deficit-round-robin claim.
 
-Sync ``POST /v1/runs`` still executes on the request thread. This queue is what
-``recertia worker`` drains. ``RECERTIA_API_DEFAULT_ASYNC`` stays off.
+The API thread never runs the orchestrator. Create and resume enqueue here;
+sync callers wait on ``RunQueue.wait``. ``RECERTIA_API_DEFAULT_ASYNC`` stays off.
 """
 
 from __future__ import annotations
@@ -117,6 +117,41 @@ class RunQueue:
             except Exception:
                 self._conn.execute("ROLLBACK")
                 raise
+
+    def requeue(self, item: QueueItem) -> str:
+        """Enqueue, or reset a terminal row. ``busy`` means a live claim."""
+
+        tenant = str(tenant_id(item.tenant_id))
+        existing = self.get(tenant, item.run_id, kind=item.kind)
+        if existing is None:
+            self.enqueue(item)
+            return "enqueued"
+        if existing.status in {"claimed", "running"}:
+            return "busy"
+        if existing.status == "queued":
+            return "queued"
+        stamp = item.enqueued_at or _now()
+        due = item.not_before or stamp
+        with self._lock:
+            self._conn.execute(
+                """
+                UPDATE run_queue
+                SET status='queued', priority=?, enqueued_at=?, not_before=?,
+                    claimed_by=NULL, heartbeat_at=NULL, error_code=NULL,
+                    finished_at=NULL, payload_json=?, attempt=0
+                WHERE tenant_id=? AND run_id=? AND kind=?
+                """,
+                (
+                    item.priority,
+                    stamp,
+                    due,
+                    json.dumps(item.payload),
+                    tenant,
+                    item.run_id,
+                    item.kind,
+                ),
+            )
+        return "enqueued"
 
     def claim(self, worker_id: str, *, limit: int = 1) -> list[Claim]:
         claimed: list[Claim] = []
@@ -462,7 +497,7 @@ class RunQueue:
                 tenant_id, max_runs_per_day, max_cost_usd_per_day, max_in_flight,
                 max_queue_depth, max_sse_connections, max_model_spend_usd_per_day,
                 weekly_token_cap
-            ) VALUES (?, ?, ?, ?, 100, 32, ?, NULL)
+            ) VALUES (?, ?, ?, ?, ?, 32, ?, NULL)
             ON CONFLICT(tenant_id) DO NOTHING
             """,
             (
@@ -470,6 +505,7 @@ class RunQueue:
                 settings.tenant_max_runs_per_day,
                 settings.tenant_max_cost_usd_per_day,
                 settings.tenant_max_in_flight,
+                settings.tenant_max_queue_depth,
                 settings.tenant_max_cost_usd_per_day,
             ),
         )

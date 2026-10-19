@@ -27,6 +27,14 @@ def test_routes_delegate_create_and_resume() -> None:
     assert "orchestrator.resume" not in text
 
 
+def test_service_does_not_drive_orchestrator() -> None:
+    source = (
+        Path(__file__).resolve().parents[3] / "src" / "recertia" / "app" / "runs.py"
+    ).read_text(encoding="utf-8")
+    assert "orchestrator.start" not in source
+    assert "orchestrator.resume" not in source
+
+
 def test_service_admit_is_the_quota_call() -> None:
     seen: list[str] = []
 

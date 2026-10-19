@@ -6,6 +6,7 @@ refuses an unsafe ``multi_node`` configuration before any run is claimed.
 
 from __future__ import annotations
 
+import logging
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -22,6 +23,8 @@ from recertia.api.events import RunEventLog
 from recertia.bootstrap import build_default_orchestrator, resolve_task_class
 from recertia.config import ModelConfig
 from recertia.ports.identity import Principal
+
+_log = logging.getLogger("recertia.api")
 
 
 @dataclass
@@ -44,6 +47,9 @@ class AsyncRunRequest:
     model_config: ModelConfig | None = None
     max_criterion_timeout_s: int | None = None
     cancel_check: Callable[[], bool] | None = None
+    action: str = "start"
+    mode: str = "async"
+    count_usage: bool = True
 
 
 def dump_async_request(req: AsyncRunRequest) -> dict[str, Any]:
@@ -67,6 +73,9 @@ def dump_async_request(req: AsyncRunRequest) -> dict[str, Any]:
         "index_path": str(req.index_path),
         "model_config": asdict(req.model_config) if req.model_config is not None else None,
         "max_criterion_timeout_s": req.max_criterion_timeout_s,
+        "action": req.action,
+        "mode": req.mode,
+        "count_usage": req.count_usage,
     }
 
 
@@ -111,6 +120,9 @@ def load_async_request(payload: dict[str, Any]) -> AsyncRunRequest:
         max_criterion_timeout_s=payload.get("max_criterion_timeout_s")
         if isinstance(payload.get("max_criterion_timeout_s"), int)
         else None,
+        action=str(payload.get("action") or "start"),
+        mode=str(payload.get("mode") or "async"),
+        count_usage=bool(payload.get("count_usage", True)),
     )
 
 
@@ -119,7 +131,7 @@ class AsyncRunWorker:
         self,
         *,
         events: RunEventLog,
-        on_complete: Callable[[str, str, Any], None] | None = None,
+        on_complete: Callable[..., None] | None = None,
         on_failed: Callable[..., None] | None = None,
         max_workers: int = 2,
     ) -> None:
@@ -166,7 +178,7 @@ class AsyncRunWorker:
             req.tenant_id,
             req.run_id,
             "run.started",
-            {"task_class": req.task_class or "repo-chore", "mode": "async"},
+            {"task_class": req.task_class or "repo-chore", "mode": req.mode},
         )
         if self.is_cancelled(req.tenant_id, req.run_id) or self._cancel_flag(req):
             self.events.append(req.tenant_id, req.run_id, "run.cancelled", {"by": "operator"})
@@ -223,19 +235,27 @@ class AsyncRunWorker:
                 return "cancelled"
             from recertia.graph.engine import RunIdExistsError
             from recertia.graph.hooks import RunCancelled
+            from recertia.graph.lease import RunBusy
 
             try:
-                state = bundle.orchestrator.start(
-                    req.run_id,
-                    task,
-                    req.criteria,
-                    budget=req.budget,
-                    workdir=req.workdir,
-                    script=req.script,
-                    arm=req.arm,
-                    manifest=bundle.run_manifest(),
-                )
+                if req.action == "resume":
+                    state = bundle.orchestrator.resume(
+                        req.run_id, workdir=req.workdir, script=req.script
+                    )
+                else:
+                    state = bundle.orchestrator.start(
+                        req.run_id,
+                        task,
+                        req.criteria,
+                        budget=req.budget,
+                        workdir=req.workdir,
+                        script=req.script,
+                        arm=req.arm,
+                        manifest=bundle.run_manifest(),
+                    )
             except RunCancelled:
+                raise
+            except RunBusy:
                 raise
             except RunIdExistsError:
                 state = bundle.orchestrator.resume(
@@ -252,18 +272,32 @@ class AsyncRunWorker:
                 },
             )
             if self.on_complete is not None:
-                self.on_complete(req.tenant_id, req.run_id, state)
+                self.on_complete(
+                    req.tenant_id,
+                    req.run_id,
+                    state,
+                    mode=req.mode,
+                    count_usage=req.count_usage,
+                )
             return "succeeded"
         except RunCancelled:
             self.events.append(req.tenant_id, req.run_id, "run.cancelled", {"by": "operator"})
             self._fail(req, cancelled=True)
             return "cancelled"
         except Exception as exc:  # noqa: BLE001
+            from recertia.graph.lease import RunBusy
+
+            if isinstance(exc, RunBusy):
+                raise
+            _log.exception(
+                "create_run failed tenant_id=%s run_id=%s", req.tenant_id, req.run_id
+            )
+            del exc
             self.events.append(
                 req.tenant_id,
                 req.run_id,
                 "error",
-                {"code": "run_failed", "message": str(exc)[:500], "retryable": False},
+                {"code": "run_failed", "message": "internal server error", "retryable": False},
             )
             self.events.append(
                 req.tenant_id,

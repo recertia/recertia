@@ -53,6 +53,16 @@ class TrajectoryStore:
                 n += 1
         return n
 
+    def append_assigned(self, run_id: str, events: list[TrajectoryEvent]) -> None:
+        """Write events that already have ``seq`` assigned (SQLite is the source)."""
+
+        if not events:
+            return
+        path = self._path(run_id)
+        with path.open("a") as handle:
+            for event in events:
+                handle.write(event.model_dump_json() + "\n")
+
     def append_many(self, run_id: str, events: list[TrajectoryEvent]) -> list[TrajectoryEvent]:
         if not events:
             return []

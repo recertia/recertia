@@ -43,6 +43,7 @@ KNOWN_ENV_KEYS = frozenset(
         "RECERTIA_FAULTS",
         "RECERTIA_TENANT_ENCRYPTION",
         "RECERTIA_API_DEFAULT_ASYNC",
+        "RECERTIA_API_SYNC_WAIT_S",
         "RECERTIA_EXECUTION_BACKEND",
         "RECERTIA_CONTAINER_RUNTIME",
         "RECERTIA_CONTAINER_IMAGE",
@@ -97,6 +98,7 @@ KNOWN_ENV_KEYS = frozenset(
         "RECERTIA_TENANT_MAX_RUNS_PER_DAY",
         "RECERTIA_TENANT_MAX_COST_USD_PER_DAY",
         "RECERTIA_TENANT_MAX_IN_FLIGHT",
+        "RECERTIA_TENANT_MAX_QUEUE_DEPTH",
         "RECERTIA_TENANT_SKILLS",
         "RECERTIA_POLICY_PATH",
         "RECERTIA_POLICY_VERSION",
@@ -235,10 +237,10 @@ class Settings:
     allow_faults: bool = False
     faults: str = ""
     tenant_encryption: Literal["off", "required"] = "off"
-    # Stays false until one deprecation release. ``POST /v1/runs`` still runs
-    # on the request thread unless the body sets ``mode=async``. Enqueue-and-wait
-    # is not wired, so this flag must not become the production default.
+    # D4: this release stays at 0. Omitted ``mode`` waits on the queue. The
+    # following release flips the default so omitted ``mode`` returns 202.
     api_default_async: bool = False
+    api_sync_wait_s: float = 60.0
 
     execution_backend: ExecutionBackend = "container"
     execution_backend_was_set: bool = False
@@ -300,6 +302,7 @@ class Settings:
     tenant_max_runs_per_day: int = 100
     tenant_max_cost_usd_per_day: float = 50.0
     tenant_max_in_flight: int = 4
+    tenant_max_queue_depth: int = 100
     tenant_skills: bool = False
 
     policy_path: str = ""
@@ -477,6 +480,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         faults=_raw(env, "RECERTIA_FAULTS").strip(),
         tenant_encryption=_choice(env, "RECERTIA_TENANT_ENCRYPTION", {"off", "required"}, "off"),  # type: ignore[arg-type]
         api_default_async=_bool(env, "RECERTIA_API_DEFAULT_ASYNC"),
+        api_sync_wait_s=_float(env, "RECERTIA_API_SYNC_WAIT_S", 60.0),
         execution_backend=backend,  # type: ignore[arg-type]
         execution_backend_was_set=bool(env.get("RECERTIA_EXECUTION_BACKEND", "").strip()),
         container_runtime=runtime,
@@ -535,6 +539,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         tenant_max_runs_per_day=_int(env, "RECERTIA_TENANT_MAX_RUNS_PER_DAY", 100),
         tenant_max_cost_usd_per_day=_float(env, "RECERTIA_TENANT_MAX_COST_USD_PER_DAY", 50.0),
         tenant_max_in_flight=_int(env, "RECERTIA_TENANT_MAX_IN_FLIGHT", 4),
+        tenant_max_queue_depth=_int(env, "RECERTIA_TENANT_MAX_QUEUE_DEPTH", 100),
         tenant_skills=_bool(env, "RECERTIA_TENANT_SKILLS"),
         policy_path=_raw(env, "RECERTIA_POLICY_PATH").strip(),
         policy_version=_raw(env, "RECERTIA_POLICY_VERSION").strip(),

@@ -2114,7 +2114,7 @@ Plan: [`plans/remediation/README.md`](plans/remediation/README.md).
 Phase 0 hotfixes (#68) and Phase 1 foundations (#69) shipped. Remaining:
 
 - **Phase 2** — services, PDP action table, run ownership (ARCH-4/6, SEC-2/3/5/7/8/10, REL-3). Shipped: ARCH-5 PR-5.1–5.5 (`RunService`, `JobService`, `PromotionService` / `EvalService`, library/programs/workspaces/keys/ops, `AppState`, `cli/exit.py`); REL-3 incarnation, `run_leases`, fenced checkpoints/operations/hash-chain, and `rel3_runtime_db` (legacy `checkpoints.db` / `operations.db` import into `runtime.db`). Phase 2 engineering is closed.
-- **Phase 3** — durable `RunQueue`, outbox, ledger repair/signing
+- **Phase 3** — durable `RunQueue`, outbox, ledger repair/signing. In progress: REL-4 enqueue-and-wait (API thread never runs the orchestrator; inflight from `RunQueue`) and REL-5 `commit_hop` (checkpoint + trajectory + eval outbox in one transaction). REL-2 repair and SEC-6 HMAC signing remain on `main`. Remaining REL-5 work is affordance SQL increments, program `If-Match`, and generic outbox drain.
 - **Phase 4** — paging/SSE, `/ready`, backup/GC, Postgres+RLS, tenant lifecycle, executor service, secrets
 - **Phase 5** — supply-chain review, security-review automation, blocking guardrails
 

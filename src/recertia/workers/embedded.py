@@ -1,8 +1,7 @@
 """In-process drainer for the SQLite run queue.
 
-``POST /v1/runs`` with ``mode=sync`` does not use this. ``mode=async`` enqueues
-and starts the thread on the first queued item. ``AsyncRunWorker`` still runs
-the graph so existing completion callbacks keep working.
+Create and resume enqueue here. Sync callers wait on the queue row. The graph
+runs on this thread, not the API request thread.
 """
 
 from __future__ import annotations
@@ -75,8 +74,11 @@ class EmbeddedQueueWorker:
         req.cancel_check = lambda: self.queue.cancel_requested(claim.tenant_id, claim.run_id)
         try:
             outcome = self.worker._run(req)
-        except Exception:
-            self.queue.finish(claim, status="failed", error_code="run_failed")
+        except Exception as exc:
+            from recertia.graph.lease import RunBusy
+
+            code = "run_busy" if isinstance(exc, RunBusy) else "run_failed"
+            self.queue.finish(claim, status="failed", error_code=code)
             return
         if outcome == "cancelled":
             self.queue.finish(claim, status="cancelled")

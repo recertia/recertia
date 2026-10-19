@@ -103,7 +103,15 @@ class AppState:
     def tenant_runs_root(self, tenant_id: str) -> Path:
         return self.root / "runs" / tenant_id
 
-    def _on_async_complete(self, tenant_id: str, run_id: str, state: Any) -> None:
+    def _on_async_complete(
+        self,
+        tenant_id: str,
+        run_id: str,
+        state: Any,
+        *,
+        mode: str = "async",
+        count_usage: bool = True,
+    ) -> None:
         cost = float(state.spent.cost_usd or 0.0)
         existing = self.runs.get((tenant_id, run_id))
         rec = self.record_from_state(
@@ -115,9 +123,16 @@ class AppState:
             created_at=existing.created_at if existing else datetime.now(timezone.utc),
             has_goal=state.task.goal is not None,
         )
-        self.runs[(tenant_id, run_id)] = rec.model_copy(
-            update={"cost_usd": cost, "mode": "async"}
-        )
+        chosen_mode = existing.mode if existing is not None and existing.mode else mode
+        extras: dict[str, Any] = {"cost_usd": cost, "mode": chosen_mode}
+        if existing is not None:
+            if getattr(existing, "workspace_id", None):
+                extras["workspace_id"] = existing.workspace_id
+            if getattr(existing, "workdir", None):
+                extras["workdir"] = existing.workdir
+        self.runs[(tenant_id, run_id)] = rec.model_copy(update=extras)
+        if not count_usage:
+            return
         if self.run_service is not None:
             self.run_service.complete(tenant_id, cost_usd=cost)
         else:

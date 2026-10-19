@@ -57,6 +57,9 @@ def assemble_app_state(
     sessions = SessionStore(path=root / "console_sessions.sqlite")
     queue = open_run_queue(root)
     queue.reconcile_orphans()
+    bind = getattr(quota_store, "bind_queue", None)
+    if bind is not None:
+        bind(queue)
 
     def orchestrator_factory() -> Any:
         import recertia.api as api_mod

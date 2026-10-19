@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from contracts.run import RunState
+from contracts.trajectory import TrajectoryEvent
+from recertia.faults import FaultInjected, fault_point
 from recertia.persistence.db import open_db
 
 
@@ -102,6 +105,28 @@ class CheckpointStore:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trajectory_events (
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                hop_seq INTEGER NOT NULL,
+                event_json TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, run_id, seq)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trajectory_meta (
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                meta_json TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, run_id)
+            )
+            """
+        )
         self._conn.commit()
 
     def close(self) -> None:
@@ -117,7 +142,8 @@ class CheckpointStore:
         *,
         fencing_token: int | None = None,
         eval_outbox: EvalOutboxWrite | None = None,
-    ) -> None:
+        trajectory: Sequence[TrajectoryEvent] | None = None,
+    ) -> list[TrajectoryEvent]:
         with self._lock:
             lease_db = self._lease_db
             fenced = lease_db is not None
@@ -183,7 +209,14 @@ class CheckpointStore:
                             eval_outbox.payload_json,
                         ),
                     )
+                assigned = self._insert_trajectory(run_id, seq, trajectory)
+                fault_point("checkpoint.before_commit")
                 self._conn.commit()
+                fault_point("checkpoint.after_commit")
+                return assigned
+            except FaultInjected:
+                self._conn.rollback()
+                raise
             except sqlite3.IntegrityError as exc:
                 self._conn.rollback()
                 raise CheckpointConflict(
@@ -192,6 +225,34 @@ class CheckpointStore:
             except Exception:
                 self._conn.rollback()
                 raise
+
+    def _insert_trajectory(
+        self,
+        run_id: str,
+        hop_seq: int,
+        events: Sequence[TrajectoryEvent] | None,
+    ) -> list[TrajectoryEvent]:
+        if not events:
+            return []
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(seq), -1) FROM trajectory_events WHERE tenant_id=? AND run_id=?",
+            (self._tenant_id, run_id),
+        ).fetchone()
+        nxt = int(row[0]) + 1
+        assigned: list[TrajectoryEvent] = []
+        for event in events:
+            item = event.model_copy(update={"seq": nxt, "run_id": run_id})
+            self._conn.execute(
+                """
+                INSERT INTO trajectory_events (
+                    tenant_id, run_id, seq, hop_seq, event_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (self._tenant_id, run_id, nxt, hop_seq, item.model_dump_json()),
+            )
+            assigned.append(item)
+            nxt += 1
+        return assigned
 
     def _begin_immediate(self) -> None:
         try:

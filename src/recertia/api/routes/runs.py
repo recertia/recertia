@@ -102,9 +102,12 @@ def register_runs_routes(app: FastAPI, rs: RouteState) -> None:
     @app.post("/v1/runs/{run_id}/resume", response_model=None)
     def resume_run(run_id: str, principal: Principal = Depends(require_runs)) -> Any:
         try:
-            return run_service.resume(principal, run_id)
+            result = run_service.resume(principal, run_id)
         except Exception as exc:
             return _map_run_error(exc, run_id=run_id)
+        if isinstance(result, AcceptedRun):
+            return JSONResponse(status_code=result.status_code, content=result.body)
+        return result
 
     @app.get("/v1/runs")
     def list_runs(

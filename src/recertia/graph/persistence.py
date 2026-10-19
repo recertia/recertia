@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from contracts.run import RunState
+from contracts.trajectory import TrajectoryEvent
 from recertia.graph.lease import require_lease_token
 from recertia.graph.ops import OperationLedger, ensure_operations_schema
 from recertia.graph.store import CheckpointStore, EvalOutboxWrite
@@ -75,6 +77,7 @@ class FencedRunPersistence:
         *,
         fencing_token: int,
         eval_outbox: EvalOutboxWrite | None = None,
+        trajectory: Sequence[TrajectoryEvent] | None = None,
     ) -> None:
         require_lease_token(
             self.runtime_db,
@@ -90,6 +93,7 @@ class FencedRunPersistence:
             state,
             fencing_token=fencing_token,
             eval_outbox=eval_outbox,
+            trajectory=trajectory,
         )
 
     def close(self) -> None:

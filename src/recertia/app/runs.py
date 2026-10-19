@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,21 +13,17 @@ from uuid import uuid4
 
 from contracts.budget import Budget
 from contracts.criteria import TaskCriterion
-from contracts.run import Task
 from recertia.app.authz import Resource
-from recertia.errors import ConfigError, NotFound, RateLimited, RecertiaError
-from recertia.graph.engine import RunIdExistsError
+from recertia.errors import ConfigError, NotFound, RecertiaError
 from recertia.graph.lease import RunBusy
 from recertia.persistence.layout import RuntimeLayout
 from recertia.ports.identity import Principal
-from recertia.runtime.errors import LeaseLost, RunIdExists
+from recertia.runtime.errors import RunIdExists
 from recertia.runtime.registry import RunRegistry
 from recertia.runtime.workspace_lock import WorkspaceLock, WorkspaceLockHandle
 from recertia.solver.container import ensure_api_execution_ready
-from recertia.telemetry import get_telemetry
 
-_log = logging.getLogger("recertia.api")
-_WAIT_CAP_S = 30.0
+_WAIT_CAP_S = 60.0
 
 
 class RunQuota(Protocol):
@@ -118,9 +113,12 @@ def wait_seconds(
     wait: str | None,
     x_recertia_wait: str | None,
     prefer: str | None,
+    *,
+    cap_s: float = _WAIT_CAP_S,
 ) -> float | None:
     """Optional enqueue-and-wait budget. Absent means return 202 immediately."""
 
+    cap = cap_s if cap_s > 0 else _WAIT_CAP_S
     raw: str | None = None
     if wait is not None:
         raw = wait
@@ -131,7 +129,7 @@ def wait_seconds(
             token = part.strip()
             lowered = token.lower()
             if lowered == "wait":
-                return _WAIT_CAP_S
+                return cap
             if lowered.startswith("wait="):
                 raw = token.split("=", 1)[1].strip()
                 break
@@ -139,14 +137,14 @@ def wait_seconds(
         return None
     text = raw.strip()
     if text == "":
-        return _WAIT_CAP_S
+        return cap
     try:
         seconds = float(text)
     except ValueError as exc:
         raise ConfigError("wait must be seconds") from exc
     if seconds < 0:
         raise ConfigError("wait must be seconds")
-    return min(seconds, _WAIT_CAP_S)
+    return min(seconds, cap)
 
 
 class RunService:
@@ -272,7 +270,7 @@ class RunService:
         x_recertia_wait: str | None = None,
         prefer: str | None = None,
     ) -> Any:
-        """Admit, reserve, and start or enqueue. The HTTP route does not drive the engine."""
+        """Admit, reserve, and enqueue. The HTTP route does not drive the engine."""
 
         ctx = self._ctx()
         ensure_api_execution_ready()
@@ -325,121 +323,41 @@ class RunService:
             budget = Budget.model_validate(body.budget) if body.budget else Budget()
             approve_tools = ctx.principal_may_exec(principal)
 
-            if body.mode == "async":
-                handle = ws_handle
-                ws_handle = None
-                return self._create_async(
-                    principal,
-                    body,
-                    run_id=run_id,
-                    run_key=run_key,
-                    request=request,
-                    task_class=task_class,
-                    criteria=criteria,
-                    budget=budget,
-                    workdir=workdir,
-                    approve_tools=approve_tools,
-                    model_config=model_config,
-                    wait=wait,
-                    x_recertia_wait=x_recertia_wait,
-                    prefer=prefer,
-                    ws_handle=handle,
-                )
+            settings = getattr(ctx, "settings", None)
+            if settings is None:
+                from recertia.settings import load_settings
 
-            task = Task(
-                task_id=run_id,
-                goal=body.goal,
+                settings = load_settings()
+            mode = body.mode
+            if mode is None:
+                mode = "async" if settings.api_default_async else "sync"
+            handle = ws_handle
+            ws_handle = None
+            return self._enqueue_run(
+                principal,
+                body,
+                run_id=run_id,
+                run_key=run_key,
                 request=request,
                 task_class=task_class,
-                submitted_at=datetime.now(timezone.utc),
-                submitted_by=principal.key_id,
-            )
-            get_telemetry().emit(
-                "run.started",
-                tenant_id=tenant_id,
-                run_id=run_id,
-                task_class=task_class,
-            )
-            self.admit(tenant_id)
-            if not ctx.run_slots.acquire(blocking=False):
-                self.release(tenant_id)
-                raise RateLimited("too many in-flight runs", run_id=run_id)
-
-            bundle = ctx.orchestrator_factory()(
-                ctx.root / "runs" / tenant_id,
-                skills_root=ctx.tenant_skills_root(tenant_id),
-                facts_root=ctx.facts_root,
-                index_path=ctx.root / "runs" / tenant_id / "skill_index.db",
-                approve_default_tools=approve_tools,
-                principal=principal,
-                surface="api",
+                criteria=criteria,
+                budget=budget,
+                workdir=workdir,
+                approve_tools=approve_tools,
                 model_config=model_config,
+                wait=wait,
+                x_recertia_wait=x_recertia_wait,
+                prefer=prefer,
+                ws_handle=handle,
+                mode=mode,
+                action="start",
+                count_usage=True,
             )
-            bundle.orchestrator.max_criterion_timeout_s = ctx.max_criterion_timeout_s()
-            cost_usd = 0.0
-            succeeded = False
-            try:
-                state = bundle.orchestrator.start(
-                    run_id,
-                    task,
-                    criteria,
-                    budget=budget,
-                    workdir=workdir,
-                    script=body.script,
-                    arm=body.arm,
-                    manifest=bundle.run_manifest(),
-                )
-                cost_usd = float(state.spent.cost_usd or 0.0)
-                succeeded = True
-            except (RunIdExistsError, RunBusy, LeaseLost):
-                raise
-            except Exception as exc:
-                get_telemetry().emit(
-                    "run.finished",
-                    tenant_id=tenant_id,
-                    run_id=run_id,
-                    terminal="error",
-                )
-                _log.exception("create_run failed tenant_id=%s run_id=%s", tenant_id, run_id)
-                raise RecertiaError("internal server error") from exc
-            finally:
-                bundle.close()
-                ctx.run_slots.release()
-                if succeeded:
-                    self.complete(tenant_id, cost_usd=cost_usd)
-                else:
-                    self.release(tenant_id)
-
-            rec = ctx.record_from_state(
-                run_id=run_id,
-                request=request,
-                task_class=task_class,
-                tenant_id=tenant_id,
-                state=state,
-                created_at=datetime.now(timezone.utc),
-                has_goal=body.goal is not None,
-            )
-            rec = rec.model_copy(
-                update={
-                    "cost_usd": cost_usd,
-                    "mode": "sync",
-                    "workspace_id": body.workspace_id,
-                    "workdir": str(workdir),
-                }
-            )
-            self.runs[run_key] = rec
-            get_telemetry().emit(
-                "run.finished",
-                tenant_id=tenant_id,
-                run_id=run_id,
-                terminal=state.terminal,
-            )
-            return rec
         finally:
             if ws_handle is not None:
                 ws_handle.release()
 
-    def _create_async(
+    def _enqueue_run(
         self,
         principal: Principal,
         body: Any,
@@ -457,11 +375,23 @@ class RunService:
         x_recertia_wait: str | None,
         prefer: str | None,
         ws_handle: WorkspaceLockHandle | None,
+        mode: str,
+        action: str,
+        count_usage: bool,
     ) -> Any:
         ctx = self._ctx()
         tenant_id = principal.tenant_id
+        settings = getattr(ctx, "settings", None)
+        if settings is None:
+            from recertia.settings import load_settings
+
+            settings = load_settings()
         try:
-            wait_s = wait_seconds(wait, x_recertia_wait, prefer)
+            wait_s = wait_seconds(
+                wait, x_recertia_wait, prefer, cap_s=settings.api_sync_wait_s
+            )
+            if mode == "sync" and wait_s is None:
+                wait_s = settings.api_sync_wait_s
             self.admit(tenant_id)
             self.runs[run_key] = ctx.queued_run_record(
                 run_id=run_id,
@@ -471,24 +401,24 @@ class RunService:
                 created_at=datetime.now(timezone.utc),
                 tenant_id=tenant_id,
                 terminal=None,
-                has_goal=body.goal is not None,
-                mode="async",
-                workspace_id=body.workspace_id,
+                has_goal=getattr(body, "goal", None) is not None,
+                mode=mode,
+                workspace_id=getattr(body, "workspace_id", None),
                 workdir=str(workdir),
             )
-            ctx.events.append(tenant_id, run_id, "run.queued", {"mode": "async"})
+            ctx.events.append(tenant_id, run_id, "run.queued", {"mode": mode, "action": action})
             try:
                 ctx.enqueue_async_run(
                     run_id=run_id,
                     tenant_id=tenant_id,
-                    goal=body.goal,
+                    goal=getattr(body, "goal", None),
                     request=request,
-                    task_class=body.task_class,
+                    task_class=getattr(body, "task_class", None) or task_class,
                     criteria=criteria,
                     budget=budget,
                     workdir=workdir,
-                    script=body.script,
-                    arm=body.arm,
+                    script=getattr(body, "script", None),
+                    arm=getattr(body, "arm", "treatment"),
                     approve_tools=approve_tools,
                     skills_root=ctx.tenant_skills_root(tenant_id),
                     facts_root=ctx.facts_root,
@@ -496,6 +426,9 @@ class RunService:
                     index_path=ctx.root / "runs" / tenant_id / "skill_index.db",
                     model_config=model_config,
                     max_criterion_timeout_s=ctx.max_criterion_timeout_s(),
+                    action=action,
+                    mode=mode,
+                    count_usage=count_usage,
                 )
             except Exception:
                 self.release(tenant_id)
@@ -505,20 +438,28 @@ class RunService:
             ws_handle = None
             if held is not None:
                 held.release()
-            if wait_s is not None:
+            if wait_s:
                 finished = ctx.queue.wait(tenant_id, run_id, timeout_s=wait_s)
                 if finished is not None:
+                    if finished.error_code == "run_busy":
+                        raise RunBusy("run_busy")
                     loaded = self.get(tenant_id, run_id)
                     if loaded is not None and getattr(loaded, "terminal", None):
                         return loaded
+                    disk = self.load_run(tenant_id, run_id)
+                    if disk is not None:
+                        self.runs[run_key] = disk
+                        return disk
+                    if finished.status == "failed":
+                        raise RecertiaError("internal server error")
             return AcceptedRun(
                 {
                     "run_id": run_id,
                     "status": "queued",
-                    "mode": "async",
+                    "mode": mode,
                     "tenant_id": tenant_id,
                     "task_class": task_class,
-                    "workspace_id": body.workspace_id,
+                    "workspace_id": getattr(body, "workspace_id", None),
                     "workdir": str(workdir),
                 }
             )
@@ -538,52 +479,94 @@ class RunService:
             workdir = ctx.canonical_run_workdir(ctx.root, tenant_id, run_id)
         if not workdir.exists():
             raise NotFound("run workdir not found")
+        existing = self.runs.get(run_key)
         owner_id = f"{tenant_id}/{run_id}"
-        ws_handle = _acquire_workspace(ctx.root, workdir, owner_id=owner_id)
+        ws_handle: WorkspaceLockHandle | None = _acquire_workspace(
+            ctx.root, workdir, owner_id=owner_id
+        )
         try:
-            self.admit(tenant_id)
-            if not ctx.run_slots.acquire(blocking=False):
-                self.release(tenant_id)
-                raise RateLimited("too many in-flight runs", run_id=run_id)
-            bundle = None
-            try:
-                bundle = ctx.orchestrator_factory()(
-                    ctx.root / "runs" / tenant_id,
-                    skills_root=ctx.tenant_skills_root(tenant_id),
-                    facts_root=ctx.facts_root,
-                    index_path=ctx.root / "runs" / tenant_id / "skill_index.db",
-                    approve_default_tools=ctx.principal_may_exec(principal),
-                    principal=principal,
-                    surface="api",
-                )
-                bundle.orchestrator.max_criterion_timeout_s = ctx.max_criterion_timeout_s()
-                state = bundle.orchestrator.resume(run_id, workdir=workdir)
-            except (RunBusy, LeaseLost):
-                raise
-            except ValueError as exc:
-                raise NotFound(str(exc)) from exc
-            except Exception as exc:
-                _log.exception("resume_run failed tenant_id=%s run_id=%s", tenant_id, run_id)
-                raise RecertiaError("internal server error") from exc
-            finally:
-                if bundle is not None:
-                    bundle.close()
-                ctx.run_slots.release()
-                self.release(tenant_id)
+            from recertia.workers.queue import QueueItem
 
-            existing = self.runs.get(run_key)
-            rec = ctx.record_from_state(
+            payload_action = "resume"
+            queued = ctx.queued_run_record(
                 run_id=run_id,
-                request=existing.request if existing else state.task.request,
-                task_class=(
-                    existing.task_class if existing else (state.task.task_class or "repo-chore")
-                ),
-                tenant_id=tenant_id,
-                state=state,
+                request=existing.request if existing else None,
+                task_class=existing.task_class if existing else "repo-chore",
+                status="queued",
                 created_at=existing.created_at if existing else datetime.now(timezone.utc),
-                has_goal=existing.has_goal if existing else (state.task.goal is not None),
+                tenant_id=tenant_id,
+                terminal=None,
+                has_goal=existing.has_goal if existing else False,
+                mode="sync",
+                workspace_id=existing.workspace_id if existing else None,
+                workdir=str(workdir),
             )
-            self.runs[run_key] = rec
-            return rec
+            item = QueueItem(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                kind="run",
+                payload={
+                    "run_id": run_id,
+                    "tenant_id": tenant_id,
+                    "request": queued.request,
+                    "task_class": queued.task_class,
+                    "criteria": [],
+                    "budget": {},
+                    "workdir": str(workdir),
+                    "script": None,
+                    "arm": "treatment",
+                    "approve_tools": ctx.principal_may_exec(principal),
+                    "skills_root": str(ctx.tenant_skills_root(tenant_id)),
+                    "facts_root": str(ctx.facts_root),
+                    "runs_root": str(ctx.root / "runs" / tenant_id),
+                    "index_path": str(ctx.root / "runs" / tenant_id / "skill_index.db"),
+                    "action": payload_action,
+                    "mode": "sync",
+                    "count_usage": False,
+                },
+            )
+            self.runs[run_key] = queued
+            row = ctx.queue.get(tenant_id, run_id)
+            if row is not None and row.status in {"claimed", "running"}:
+                raise RunBusy("run is already running")
+            if row is None or row.status != "queued":
+                self.admit(tenant_id)
+                try:
+                    outcome = ctx.queue.requeue(item)
+                    if outcome == "busy":
+                        raise RunBusy("run is already running")
+                except Exception:
+                    self.release(tenant_id)
+                    raise
+            ctx.embedded.ensure_started()
+            held = ws_handle
+            ws_handle = None
+            if held is not None:
+                held.release()
+            settings = getattr(ctx, "settings", None)
+            if settings is None:
+                from recertia.settings import load_settings
+
+                settings = load_settings()
+            finished = ctx.queue.wait(tenant_id, run_id, timeout_s=settings.api_sync_wait_s)
+            if finished is not None:
+                loaded = self.get(tenant_id, run_id)
+                if loaded is not None and getattr(loaded, "terminal", None):
+                    return loaded
+                disk = self.load_run(tenant_id, run_id)
+                if disk is not None:
+                    self.runs[run_key] = disk
+                    return disk
+            return AcceptedRun(
+                {
+                    "run_id": run_id,
+                    "status": "queued",
+                    "mode": "sync",
+                    "tenant_id": tenant_id,
+                    "task_class": queued.task_class,
+                    "workdir": str(workdir),
+                }
+            )
         finally:
-            ws_handle.release()
+            if ws_handle is not None:
+                ws_handle.release()

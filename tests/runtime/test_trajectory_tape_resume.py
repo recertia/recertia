@@ -65,3 +65,43 @@ def test_tape_after_resume_matches_uninterrupted(
     assert [e.seq for e in tape] == list(range(len(tape))), "seq gap/duplicate on tape"
     assert {e.run_id for e in tape} == {"r"}
     assert [_key(e) for e in tape] == [_key(e) for e in base], "resume re-emitted or dropped events"
+
+
+def test_crash_between_tape_and_checkpoint_no_duplicates(
+    tmp_path: Path, proven_criterion: TaskCriterion, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F16: a kill after trajectory is built but before commit must not duplicate events."""
+
+    from recertia.faults import FaultInjected, fault_point
+
+    hops = {"n": 0}
+    real = fault_point
+
+    def counted(name: str) -> None:
+        if name == "checkpoint.before_commit":
+            hops["n"] += 1
+            if hops["n"] >= 2:
+                raise FaultInjected(name, "kill")
+        real(name)
+
+    monkeypatch.setattr("recertia.graph.store.fault_point", counted)
+    runs = tmp_path / "runs"
+    wd = tmp_path / "w"
+    wd.mkdir()
+    orch = GraphOrchestrator(runs)
+    try:
+        with pytest.raises(FaultInjected):
+            orch.start("r", _task(), [proven_criterion], workdir=wd, script=SCRIPT)
+    finally:
+        orch.close()
+    after_crash = _tape(runs, "r")
+    monkeypatch.setattr("recertia.graph.store.fault_point", real)
+    resumed = GraphOrchestrator(runs)
+    try:
+        assert resumed.resume("r", workdir=wd, script=SCRIPT).terminal == "solved"
+    finally:
+        resumed.close()
+    tape = _tape(runs, "r")
+    assert [event.seq for event in tape] == list(range(len(tape)))
+    assert [_key(event) for event in after_crash] == [_key(event) for event in tape[: len(after_crash)]]
+    assert len(tape) == len(set(_key(event) for event in tape))

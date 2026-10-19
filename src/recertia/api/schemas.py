@@ -23,14 +23,14 @@ class RunCreate(BaseModel):
     workspace_id: str | None = None
     run_id: str | None = None
     arm: Arm = "treatment"
-    mode: str = "sync"
+    mode: str | None = None
     model: str | None = None
 
     @model_validator(mode="after")
     def _require_goal_or_request(self) -> "RunCreate":
         if self.goal is None and (self.request is None or not self.request.strip()):
             raise ValueError("Provide goal or non-empty request")
-        if self.mode not in {"sync", "async"}:
+        if self.mode is not None and self.mode not in {"sync", "async"}:
             raise ValueError("mode must be sync or async")
         return self
 
