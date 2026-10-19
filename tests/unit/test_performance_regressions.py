@@ -716,3 +716,63 @@ def test_retrieve_does_not_read_the_whole_episodic_index(tmp_path: Path) -> None
     )
     outcome = retrieve(state, ctx)
     assert outcome.state.bundle is not None
+
+
+def test_list_runs_parses_at_most_limit_states(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F21: list reads summary_json and does not parse checkpoint state."""
+
+    from recertia.app.runs import RunService
+    from recertia.runtime.registry import RunRegistry
+
+    class _Quota:
+        def admit(self, tenant_id: str, *, quota: object = None) -> None:
+            del tenant_id, quota
+
+        def release_inflight(self, tenant_id: str) -> None:
+            del tenant_id
+
+        def complete(self, tenant_id: str, *, cost_usd: float = 0.0) -> None:
+            del tenant_id, cost_usd
+
+    parses = 0
+    original = RunState.model_validate_json
+
+    def _count(cls: object, raw: object) -> object:
+        nonlocal parses
+        parses += 1
+        return original(raw)  # type: ignore[misc]
+
+    monkeypatch.setattr(RunState, "model_validate_json", classmethod(_count))
+    root = tmp_path / "runs"
+    registry = RunRegistry(root / "runtime.db")
+    try:
+        for i in range(2000):
+            run_id = f"r{i:04d}"
+            created = f"2026-01-01T00:00:{i % 60:02d}.{i:06d}+00:00"
+            registry.reserve(
+                "t1",
+                run_id,
+                request_hash=run_id,
+                summary_json={
+                    "run_id": run_id,
+                    "task_class": "repo-chore",
+                    "terminal": "solved",
+                    "status": "solved",
+                    "tenant_id": "t1",
+                    "created_at": created,
+                },
+            )
+    finally:
+        registry.close()
+
+    service = RunService(_Quota(), {}, lambda _tenant, _run: None)
+    started = time.perf_counter()
+    page = service.list("t1", runs_root=root, limit=50)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    assert parses == 0
+    assert len(page["items"]) == 50
+    assert page["next_cursor"]
+    assert elapsed_ms < 100
+

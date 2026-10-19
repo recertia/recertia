@@ -64,30 +64,61 @@ def test_list_summaries_reads_latest_hop_only(tmp_path: Path, monkeypatch: pytes
 
 
 def test_run_service_list_is_keyset(tmp_path: Path) -> None:
+    from recertia.runtime.registry import RunRegistry
+
     root = tmp_path / "runs"
-    store = CheckpointStore(root / "checkpoints.db")
-    for run_id in ("a", "c", "e"):
-        store.save(run_id, 0, "intake", None, _state(run_id, terminal="solved"))
-    store.close()
+    registry = RunRegistry(root / "runtime.db")
+    stamps = {
+        "a": "2026-01-01T00:00:03+00:00",
+        "b": "2026-01-01T00:00:02+00:00",
+        "c": "2026-01-01T00:00:01+00:00",
+    }
+    try:
+        for run_id, created in stamps.items():
+            registry._conn.execute(
+                """
+                INSERT INTO runs(
+                    tenant_id, run_id, status, request_hash, summary_json,
+                    workdir, created_at, updated_at
+                ) VALUES (?, ?, 'solved', '', ?, NULL, ?, ?)
+                """,
+                (
+                    "tenant-a",
+                    run_id,
+                    (
+                        '{"run_id":"%s","task_class":"repo-chore","terminal":"solved",'
+                        '"status":"solved","tenant_id":"tenant-a","created_at":"%s"}'
+                    )
+                    % (run_id, created),
+                    created,
+                    created,
+                ),
+            )
+        registry._conn.commit()
+    finally:
+        registry.close()
 
     class _Rec:
-        def __init__(self, run_id: str) -> None:
+        def __init__(self, run_id: str, created: str) -> None:
             self.run_id = run_id
             self.task_class = "repo-chore"
             self.terminal = "solved"
             self.status = "solved"
             self.attempt_no = 1
-            self.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            self.created_at = created
             self.cost_usd = 0.0
             self.arm = "treatment"
             self.tenant_id = "tenant-a"
 
-    runs = {("tenant-a", "b"): _Rec("b"), ("tenant-b", "z"): _Rec("z")}
+    runs = {
+        ("tenant-a", "mem"): _Rec("mem", "2026-01-01T00:00:00+00:00"),
+        ("tenant-b", "z"): _Rec("z", "2026-01-01T00:00:04+00:00"),
+    }
     service = RunService(_Quota(), runs, lambda _tenant, _run: None)
     first = service.list("tenant-a", runs_root=root, limit=2)
     assert [item["run_id"] for item in first["items"]] == ["a", "b"]
-    assert first["next_cursor"] == "b"
+    assert first["next_cursor"]
     second = service.list("tenant-a", runs_root=root, limit=2, cursor=first["next_cursor"])
-    assert [item["run_id"] for item in second["items"]] == ["c", "e"]
+    assert [item["run_id"] for item in second["items"]] == ["c", "mem"]
     assert second["next_cursor"] is None
     assert all(item["tenant_id"] == "tenant-a" for item in second["items"])

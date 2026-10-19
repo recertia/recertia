@@ -7,6 +7,7 @@ continues from there, rather than replaying the whole run from ``intake``.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from collections.abc import Sequence
@@ -128,6 +129,10 @@ class CheckpointStore:
             """
         )
         self._conn.commit()
+        row = self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='runs'"
+        ).fetchone()
+        self._has_runs_table = row is not None
 
     def close(self) -> None:
         self._conn.close()
@@ -263,6 +268,29 @@ class CheckpointStore:
 
     def _upsert_summary(self, state: RunState) -> None:
         terminal = str(state.terminal) if state.terminal else None
+        summary = {
+            "run_id": state.run_id,
+            "task_class": state.task.task_class or "repo-chore",
+            "terminal": terminal,
+            "status": terminal or "running",
+            "attempt_no": int(state.attempt_no),
+            "cost_usd": float(state.spent.cost_usd),
+            "arm": str(state.arm),
+            "tenant_id": self._tenant_id,
+        }
+        if self._has_runs_table:
+            self._conn.execute(
+                """
+                UPDATE runs SET summary_json = ?, status = ?, updated_at = datetime('now')
+                WHERE tenant_id = ? AND run_id = ?
+                """,
+                (
+                    json.dumps(summary, sort_keys=True),
+                    terminal or "running",
+                    self._tenant_id,
+                    state.run_id,
+                ),
+            )
         self._conn.execute(
             """
             INSERT INTO run_summaries (

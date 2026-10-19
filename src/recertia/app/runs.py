@@ -42,6 +42,13 @@ class AcceptedRun:
     status_code: int = 202
 
 
+def _before_cursor(row: dict[str, Any], decoded: dict[str, Any]) -> bool:
+    return (str(row.get("created_at") or ""), str(row["run_id"])) < (
+        str(decoded["created_at"]),
+        str(decoded["run_id"]),
+    )
+
+
 def _summary_from_record(rec: Any) -> dict[str, Any]:
     created = rec.created_at
     return {
@@ -93,6 +100,8 @@ def _reserve_run_id(
                 "run_id": run_id,
                 "status": "accepted",
                 "tenant_id": tenant_id,
+                "task_class": getattr(body, "task_class", None) or "repo-chore",
+                "terminal": None,
             },
             workdir=workdir,
         )
@@ -219,46 +228,53 @@ class RunService:
         task_class: str | None = None,
         terminal: str | None = None,
     ) -> dict[str, Any]:
-        from recertia.graph.store import CheckpointStore
-        from recertia.persistence.import_legacy import live_checkpoint_db
+        from recertia.runtime.cursor import decode_cursor, encode_cursor
+        from recertia.runtime.registry import RunRegistry
 
-        db = live_checkpoint_db(Path(runs_root))
-        disk_rows: list[dict[str, object]] = []
-        if db is not None:
-            store = CheckpointStore(db)
-            try:
-                disk_rows = store.list_summaries(
-                    limit=limit + 1,
-                    cursor=cursor,
-                    task_class=task_class,
-                    terminal=terminal,
-                )
-            finally:
-                store.close()
-        disk_has_extra = len(disk_rows) > limit
-        page = disk_rows[:limit]
-        next_disk_id = str(disk_rows[limit]["run_id"]) if disk_has_extra else None
+        limit = max(1, min(int(limit), 100))
+        decoded = (
+            decode_cursor(cursor, expected_keys={"created_at", "run_id"}) if cursor else None
+        )
+        registry = RunRegistry(Path(runs_root) / "runtime.db")
+        try:
+            disk_rows = registry.list_page(
+                tenant_id,
+                limit=limit + 1,
+                cursor=decoded,
+                task_class=task_class,
+                terminal=terminal,
+            )
+        finally:
+            registry.close()
         chosen: dict[str, dict[str, Any]] = {
-            str(row["run_id"]): {**row, "tenant_id": tenant_id} for row in page
+            str(row["run_id"]): {**row, "tenant_id": tenant_id} for row in disk_rows
         }
         for (tid, run_id), rec in self.runs.items():
             if tid != tenant_id or rec is None:
                 continue
             if getattr(rec, "tenant_id", tenant_id) != tenant_id:
                 continue
-            if cursor and not run_id > cursor:
+            row = _summary_from_record(rec)
+            if decoded is not None and not _before_cursor(row, decoded):
                 continue
-            if next_disk_id is not None and run_id >= next_disk_id:
+            if task_class and row.get("task_class") != task_class:
                 continue
-            if task_class and getattr(rec, "task_class", None) != task_class:
+            if terminal and (row.get("terminal") or "") != terminal:
                 continue
-            if terminal and (getattr(rec, "terminal", None) or "") != terminal:
-                continue
-            chosen[run_id] = _summary_from_record(rec)
-        ordered = sorted(chosen.values(), key=lambda row: str(row["run_id"]))
-        has_more = disk_has_extra or len(ordered) > limit
+            chosen[run_id] = {**row, "tenant_id": tenant_id}
+        ordered = sorted(
+            chosen.values(),
+            key=lambda item: (str(item.get("created_at") or ""), str(item["run_id"])),
+            reverse=True,
+        )
+        has_more = len(ordered) > limit
         items = ordered[:limit]
-        next_cursor = items[-1]["run_id"] if items and has_more else None
+        next_cursor = None
+        if items and has_more:
+            last = items[-1]
+            next_cursor = encode_cursor(
+                {"created_at": last.get("created_at") or "", "run_id": last["run_id"]}
+            )
         return {"items": items, "next_cursor": next_cursor}
 
     def create(

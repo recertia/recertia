@@ -2,6 +2,7 @@
 
 from recertia.runtime.errors import (
     IdempotencyMismatch,
+    InvalidCursor,
     LeaseLost,
     PreconditionRequired,
     ProgramConflict,
@@ -14,6 +15,7 @@ from recertia.runtime.workspace_lock import WorkspaceLock, WorkspaceLockHandle
 
 __all__ = [
     "IdempotencyMismatch",
+    "InvalidCursor",
     "LeaseLost",
     "LeaseToken",
     "PreconditionRequired",

@@ -9,6 +9,7 @@ __all__ = [
     "ConfigError",
     "ExecutionUnavailable",
     "IdempotencyMismatch",
+    "InvalidCursor",
     "LedgerLockTimeout",
     "LedgerUnavailable",
     "PreconditionRequired",
@@ -73,6 +74,15 @@ class PreconditionRequired(RecertiaError):
 
     code = "precondition_required"
     http_status = 428
+    retryable = False
+    exit_code = 2
+
+
+class InvalidCursor(RecertiaError):
+    """A list cursor failed to decode or carried the wrong keys."""
+
+    code = "invalid_cursor"
+    http_status = 400
     retryable = False
     exit_code = 2
 
