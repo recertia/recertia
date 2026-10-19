@@ -7,13 +7,9 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
+from recertia.errors import QuotaExceeded
 from recertia.persistence.db import open_db
-
-
-class QuotaExceeded(Exception):
-    """Tenant would exceed a configured daily or in-flight quota."""
 
 
 @dataclass(frozen=True)
@@ -21,7 +17,6 @@ class TenantQuota:
     max_runs_per_day: int = 100
     max_cost_usd_per_day: float = 50.0
     max_in_flight: int = 4
-    max_queue_depth: int = 100
 
 
 def quota_from_env() -> TenantQuota:
@@ -32,19 +27,17 @@ def quota_from_env() -> TenantQuota:
         max_runs_per_day=settings.tenant_max_runs_per_day,
         max_cost_usd_per_day=settings.tenant_max_cost_usd_per_day,
         max_in_flight=settings.tenant_max_in_flight,
-        max_queue_depth=settings.tenant_max_queue_depth,
     )
 
 
 class QuotaStore:
-    """Daily counters plus in-flight derived from ``RunQueue`` when bound."""
+    """SQLite-backed per-tenant daily counters + in-flight gauge."""
 
     def __init__(self, path: Path | str, *, defaults: TenantQuota | None = None) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.defaults = defaults or quota_from_env()
         self._lock = threading.Lock()
-        self._queue: Any | None = None
         self._conn = open_db(self.path)
         self._conn.row_factory = sqlite3.Row
         with self._conn:
@@ -67,37 +60,38 @@ class QuotaStore:
     def close(self) -> None:
         self._conn.close()
 
-    def bind_queue(self, queue: Any) -> None:
-        """In-flight and depth become queries of ``run_queue`` (REL-4 / F12)."""
-
-        self._queue = queue
-
     def reset_inflight(self) -> None:
-        """Zero the leftover gauge table. Live in-flight is the queue query."""
+        """Zero leaked in-flight gauges. Nothing is running at process start.
+
+        A crash between ``admit`` and ``release``/``complete`` used to leave
+        ``inflight.count`` high and 429 the tenant until the counter was edited
+        by hand. Queued work does not survive this process, so the honest count
+        at startup is zero.
+        """
 
         with self._lock, self._conn:
             self._conn.execute("UPDATE inflight SET count = 0")
 
-    def _live_inflight(self, tenant_id: str) -> int:
-        queue = self._queue
-        if queue is not None:
-            return int(queue.inflight(tenant_id))
-        row = self._conn.execute(
-            "SELECT count FROM inflight WHERE tenant_id = ?", (tenant_id,)
-        ).fetchone()
-        return int(row["count"]) if row else 0
-
-    def _live_depth(self, tenant_id: str) -> int:
-        queue = self._queue
-        if queue is not None:
-            return int(queue.depth(tenant_id))
-        return 0
-
     def _day(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    def admit(self, tenant_id: str, *, quota: TenantQuota | None = None) -> None:
-        """Raise :class:`QuotaExceeded` when the tenant cannot start another run."""
+    def admit(
+        self,
+        tenant_id: str,
+        *,
+        quota: TenantQuota | None = None,
+        inflight: int | None = None,
+        depth: int | None = None,
+        max_queue_depth: int | None = None,
+        max_in_flight: int | None = None,
+    ) -> None:
+        """Raise :class:`QuotaExceeded` when the tenant cannot start another run.
+
+        Pass ``inflight`` (claimed+running rows) and ``depth`` (queued rows) from
+        ``RunQueue`` so a crash cannot leak the gauge. Omit them to use the
+        leftover ``inflight`` table, which is not an admission input once a
+        queue is bound.
+        """
 
         limits = quota or self.defaults
         day = self._day()
@@ -116,16 +110,27 @@ class QuotaStore:
                 raise QuotaExceeded(
                     f"tenant {tenant_id} exceeded max_cost_usd_per_day={limits.max_cost_usd_per_day}"
                 )
-            current = self._live_inflight(tenant_id)
-            if current >= limits.max_in_flight:
+            if inflight is not None:
+                current = inflight
+            else:
+                inflight_row = self._conn.execute(
+                    "SELECT count FROM inflight WHERE tenant_id = ?", (tenant_id,)
+                ).fetchone()
+                current = int(inflight_row["count"]) if inflight_row else 0
+            in_flight_cap = (
+                max_in_flight if max_in_flight is not None else limits.max_in_flight
+            )
+            if current >= in_flight_cap:
                 raise QuotaExceeded(
-                    f"tenant {tenant_id} exceeded max_in_flight={limits.max_in_flight}"
+                    f"tenant {tenant_id} exceeded max_in_flight={in_flight_cap}"
                 )
-            if self._queue is not None and self._live_depth(tenant_id) >= limits.max_queue_depth:
-                raise QuotaExceeded(
-                    f"tenant {tenant_id} exceeded max_queue_depth={limits.max_queue_depth}"
-                )
-            if self._queue is None:
+            if depth is not None:
+                cap = max_queue_depth if max_queue_depth is not None else 100
+                if depth >= cap:
+                    raise QuotaExceeded(
+                        f"tenant {tenant_id} exceeded max_queue_depth={cap}"
+                    )
+            if inflight is None:
                 self._conn.execute(
                     """
                     INSERT INTO inflight(tenant_id, count) VALUES (?, 1)
@@ -135,8 +140,6 @@ class QuotaStore:
                 )
 
     def release_inflight(self, tenant_id: str) -> None:
-        if self._queue is not None:
-            return
         with self._lock, self._conn:
             self._conn.execute(
                 """
@@ -159,15 +162,14 @@ class QuotaStore:
                 """,
                 (tenant_id, day, float(cost_usd)),
             )
-            if self._queue is None:
-                self._conn.execute(
-                    """
-                    UPDATE inflight
-                    SET count = CASE WHEN count > 0 THEN count - 1 ELSE 0 END
-                    WHERE tenant_id = ?
-                    """,
-                    (tenant_id,),
-                )
+            self._conn.execute(
+                """
+                UPDATE inflight
+                SET count = CASE WHEN count > 0 THEN count - 1 ELSE 0 END
+                WHERE tenant_id = ?
+                """,
+                (tenant_id,),
+            )
 
     def snapshot(self, tenant_id: str) -> dict[str, float | int | str]:
         day = self._day()
@@ -175,15 +177,16 @@ class QuotaStore:
             "SELECT runs, cost_usd FROM daily WHERE tenant_id = ? AND day = ?",
             (tenant_id, day),
         ).fetchone()
+        inflight = self._conn.execute(
+            "SELECT count FROM inflight WHERE tenant_id = ?", (tenant_id,)
+        ).fetchone()
         return {
             "tenant_id": tenant_id,
             "day": day,
             "runs": int(row["runs"]) if row else 0,
             "cost_usd": float(row["cost_usd"]) if row else 0.0,
-            "in_flight": self._live_inflight(tenant_id),
-            "queue_depth": self._live_depth(tenant_id),
+            "in_flight": int(inflight["count"]) if inflight else 0,
             "max_runs_per_day": self.defaults.max_runs_per_day,
             "max_cost_usd_per_day": self.defaults.max_cost_usd_per_day,
             "max_in_flight": self.defaults.max_in_flight,
-            "max_queue_depth": self.defaults.max_queue_depth,
         }

@@ -102,32 +102,28 @@ def execute_claim(root: Path, claim: Claim, *, queue: RunQueue | None = None) ->
             CancelHopHook(lambda: queue.cancel_requested(claim.tenant_id, claim.run_id)),
             *bundle.orchestrator.hooks,
         ]
-    from recertia.graph.engine import RunIdExistsError
-
+    action = str(payload.get("action") or "start")
     try:
-        if str(payload.get("action") or "start") == "resume":
+        if action == "resume":
             bundle.orchestrator.resume(claim.run_id, workdir=workdir, script=script)
         else:
-            try:
-                bundle.orchestrator.start(
-                    claim.run_id,
-                    Task(
-                        task_id=claim.run_id,
-                        request=request,
-                        task_class=task_class,
-                        submitted_at=datetime.now(timezone.utc),
-                        submitted_by="recertia-worker",
-                    ),
-                    criteria,
-                    budget=budget,
-                    workdir=workdir,
-                    script=script,
-                    arm=chosen_arm,
-                    max_steps=step_cap,
-                    manifest=bundle.run_manifest(),
-                )
-            except RunIdExistsError:
-                bundle.orchestrator.resume(claim.run_id, workdir=workdir, script=script)
+            bundle.orchestrator.start(
+                claim.run_id,
+                Task(
+                    task_id=claim.run_id,
+                    request=request,
+                    task_class=task_class,
+                    submitted_at=datetime.now(timezone.utc),
+                    submitted_by="recertia-worker",
+                ),
+                criteria,
+                budget=budget,
+                workdir=workdir,
+                script=script,
+                arm=chosen_arm,
+                max_steps=step_cap,
+                manifest=bundle.run_manifest(),
+            )
     finally:
         bundle.close()
 
@@ -146,6 +142,7 @@ def run_once(root: Path, *, worker: str, capacity: int = 1) -> int:
         if not claims:
             return 0
         claim = claims[0]
+        queue.heartbeat_worker(worker)
         queue.heartbeat_claim(claim)
         queue.mark_running(claim)
         try:

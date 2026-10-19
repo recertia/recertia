@@ -9,6 +9,7 @@ class only validates that a node's chosen route is legal and walks the resulting
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import Callable, Sequence
@@ -148,7 +149,7 @@ class GraphOrchestrator:
     def close(self) -> None:
         self.persistence.close()
 
-    def _collect_trajectory(
+    def _build_trajectory(
         self,
         *,
         prior: RunState,
@@ -159,45 +160,37 @@ class GraphOrchestrator:
         note: str | None,
         extra_events: list[TrajectoryEvent] | None = None,
     ) -> list[TrajectoryEvent]:
-        try:
-            events = self._trajectory_emitter.from_node_outcome(
-                prior=prior,
-                new_state=new_state,
-                node=node,
-                attempt_no=attempt_no,
-                route=route,
-                note=note,
-            )
-            if extra_events:
-                events = [*events, *extra_events]
-            return events
-        except Exception:  # noqa: BLE001 — building events must not fail the hop
-            return []
+        """In-memory events for this hop. Persistence happens in ``commit_hop``."""
 
-    def _commit_hop(
-        self,
-        *,
-        run_id: str,
-        seq: int,
-        node: str,
-        next_node: str | None,
-        state: RunState,
-        trajectory: list[TrajectoryEvent],
-        eval_outbox: EvalOutboxWrite | None = None,
-    ) -> None:
-        """Checkpoint, trajectory rows, and eval outbox in one transaction (REL-5 / F16)."""
-
-        assigned = self.checkpoints.save(
-            run_id,
-            seq,
-            node,
-            next_node,
-            state,
-            fencing_token=self._fencing_token,
-            eval_outbox=eval_outbox,
-            trajectory=trajectory,
+        events = self._trajectory_emitter.from_node_outcome(
+            prior=prior,
+            new_state=new_state,
+            node=node,
+            attempt_no=attempt_no,
+            route=route,
+            note=note,
         )
+        if extra_events:
+            return [*events, *extra_events]
+        return events
+
+    def _trajectory_meta_json(self, state: RunState) -> str:
+        return json.dumps(
+            {
+                "run_id": state.run_id,
+                "task_id": state.task.task_id,
+                "task_class": state.task.task_class,
+                "arm": state.arm,
+                "is_eval_fixture": state.task.is_eval_fixture,
+            }
+        )
+
+    def _sync_trajectory_projection(self, state: RunState) -> None:
+        """JSONL is a projection of ``trajectory_events``. Best-effort after commit."""
+
         try:
+            events = self.checkpoints.list_trajectory_events(state.run_id)
+            self.trajectories.replace_all(state.run_id, events)
             if not self.trajectories._meta_path(state.run_id).exists():
                 self.trajectories.write_meta(
                     run_id=state.run_id,
@@ -206,10 +199,47 @@ class GraphOrchestrator:
                     arm=state.arm,
                     is_eval_fixture=state.task.is_eval_fixture,
                 )
-            if assigned:
-                self.trajectories.append_assigned(state.run_id, assigned)
-        except Exception:  # noqa: BLE001 — JSONL projection must not fail the run
+        except Exception:  # noqa: BLE001 — projection must not fail runs
             return
+
+    def _commit_hop(
+        self,
+        *,
+        prior: RunState,
+        new_state: RunState,
+        node: str,
+        next_node: str | None,
+        seq: int,
+        attempt_no: int,
+        route: str | None,
+        note: str | None,
+        route_entry: RouteEntry | None,
+        extra_events: list[TrajectoryEvent] | None = None,
+        eval_outbox: EvalOutboxWrite | None = None,
+    ) -> None:
+        events = self._build_trajectory(
+            prior=prior,
+            new_state=new_state,
+            node=node,
+            attempt_no=attempt_no,
+            route=route,
+            note=note,
+            extra_events=extra_events,
+        )
+        self.checkpoints.save(
+            new_state.run_id,
+            seq,
+            node,
+            next_node,
+            new_state,
+            fencing_token=self._fencing_token,
+            eval_outbox=eval_outbox,
+            trajectory=events,
+            route_entry=route_entry,
+            import_events=self.trajectories.list_events(new_state.run_id),
+            meta_json=self._trajectory_meta_json(new_state),
+        )
+        self._sync_trajectory_projection(new_state)
 
     def _record_eval_observation(self, state: RunState) -> None:
         """Best-effort finalize hook; never fails the run."""
@@ -390,6 +420,7 @@ class GraphOrchestrator:
             if latest is None:
                 raise ValueError(f"no checkpoint found for run {run_id!r}")
             seq, _, next_node, state = latest
+            self._sync_trajectory_projection(state)
             if next_node is None:
                 return state
             self._maybe_restore_idle(run_id, Path(workdir))
@@ -471,19 +502,15 @@ class GraphOrchestrator:
 
             if node_name == "finalize":
                 self._commit_hop(
-                    run_id=state.run_id,
-                    seq=next_seq,
+                    prior=state,
+                    new_state=new_state,
                     node=node_name,
                     next_node=None,
-                    state=new_state,
-                    trajectory=self._collect_trajectory(
-                        prior=state,
-                        new_state=new_state,
-                        node=node_name,
-                        attempt_no=attempt_no_for_ctx,
-                        route=outcome.route,
-                        note=outcome.note,
-                    ),
+                    seq=next_seq,
+                    attempt_no=attempt_no_for_ctx,
+                    route=outcome.route,
+                    note=outcome.note,
+                    route_entry=None,
                     eval_outbox=_eval_outbox(self.tenant_id, new_state),
                 )
                 self._record_eval_observation(new_state)
@@ -516,20 +543,16 @@ class GraphOrchestrator:
                 extra_events.extend(produced)
 
             self._commit_hop(
-                run_id=state.run_id,
-                seq=next_seq,
+                prior=state,
+                new_state=new_state,
                 node=node_name,
                 next_node=chosen.target,
-                state=new_state,
-                trajectory=self._collect_trajectory(
-                    prior=state,
-                    new_state=new_state,
-                    node=node_name,
-                    attempt_no=attempt_no_for_ctx,
-                    route=chosen.predicate_name,
-                    note=outcome.note,
-                    extra_events=extra_events,
-                ),
+                seq=next_seq,
+                attempt_no=attempt_no_for_ctx,
+                route=chosen.predicate_name,
+                note=outcome.note,
+                route_entry=route_entry,
+                extra_events=extra_events,
             )
             next_seq += 1
             state = new_state

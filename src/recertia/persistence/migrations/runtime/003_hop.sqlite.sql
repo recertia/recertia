@@ -1,5 +1,5 @@
 -- id: 003_hop
--- REL-5 hop commit: trajectory and generic outbox live in runtime.db.
+-- REL-5a: hop commit tables. Checkpoint, trajectory, route, and outbox share one txn.
 CREATE TABLE IF NOT EXISTS trajectory_events (
     tenant_id  TEXT NOT NULL,
     run_id     TEXT NOT NULL,
@@ -8,12 +8,14 @@ CREATE TABLE IF NOT EXISTS trajectory_events (
     event_json TEXT NOT NULL,
     PRIMARY KEY (tenant_id, run_id, seq)
 );
+
 CREATE TABLE IF NOT EXISTS trajectory_meta (
     tenant_id TEXT NOT NULL,
     run_id    TEXT NOT NULL,
     meta_json TEXT NOT NULL,
     PRIMARY KEY (tenant_id, run_id)
 );
+
 CREATE TABLE IF NOT EXISTS route_entries (
     tenant_id  TEXT NOT NULL,
     run_id     TEXT NOT NULL,
@@ -21,6 +23,7 @@ CREATE TABLE IF NOT EXISTS route_entries (
     entry_json TEXT NOT NULL,
     PRIMARY KEY (tenant_id, run_id, seq)
 );
+
 CREATE TABLE IF NOT EXISTS outbox (
     id            INTEGER PRIMARY KEY,
     tenant_id     TEXT NOT NULL,

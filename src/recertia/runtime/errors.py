@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from recertia.errors import Busy, ConfigError, ExecutionUnavailable, RecertiaError
+from recertia.errors import Busy, ConfigError, ExecutionUnavailable, QuotaExceeded, RecertiaError
 
 __all__ = [
     "Busy",
@@ -14,6 +14,7 @@ __all__ = [
     "LedgerUnavailable",
     "PreconditionRequired",
     "ProgramConflict",
+    "QuotaExceeded",
     "RunIdExists",
     "StateCorrupt",
     "WorkspaceBusy",

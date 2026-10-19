@@ -1,8 +1,7 @@
-"""Enqueue-and-wait. The default async flag stays off, so omitted mode waits."""
+"""Enqueue-and-wait. Default async stays off, so omitted mode waits."""
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 
 import pytest
@@ -11,7 +10,6 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from recertia.api import create_app
-from recertia.graph.engine import GraphOrchestrator
 from recertia.settings import load_settings
 
 
@@ -47,6 +45,39 @@ def test_async_wait_returns_the_finished_run(tmp_path: Path) -> None:
     assert body["mode"] == "async"
 
 
+def test_sync_mode_does_not_run_on_request_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    from recertia.graph.engine import GraphOrchestrator
+
+    seen: dict[str, int] = {}
+    orig = GraphOrchestrator.start
+
+    def wrapped(self: GraphOrchestrator, *args: object, **kwargs: object) -> object:
+        seen["tid"] = threading.get_ident()
+        return orig(self, *args, **kwargs)
+
+    monkeypatch.setattr(GraphOrchestrator, "start", wrapped)
+    client, secret, _app = _client(tmp_path)
+    caller = threading.get_ident()
+    created = client.post(
+        "/v1/runs",
+        headers={"X-API-Key": secret},
+        json={
+            "request": "sync chore",
+            "task_class": "repo-chore",
+            "run_id": "sync-off-thread",
+            "mode": "sync",
+            "budget": {"max_attempts": 1},
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert "tid" in seen
+    assert seen["tid"] != caller
+
+
 def test_async_wait_timeout_returns_202(tmp_path: Path) -> None:
     client, secret, app = _client(tmp_path)
     app.state.recertia.embedded.ensure_started = lambda: None
@@ -66,30 +97,3 @@ def test_async_wait_timeout_returns_202(tmp_path: Path) -> None:
     row = app.state.recertia.queue.get("t1", "wait-slow")
     assert row is not None
     assert row.status == "queued"
-
-
-def test_sync_mode_does_not_run_on_request_thread(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    starter: list[str] = []
-    original = GraphOrchestrator.start
-
-    def wrapped(self: GraphOrchestrator, *args: object, **kwargs: object) -> object:
-        starter.append(threading.current_thread().name)
-        return original(self, *args, **kwargs)
-
-    monkeypatch.setattr(GraphOrchestrator, "start", wrapped)
-    client, secret, _app = _client(tmp_path)
-    created = client.post(
-        "/v1/runs",
-        headers={"X-API-Key": secret},
-        json={
-            "request": "sync chore",
-            "task_class": "repo-chore",
-            "run_id": "sync-off-request",
-            "budget": {"max_attempts": 1},
-        },
-    )
-    assert created.status_code == 200, created.text
-    assert starter
-    assert starter[0] != threading.current_thread().name

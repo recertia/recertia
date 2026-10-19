@@ -1,7 +1,8 @@
 """In-process drainer for the SQLite run queue.
 
-Create and resume enqueue here. Sync callers wait on the queue row. The graph
-runs on this thread, not the API request thread.
+Create and resume enqueue here. The request thread waits or returns 202; this
+thread is the one that calls ``orchestrator.start``. ``recertia worker`` drains
+the same table after an API restart.
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ class EmbeddedQueueWorker:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
+            self.queue.heartbeat_worker(self.worker_id)
             claims = self.queue.claim(self.worker_id, limit=1)
             if not claims:
                 time.sleep(0.05)
@@ -74,14 +76,15 @@ class EmbeddedQueueWorker:
         req.cancel_check = lambda: self.queue.cancel_requested(claim.tenant_id, claim.run_id)
         try:
             outcome = self.worker._run(req)
-        except Exception as exc:
-            from recertia.graph.lease import RunBusy
-
-            code = "run_busy" if isinstance(exc, RunBusy) else "run_failed"
-            self.queue.finish(claim, status="failed", error_code=code)
+        except Exception:
+            self.queue.finish(claim, status="failed", error_code="run_failed")
             return
         if outcome == "cancelled":
             self.queue.finish(claim, status="cancelled")
+        elif outcome == "run_busy":
+            self.queue.finish(claim, status="failed", error_code="run_busy")
+        elif outcome == "workspace_busy":
+            self.queue.finish(claim, status="failed", error_code="workspace_busy")
         elif outcome == "failed":
             self.queue.finish(claim, status="failed", error_code="run_failed")
         else:

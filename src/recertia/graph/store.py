@@ -7,7 +7,6 @@ continues from there, rather than replaying the whole run from ``intake``.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import threading
 from collections.abc import Sequence
@@ -15,10 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from contracts.run import RunState
+from contracts.run import RouteEntry, RunState
 from contracts.trajectory import TrajectoryEvent
-from recertia.faults import FaultInjected, fault_point
 from recertia.persistence.db import open_db
+from recertia.runtime.hop import OutboxRow, commit_hop, ensure_hop_tables
 
 
 class CheckpointConflict(RuntimeError):
@@ -106,33 +105,8 @@ class CheckpointStore:
             )
             """
         )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS trajectory_events (
-                tenant_id TEXT NOT NULL,
-                run_id TEXT NOT NULL,
-                seq INTEGER NOT NULL,
-                hop_seq INTEGER NOT NULL,
-                event_json TEXT NOT NULL,
-                PRIMARY KEY (tenant_id, run_id, seq)
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS trajectory_meta (
-                tenant_id TEXT NOT NULL,
-                run_id TEXT NOT NULL,
-                meta_json TEXT NOT NULL,
-                PRIMARY KEY (tenant_id, run_id)
-            )
-            """
-        )
         self._conn.commit()
-        row = self._conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='runs'"
-        ).fetchone()
-        self._has_runs_table = row is not None
+        ensure_hop_tables(self._conn)
 
     def close(self) -> None:
         self._conn.close()
@@ -148,7 +122,12 @@ class CheckpointStore:
         fencing_token: int | None = None,
         eval_outbox: EvalOutboxWrite | None = None,
         trajectory: Sequence[TrajectoryEvent] | None = None,
-    ) -> list[TrajectoryEvent]:
+        route_entry: RouteEntry | None = None,
+        outbox_rows: Sequence[OutboxRow] = (),
+        import_events: Sequence[TrajectoryEvent] = (),
+        meta_json: str | None = None,
+    ) -> None:
+        events = () if trajectory is None else trajectory
         with self._lock:
             lease_db = self._lease_db
             fenced = lease_db is not None
@@ -176,146 +155,30 @@ class CheckpointStore:
                 )
                 if lease_db.exists() and not lease_paths_equal(lease_db, self._db_path):
                     attach_lease_schema(self._conn, lease_db)
-                self._begin_immediate()
             try:
-                if fenced:
-                    from recertia.graph.lease import require_lease_token
-
-                    assert lease_db is not None
-                    require_lease_token(
-                        lease_db,
-                        tenant_id=self._tenant_id,
-                        run_id=run_id,
-                        fencing_token=fencing_token,
-                        conn=self._conn,
-                        missing_row=missing_row,
-                    )
-                self._conn.execute(
-                    "INSERT INTO checkpoints ("
-                    "run_id, seq, node, next_node, state_json, created_at, fencing_token"
-                    ") VALUES (?, ?, ?, ?, ?, datetime('now'), ?)",
-                    (run_id, seq, node, next_node, state.model_dump_json(), fencing_token),
+                commit_hop(
+                    self._conn,
+                    None,
+                    seq=seq,
+                    node=node,
+                    next_node=next_node,
+                    state=state,
+                    trajectory=events,
+                    route_entry=route_entry,
+                    outbox_rows=outbox_rows,
+                    import_events=import_events,
+                    meta_json=meta_json,
+                    eval_outbox=eval_outbox,
+                    lease_db=lease_db if fenced else None,
+                    tenant_id=self._tenant_id,
+                    run_id=run_id,
+                    fencing_token=fencing_token,
+                    missing_row=missing_row,
                 )
-                self._upsert_summary(state)
-                if eval_outbox is not None:
-                    self._conn.execute(
-                        """
-                        INSERT INTO eval_outbox (
-                            observation_key, tenant_id, run_id, attempt_no,
-                            payload_json, status, attempts, created_at
-                        ) VALUES (?, ?, ?, ?, ?, 'pending', 0, datetime('now'))
-                        ON CONFLICT(observation_key) DO NOTHING
-                        """,
-                        (
-                            eval_outbox.observation_key,
-                            eval_outbox.tenant_id,
-                            eval_outbox.run_id,
-                            eval_outbox.attempt_no,
-                            eval_outbox.payload_json,
-                        ),
-                    )
-                assigned = self._insert_trajectory(run_id, seq, trajectory)
-                fault_point("checkpoint.before_commit")
-                self._conn.commit()
-                fault_point("checkpoint.after_commit")
-                return assigned
-            except FaultInjected:
-                self._conn.rollback()
-                raise
             except sqlite3.IntegrityError as exc:
-                self._conn.rollback()
                 raise CheckpointConflict(
                     f"checkpoint ({run_id!r}, seq={seq}) already exists"
                 ) from exc
-            except Exception:
-                self._conn.rollback()
-                raise
-
-    def _insert_trajectory(
-        self,
-        run_id: str,
-        hop_seq: int,
-        events: Sequence[TrajectoryEvent] | None,
-    ) -> list[TrajectoryEvent]:
-        if not events:
-            return []
-        row = self._conn.execute(
-            "SELECT COALESCE(MAX(seq), -1) FROM trajectory_events WHERE tenant_id=? AND run_id=?",
-            (self._tenant_id, run_id),
-        ).fetchone()
-        nxt = int(row[0]) + 1
-        assigned: list[TrajectoryEvent] = []
-        for event in events:
-            item = event.model_copy(update={"seq": nxt, "run_id": run_id})
-            self._conn.execute(
-                """
-                INSERT INTO trajectory_events (
-                    tenant_id, run_id, seq, hop_seq, event_json
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                (self._tenant_id, run_id, nxt, hop_seq, item.model_dump_json()),
-            )
-            assigned.append(item)
-            nxt += 1
-        return assigned
-
-    def _begin_immediate(self) -> None:
-        try:
-            self._conn.execute("BEGIN IMMEDIATE")
-        except sqlite3.OperationalError:
-            self._conn.rollback()
-            self._conn.execute("BEGIN IMMEDIATE")
-
-    def _upsert_summary(self, state: RunState) -> None:
-        terminal = str(state.terminal) if state.terminal else None
-        summary = {
-            "run_id": state.run_id,
-            "task_class": state.task.task_class or "repo-chore",
-            "terminal": terminal,
-            "status": terminal or "running",
-            "attempt_no": int(state.attempt_no),
-            "cost_usd": float(state.spent.cost_usd),
-            "arm": str(state.arm),
-            "tenant_id": self._tenant_id,
-        }
-        if self._has_runs_table:
-            self._conn.execute(
-                """
-                UPDATE runs SET summary_json = ?, status = ?, updated_at = datetime('now')
-                WHERE tenant_id = ? AND run_id = ?
-                """,
-                (
-                    json.dumps(summary, sort_keys=True),
-                    terminal or "running",
-                    self._tenant_id,
-                    state.run_id,
-                ),
-            )
-        self._conn.execute(
-            """
-            INSERT INTO run_summaries (
-                run_id, status, terminal, updated_at, cost_usd,
-                task_class, attempt_no, arm, created_at
-            ) VALUES (?, ?, ?, datetime('now'), ?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(run_id) DO UPDATE SET
-                status = excluded.status,
-                terminal = excluded.terminal,
-                updated_at = excluded.updated_at,
-                cost_usd = excluded.cost_usd,
-                task_class = excluded.task_class,
-                attempt_no = excluded.attempt_no,
-                arm = excluded.arm
-            """,
-            (
-                state.run_id,
-                terminal or "running",
-                terminal,
-                float(state.spent.cost_usd),
-                state.task.task_class or "repo-chore",
-                int(state.attempt_no),
-                str(state.arm),
-            ),
-        )
 
     def _backfill_summaries(self) -> None:
         """Fill summaries for checkpoints written before the summary table existed."""
@@ -352,6 +215,17 @@ class CheckpointStore:
             """
         )
         self._conn.commit()
+
+    def list_trajectory_events(self, run_id: str) -> list[TrajectoryEvent]:
+        """Events committed with hops, ordered by ``seq``."""
+
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT event_json FROM trajectory_events "
+                "WHERE tenant_id=? AND run_id=? ORDER BY seq ASC",
+                (self._tenant_id, run_id),
+            ).fetchall()
+        return [TrajectoryEvent.model_validate_json(row[0]) for row in rows]
 
     def pending_eval_outbox(self) -> list[EvalOutboxPending]:
         with self._lock:

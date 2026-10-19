@@ -9,6 +9,7 @@ from recertia.runtime.errors import (
     RunIdExists,
     WorkspaceBusy,
 )
+from recertia.runtime.hop import OutboxRow, commit_hop
 from recertia.runtime.lease import LeaseToken
 from recertia.runtime.registry import ReserveResult, RunRegistry
 from recertia.runtime.workspace_lock import WorkspaceLock, WorkspaceLockHandle
@@ -18,6 +19,7 @@ __all__ = [
     "InvalidCursor",
     "LeaseLost",
     "LeaseToken",
+    "OutboxRow",
     "PreconditionRequired",
     "ProgramConflict",
     "ReserveResult",
@@ -26,4 +28,5 @@ __all__ = [
     "WorkspaceBusy",
     "WorkspaceLock",
     "WorkspaceLockHandle",
+    "commit_hop",
 ]

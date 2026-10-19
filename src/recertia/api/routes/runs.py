@@ -85,7 +85,11 @@ def register_runs_routes(app: FastAPI, rs: RouteState) -> None:
         except Exception as exc:
             return _map_run_error(exc, run_id=body.run_id)
         if isinstance(result, AcceptedRun):
-            return JSONResponse(status_code=result.status_code, content=result.body)
+            return JSONResponse(
+                status_code=result.status_code,
+                content=result.body,
+                headers=result.headers,
+            )
         return result
 
     @app.get("/v1/runs/{run_id}", response_model=RunRecord)
@@ -106,7 +110,11 @@ def register_runs_routes(app: FastAPI, rs: RouteState) -> None:
         except Exception as exc:
             return _map_run_error(exc, run_id=run_id)
         if isinstance(result, AcceptedRun):
-            return JSONResponse(status_code=result.status_code, content=result.body)
+            return JSONResponse(
+                status_code=result.status_code,
+                content=result.body,
+                headers=result.headers,
+            )
         return result
 
     @app.get("/v1/runs")
@@ -216,6 +224,7 @@ def register_runs_routes(app: FastAPI, rs: RouteState) -> None:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         if not _tenant_owns_run(ctx, tenant_id, run_id):
             raise HTTPException(status_code=404, detail="run not found")
-        ctx.worker.request_cancel(tenant_id, run_id)
-        ctx.events.append(tenant_id, run_id, "run.cancelled", {"by": principal.key_id})
-        return {"run_id": run_id, "status": "cancel_requested"}
+        try:
+            return run_service.cancel(principal, run_id)
+        except Exception as exc:
+            return _map_run_error(exc, run_id=run_id)

@@ -77,6 +77,16 @@ class TrajectoryStore:
                 seq += 1
         return written
 
+    def replace_all(self, run_id: str, events: list[TrajectoryEvent]) -> None:
+        """Rewrite the JSONL projection from committed SQLite events."""
+
+        path = self._path(run_id)
+        if not events:
+            if path.exists():
+                path.unlink()
+            return
+        path.write_text("".join(ev.model_dump_json() + "\n" for ev in events))
+
     def list_events(self, run_id: str) -> list[TrajectoryEvent]:
         path = self._path(run_id)
         if not path.exists():

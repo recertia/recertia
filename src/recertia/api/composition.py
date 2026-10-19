@@ -75,6 +75,7 @@ def assemble_app_state(
         return RunRecord(**kwargs)
 
     def enqueue_async_run(**kwargs: Any) -> None:
+        replace_terminal = bool(kwargs.pop("replace_terminal", False))
         queued = AsyncRunRequest(**kwargs)
         queue.enqueue(
             QueueItem(
@@ -82,7 +83,8 @@ def assemble_app_state(
                 run_id=queued.run_id,
                 kind="run",
                 payload=dump_async_request(queued),
-            )
+            ),
+            replace_terminal=replace_terminal,
         )
 
     def resolve_task_class(*, explicit: str | None, goal_task_class: str | None) -> str:

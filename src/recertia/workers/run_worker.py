@@ -6,7 +6,6 @@ refuses an unsafe ``multi_node`` configuration before any run is claimed.
 
 from __future__ import annotations
 
-import logging
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -22,9 +21,10 @@ from contracts.run import Task
 from recertia.api.events import RunEventLog
 from recertia.bootstrap import build_default_orchestrator, resolve_task_class
 from recertia.config import ModelConfig
+from recertia.graph.hooks import RunCancelled
+from recertia.graph.lease import RunBusy
 from recertia.ports.identity import Principal
-
-_log = logging.getLogger("recertia.api")
+from recertia.runtime.errors import WorkspaceBusy
 
 
 @dataclass
@@ -47,9 +47,8 @@ class AsyncRunRequest:
     model_config: ModelConfig | None = None
     max_criterion_timeout_s: int | None = None
     cancel_check: Callable[[], bool] | None = None
-    action: str = "start"
     mode: str = "async"
-    count_usage: bool = True
+    action: str = "start"
 
 
 def dump_async_request(req: AsyncRunRequest) -> dict[str, Any]:
@@ -73,9 +72,8 @@ def dump_async_request(req: AsyncRunRequest) -> dict[str, Any]:
         "index_path": str(req.index_path),
         "model_config": asdict(req.model_config) if req.model_config is not None else None,
         "max_criterion_timeout_s": req.max_criterion_timeout_s,
-        "action": req.action,
         "mode": req.mode,
-        "count_usage": req.count_usage,
+        "action": req.action,
     }
 
 
@@ -120,9 +118,8 @@ def load_async_request(payload: dict[str, Any]) -> AsyncRunRequest:
         max_criterion_timeout_s=payload.get("max_criterion_timeout_s")
         if isinstance(payload.get("max_criterion_timeout_s"), int)
         else None,
-        action=str(payload.get("action") or "start"),
         mode=str(payload.get("mode") or "async"),
-        count_usage=bool(payload.get("count_usage", True)),
+        action=str(payload.get("action") or "start"),
     )
 
 
@@ -131,7 +128,7 @@ class AsyncRunWorker:
         self,
         *,
         events: RunEventLog,
-        on_complete: Callable[..., None] | None = None,
+        on_complete: Callable[[str, str, Any], None] | None = None,
         on_failed: Callable[..., None] | None = None,
         max_workers: int = 2,
     ) -> None:
@@ -178,7 +175,7 @@ class AsyncRunWorker:
             req.tenant_id,
             req.run_id,
             "run.started",
-            {"task_class": req.task_class or "repo-chore", "mode": req.mode},
+            {"task_class": req.task_class or "repo-chore", "mode": "async"},
         )
         if self.is_cancelled(req.tenant_id, req.run_id) or self._cancel_flag(req):
             self.events.append(req.tenant_id, req.run_id, "run.cancelled", {"by": "operator"})
@@ -221,6 +218,7 @@ class AsyncRunWorker:
             model_config=req.model_config,
         )
         bundle.orchestrator.max_criterion_timeout_s = req.max_criterion_timeout_s
+        ws_handle = None
         if req.cancel_check is not None:
             from recertia.graph.hooks import CancelHopHook
 
@@ -229,13 +227,19 @@ class AsyncRunWorker:
                 *bundle.orchestrator.hooks,
             ]
         try:
+            from recertia.persistence.layout import RuntimeLayout
+            from recertia.runtime.workspace_lock import WorkspaceLock
+
+            owner_id = f"{req.tenant_id}/{req.run_id}"
+            control_root = req.runs_root.parent.parent
+            ws_handle = WorkspaceLock(RuntimeLayout(control_root).locks_dir).acquire(
+                req.workdir, owner_id=owner_id
+            )
             if self.is_cancelled(req.tenant_id, req.run_id) or self._cancel_flag(req):
                 self.events.append(req.tenant_id, req.run_id, "run.cancelled", {"by": "operator"})
                 self._fail(req, cancelled=True)
                 return "cancelled"
             from recertia.graph.engine import RunIdExistsError
-            from recertia.graph.hooks import RunCancelled
-            from recertia.graph.lease import RunBusy
 
             try:
                 if req.action == "resume":
@@ -243,24 +247,23 @@ class AsyncRunWorker:
                         req.run_id, workdir=req.workdir, script=req.script
                     )
                 else:
-                    state = bundle.orchestrator.start(
-                        req.run_id,
-                        task,
-                        req.criteria,
-                        budget=req.budget,
-                        workdir=req.workdir,
-                        script=req.script,
-                        arm=req.arm,
-                        manifest=bundle.run_manifest(),
-                    )
+                    try:
+                        state = bundle.orchestrator.start(
+                            req.run_id,
+                            task,
+                            req.criteria,
+                            budget=req.budget,
+                            workdir=req.workdir,
+                            script=req.script,
+                            arm=req.arm,
+                            manifest=bundle.run_manifest(),
+                        )
+                    except RunIdExistsError:
+                        state = bundle.orchestrator.resume(
+                            req.run_id, workdir=req.workdir, script=req.script
+                        )
             except RunCancelled:
                 raise
-            except RunBusy:
-                raise
-            except RunIdExistsError:
-                state = bundle.orchestrator.resume(
-                    req.run_id, workdir=req.workdir, script=req.script
-                )
             self.events.append(
                 req.tenant_id,
                 req.run_id,
@@ -272,32 +275,22 @@ class AsyncRunWorker:
                 },
             )
             if self.on_complete is not None:
-                self.on_complete(
-                    req.tenant_id,
-                    req.run_id,
-                    state,
-                    mode=req.mode,
-                    count_usage=req.count_usage,
-                )
+                self.on_complete(req.tenant_id, req.run_id, state)
             return "succeeded"
         except RunCancelled:
             self.events.append(req.tenant_id, req.run_id, "run.cancelled", {"by": "operator"})
             self._fail(req, cancelled=True)
             return "cancelled"
+        except RunBusy:
+            return "run_busy"
+        except WorkspaceBusy:
+            return "workspace_busy"
         except Exception as exc:  # noqa: BLE001
-            from recertia.graph.lease import RunBusy
-
-            if isinstance(exc, RunBusy):
-                raise
-            _log.exception(
-                "create_run failed tenant_id=%s run_id=%s", req.tenant_id, req.run_id
-            )
-            del exc
             self.events.append(
                 req.tenant_id,
                 req.run_id,
                 "error",
-                {"code": "run_failed", "message": "internal server error", "retryable": False},
+                {"code": "run_failed", "message": str(exc)[:500], "retryable": False},
             )
             self.events.append(
                 req.tenant_id,
@@ -308,6 +301,8 @@ class AsyncRunWorker:
             self._fail(req, cancelled=False)
             return "failed"
         finally:
+            if ws_handle is not None:
+                ws_handle.release()
             bundle.close()
 
     def _cancel_flag(self, req: AsyncRunRequest) -> bool:

@@ -1,4 +1,4 @@
-"""``recertia worker`` drains the SQLite run queue. Sync API runs stay inline."""
+"""``recertia worker`` drains the SQLite run queue after API restart."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def worker_cmd(
     once: bool = typer.Option(False, "--once", help="Claim and run at most one item, then exit."),
     concurrency: int = typer.Option(1, "--concurrency"),
 ) -> None:
-    """Execute queued runs. The API thread never drives the orchestrator."""
+    """Execute queued runs. Create/resume enqueue; this process is the hop worker."""
 
     from recertia.errors import RecertiaError
     from recertia.settings import load_settings
