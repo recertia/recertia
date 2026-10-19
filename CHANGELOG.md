@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **REL-4 durable RunQueue** — `POST /v1/runs` and resume enqueue onto
+  `control.db` `run_queue`. The request thread never calls
+  `orchestrator.start`; an embedded drainer (or `recertia worker`) claims
+  fairly across tenants. `RECERTIA_API_DEFAULT_ASYNC` stays `0`, so omitted
+  `mode` enqueue-and-waits (default 60s) and returns 202 + `Retry-After` on
+  timeout. In-flight is `COUNT` of claimed/running rows, so a leaked
+  `quotas.sqlite` gauge cannot 429 a tenant after restart. Cancel is checked
+  at every hop boundary. Eval/job kinds still run on the request thread.
+
 - **SEC-7 PDP.require** — `PolicyDecisionPoint.decide` / `require` implement the
   action table (`runs.create`, `runs.read`, `runs.script`, `runs.cancel`
   other-tenant → 404, `workspace.register` / `skill.promote_seed` as

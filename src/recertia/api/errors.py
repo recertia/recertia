@@ -43,7 +43,7 @@ def quota_error(exc: Exception, *, run_id: str | None = None) -> JSONResponse:
     """Map quota / in-flight exhaustion to the existing 429 envelope."""
 
     message = str(exc)
-    if "max_in_flight" in message:
+    if "max_in_flight" in message or "max_queue_depth" in message:
         return v1_error(
             429, code="worker_busy", message=message, run_id=run_id, retryable=True
         )

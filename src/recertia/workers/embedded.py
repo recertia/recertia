@@ -1,8 +1,8 @@
 """In-process drainer for the SQLite run queue.
 
-``POST /v1/runs`` with ``mode=sync`` does not use this. ``mode=async`` enqueues
-and starts the thread on the first queued item. ``AsyncRunWorker`` still runs
-the graph so existing completion callbacks keep working.
+Create and resume enqueue here. The request thread waits or returns 202; this
+thread is the one that calls ``orchestrator.start``. ``recertia worker`` drains
+the same table after an API restart.
 """
 
 from __future__ import annotations
@@ -57,6 +57,7 @@ class EmbeddedQueueWorker:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
+            self.queue.heartbeat_worker(self.worker_id)
             claims = self.queue.claim(self.worker_id, limit=1)
             if not claims:
                 time.sleep(0.05)
@@ -80,6 +81,10 @@ class EmbeddedQueueWorker:
             return
         if outcome == "cancelled":
             self.queue.finish(claim, status="cancelled")
+        elif outcome == "run_busy":
+            self.queue.finish(claim, status="failed", error_code="run_busy")
+        elif outcome == "workspace_busy":
+            self.queue.finish(claim, status="failed", error_code="workspace_busy")
         elif outcome == "failed":
             self.queue.finish(claim, status="failed", error_code="run_failed")
         else:

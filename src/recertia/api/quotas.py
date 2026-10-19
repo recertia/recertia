@@ -8,11 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from recertia.errors import QuotaExceeded
 from recertia.persistence.db import open_db
-
-
-class QuotaExceeded(Exception):
-    """Tenant would exceed a configured daily or in-flight quota."""
 
 
 @dataclass(frozen=True)
@@ -78,8 +75,23 @@ class QuotaStore:
     def _day(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    def admit(self, tenant_id: str, *, quota: TenantQuota | None = None) -> None:
-        """Raise :class:`QuotaExceeded` when the tenant cannot start another run."""
+    def admit(
+        self,
+        tenant_id: str,
+        *,
+        quota: TenantQuota | None = None,
+        inflight: int | None = None,
+        depth: int | None = None,
+        max_queue_depth: int | None = None,
+        max_in_flight: int | None = None,
+    ) -> None:
+        """Raise :class:`QuotaExceeded` when the tenant cannot start another run.
+
+        Pass ``inflight`` (claimed+running rows) and ``depth`` (queued rows) from
+        ``RunQueue`` so a crash cannot leak the gauge. Omit them to use the
+        leftover ``inflight`` table, which is not an admission input once a
+        queue is bound.
+        """
 
         limits = quota or self.defaults
         day = self._day()
@@ -98,21 +110,34 @@ class QuotaStore:
                 raise QuotaExceeded(
                     f"tenant {tenant_id} exceeded max_cost_usd_per_day={limits.max_cost_usd_per_day}"
                 )
-            inflight = self._conn.execute(
-                "SELECT count FROM inflight WHERE tenant_id = ?", (tenant_id,)
-            ).fetchone()
-            current = int(inflight["count"]) if inflight else 0
-            if current >= limits.max_in_flight:
-                raise QuotaExceeded(
-                    f"tenant {tenant_id} exceeded max_in_flight={limits.max_in_flight}"
-                )
-            self._conn.execute(
-                """
-                INSERT INTO inflight(tenant_id, count) VALUES (?, 1)
-                ON CONFLICT(tenant_id) DO UPDATE SET count = count + 1
-                """,
-                (tenant_id,),
+            if inflight is not None:
+                current = inflight
+            else:
+                inflight_row = self._conn.execute(
+                    "SELECT count FROM inflight WHERE tenant_id = ?", (tenant_id,)
+                ).fetchone()
+                current = int(inflight_row["count"]) if inflight_row else 0
+            in_flight_cap = (
+                max_in_flight if max_in_flight is not None else limits.max_in_flight
             )
+            if current >= in_flight_cap:
+                raise QuotaExceeded(
+                    f"tenant {tenant_id} exceeded max_in_flight={in_flight_cap}"
+                )
+            if depth is not None:
+                cap = max_queue_depth if max_queue_depth is not None else 100
+                if depth >= cap:
+                    raise QuotaExceeded(
+                        f"tenant {tenant_id} exceeded max_queue_depth={cap}"
+                    )
+            if inflight is None:
+                self._conn.execute(
+                    """
+                    INSERT INTO inflight(tenant_id, count) VALUES (?, 1)
+                    ON CONFLICT(tenant_id) DO UPDATE SET count = count + 1
+                    """,
+                    (tenant_id,),
+                )
 
     def release_inflight(self, tenant_id: str) -> None:
         with self._lock, self._conn:

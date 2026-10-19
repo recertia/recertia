@@ -115,9 +115,12 @@ class AppState:
             created_at=existing.created_at if existing else datetime.now(timezone.utc),
             has_goal=state.task.goal is not None,
         )
-        self.runs[(tenant_id, run_id)] = rec.model_copy(
-            update={"cost_usd": cost, "mode": "async"}
-        )
+        mode = getattr(existing, "mode", None) or "async"
+        extra: dict[str, Any] = {"cost_usd": cost, "mode": mode}
+        if existing is not None:
+            extra["workspace_id"] = getattr(existing, "workspace_id", None)
+            extra["workdir"] = getattr(existing, "workdir", None)
+        self.runs[(tenant_id, run_id)] = rec.model_copy(update=extra)
         if self.run_service is not None:
             self.run_service.complete(tenant_id, cost_usd=cost)
         else:
@@ -132,6 +135,7 @@ class AppState:
         if existing is None:
             return
         terminal = "cancelled" if cancelled else "error"
+        mode = getattr(existing, "mode", None) or "async"
         self.runs[(tenant_id, run_id)] = existing.model_copy(
-            update={"status": terminal, "terminal": terminal, "mode": "async"}
+            update={"status": terminal, "terminal": terminal, "mode": mode}
         )
