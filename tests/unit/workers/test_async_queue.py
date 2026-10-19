@@ -1,4 +1,4 @@
-"""mode=async is durable on run_queue. mode=sync stays on the request thread."""
+"""mode=async is durable on run_queue. mode=sync enqueue-and-waits on the same table."""
 
 from __future__ import annotations
 

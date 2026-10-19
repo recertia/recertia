@@ -1,4 +1,4 @@
-"""Background workers for async console runs.
+"""Background workers for the durable run queue.
 
 ``AsyncRunWorker`` loads on attribute access. Importing this package must not
 import FastAPI: ``recertia worker`` and ``recertia --help`` only need

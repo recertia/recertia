@@ -1,7 +1,8 @@
 """SQLite ``run_queue`` with deficit-round-robin claim.
 
-Sync ``POST /v1/runs`` still executes on the request thread. This queue is what
-``recertia worker`` drains. ``RECERTIA_API_DEFAULT_ASYNC`` stays off.
+Create and resume enqueue here. ``RECERTIA_API_DEFAULT_ASYNC`` stays off, so
+omitted ``mode`` enqueue-and-waits. In-flight is a query of claimed/running
+rows, not a counter that can leak across a crash.
 """
 
 from __future__ import annotations
@@ -12,16 +13,16 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from recertia.errors import QuotaExceeded
 from recertia.persistence.db import apply_migrations, open_db
 from recertia.persistence.layout import RuntimeLayout
 from recertia.ports.identity import tenant_id
 
 _MIGRATIONS = Path(__file__).resolve().parents[1] / "persistence" / "migrations" / "control"
-_DEFICIT_CAP = 1000
 _CLAIM_COST = 1
 _TERMINAL = frozenset({"succeeded", "failed", "cancelled", "dead"})
 QueueStatus = Literal["succeeded", "failed", "cancelled"]
@@ -76,44 +77,102 @@ class RunQueue:
         self._conn.row_factory = sqlite3.Row
         apply_migrations(self._conn, _MIGRATIONS)
         _ensure_cancel_column(self._conn)
+        from recertia.settings import load_settings
+
+        settings = load_settings()
+        self._deficit_cap = settings.sched_deficit_cap
+        self._default_max_attempts = settings.queue_max_attempts
+        self._default_max_queue_depth = settings.tenant_max_queue_depth
 
     def close(self) -> None:
         self._conn.close()
 
-    def enqueue(self, item: QueueItem) -> None:
+    def enqueue(self, item: QueueItem, *, replace_terminal: bool = False) -> None:
         tenant = str(tenant_id(item.tenant_id))
         if item.kind not in {"run", "eval", "job"}:
             raise ValueError(f"unsupported queue kind {item.kind!r}")
         stamp = item.enqueued_at or _now()
         due = item.not_before or stamp
+        attempts = item.max_attempts or self._default_max_attempts
+        payload = json.dumps(item.payload)
         with self._lock:
             self._ensure_tenant(tenant)
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                self._conn.execute(
-                    """
-                    INSERT INTO run_queue (
-                        tenant_id, run_id, kind, status, priority, enqueued_at, not_before,
-                        claim_token, attempt, max_attempts, payload_json
-                    ) VALUES (?, ?, ?, 'queued', ?, ?, ?, 0, 0, ?, ?)
-                    """,
-                    (
-                        tenant,
-                        item.run_id,
-                        item.kind,
-                        item.priority,
-                        stamp,
-                        due,
-                        item.max_attempts,
-                        json.dumps(item.payload),
-                    ),
-                )
+                depth_row = self._conn.execute(
+                    "SELECT COUNT(*) FROM run_queue WHERE tenant_id=? AND status='queued'",
+                    (tenant,),
+                ).fetchone()
+                depth = int(depth_row[0]) if depth_row else 0
+                cap_row = self._conn.execute(
+                    "SELECT max_queue_depth FROM tenant_limits WHERE tenant_id=?",
+                    (tenant,),
+                ).fetchone()
+                cap = int(cap_row[0]) if cap_row else self._default_max_queue_depth
+                existing = self._conn.execute(
+                    "SELECT status FROM run_queue WHERE tenant_id=? AND run_id=? AND kind=?",
+                    (tenant, item.run_id, item.kind),
+                ).fetchone()
+                if existing is None:
+                    if depth >= cap:
+                        self._conn.execute("ROLLBACK")
+                        raise QuotaExceeded(
+                            f"tenant {tenant} exceeded max_queue_depth={cap}"
+                        )
+                    self._conn.execute(
+                        """
+                        INSERT INTO run_queue (
+                            tenant_id, run_id, kind, status, priority, enqueued_at, not_before,
+                            claim_token, attempt, max_attempts, payload_json, cancel_requested
+                        ) VALUES (?, ?, ?, 'queued', ?, ?, ?, 0, 0, ?, ?, 0)
+                        """,
+                        (
+                            tenant,
+                            item.run_id,
+                            item.kind,
+                            item.priority,
+                            stamp,
+                            due,
+                            attempts,
+                            payload,
+                        ),
+                    )
+                elif replace_terminal and str(existing["status"]) in _TERMINAL:
+                    if depth >= cap:
+                        self._conn.execute("ROLLBACK")
+                        raise QuotaExceeded(
+                            f"tenant {tenant} exceeded max_queue_depth={cap}"
+                        )
+                    self._conn.execute(
+                        """
+                        UPDATE run_queue
+                        SET status='queued', priority=?, enqueued_at=?, not_before=?,
+                            claimed_by=NULL, heartbeat_at=NULL, attempt=0,
+                            max_attempts=?, payload_json=?, error_code=NULL,
+                            finished_at=NULL, cancel_requested=0
+                        WHERE tenant_id=? AND run_id=? AND kind=?
+                        """,
+                        (
+                            item.priority,
+                            stamp,
+                            due,
+                            attempts,
+                            payload,
+                            tenant,
+                            item.run_id,
+                            item.kind,
+                        ),
+                    )
+                else:
+                    self._conn.execute("ROLLBACK")
+                    raise ValueError(
+                        f"queue item {(tenant, item.run_id, item.kind)} already exists"
+                    )
                 self._conn.execute("COMMIT")
-            except sqlite3.IntegrityError as exc:
-                self._conn.execute("ROLLBACK")
-                raise ValueError(
-                    f"queue item {(tenant, item.run_id, item.kind)} already exists"
-                ) from exc
+            except QuotaExceeded:
+                raise
+            except ValueError:
+                raise
             except Exception:
                 self._conn.execute("ROLLBACK")
                 raise
@@ -225,7 +284,48 @@ class RunQueue:
                 (mode, _now()),
             )
 
-    def request_cancel(self, tenant: str, run_id: str, *, kind: str = "run") -> None:
+    def max_in_flight(self, tenant: str) -> int:
+        ident = str(tenant_id(tenant))
+        with self._lock:
+            self._ensure_tenant(ident)
+            row = self._conn.execute(
+                "SELECT max_in_flight FROM tenant_limits WHERE tenant_id=?",
+                (ident,),
+            ).fetchone()
+        from recertia.settings import load_settings
+
+        return int(row[0]) if row else load_settings().tenant_max_in_flight
+
+    def max_queue_depth(self, tenant: str) -> int:
+        ident = str(tenant_id(tenant))
+        with self._lock:
+            self._ensure_tenant(ident)
+            row = self._conn.execute(
+                "SELECT max_queue_depth FROM tenant_limits WHERE tenant_id=?",
+                (ident,),
+            ).fetchone()
+        return int(row[0]) if row else self._default_max_queue_depth
+
+    def heartbeat_worker(self, worker_id: str) -> None:
+        stamp = _now()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE workers SET heartbeat_at=? WHERE worker_id=?",
+                (stamp, worker_id),
+            )
+            inflight = self._conn.execute(
+                "SELECT COUNT(*) FROM run_queue WHERE claimed_by=? AND status IN ('claimed', 'running')",
+                (worker_id,),
+            ).fetchone()
+            self._conn.execute(
+                "UPDATE workers SET inflight=? WHERE worker_id=?",
+                (int(inflight[0]) if inflight else 0, worker_id),
+            )
+
+    def request_cancel(
+        self, tenant: str, run_id: str, *, kind: str = "run", by: str | None = None
+    ) -> None:
+        del by
         ident = str(tenant_id(tenant))
         with self._lock:
             self._conn.execute(
@@ -297,6 +397,8 @@ class RunQueue:
                         (stamp, *key),
                     )
                 else:
+                    delay = min(2 ** (attempt + 1), 60)
+                    due = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
                     self._conn.execute(
                         """
                         UPDATE run_queue
@@ -305,7 +407,7 @@ class RunQueue:
                         WHERE tenant_id=? AND run_id=? AND kind=?
                           AND status IN ('claimed', 'running')
                         """,
-                        (attempt + 1, stamp, *key),
+                        (attempt + 1, due, *key),
                     )
                 changed += 1
             return changed
@@ -381,7 +483,7 @@ class RunQueue:
                     SET deficit = MIN(deficit + weight, ?)
                     WHERE tenant_id != ?
                     """,
-                    (_DEFICIT_CAP, tenant),
+                    (self._deficit_cap, tenant),
                 )
                 self._conn.execute(
                     """
@@ -462,7 +564,7 @@ class RunQueue:
                 tenant_id, max_runs_per_day, max_cost_usd_per_day, max_in_flight,
                 max_queue_depth, max_sse_connections, max_model_spend_usd_per_day,
                 weekly_token_cap
-            ) VALUES (?, ?, ?, ?, 100, 32, ?, NULL)
+            ) VALUES (?, ?, ?, ?, ?, 32, ?, NULL)
             ON CONFLICT(tenant_id) DO NOTHING
             """,
             (
@@ -470,6 +572,7 @@ class RunQueue:
                 settings.tenant_max_runs_per_day,
                 settings.tenant_max_cost_usd_per_day,
                 settings.tenant_max_in_flight,
+                settings.tenant_max_queue_depth,
                 settings.tenant_max_cost_usd_per_day,
             ),
         )
