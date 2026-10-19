@@ -805,6 +805,8 @@ def test_agents_documents_tenant_job_quota_path() -> None:
 
 
 def test_checkpoint_sql_is_insert_not_replace() -> None:
-    source = Path("src/recertia/graph/store.py").read_text(encoding="utf-8")
-    assert "INSERT OR REPLACE INTO checkpoints" not in source
-    assert "INSERT INTO checkpoints" in source
+    hop = Path("src/recertia/runtime/hop.py").read_text(encoding="utf-8")
+    store = Path("src/recertia/graph/store.py").read_text(encoding="utf-8")
+    assert "INSERT OR REPLACE INTO checkpoints" not in hop
+    assert "INSERT OR REPLACE INTO checkpoints" not in store
+    assert "INSERT INTO checkpoints" in hop
