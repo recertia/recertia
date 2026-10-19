@@ -123,6 +123,7 @@ KNOWN_ENV_KEYS = frozenset(
         "RECERTIA_LEDGER_HMAC_KEY",
         "RECERTIA_EXECUTOR_MODE",
         "RECERTIA_QUOTA_RESERVE_TTL_S",
+        "RECERTIA_AFFORDANCE_SAMPLE_CAP",
         "RECERTIA_TENANT_MODEL_KEYS",
         "RECERTIA_TENANT_MODEL_KEYS_FILE",
     }
@@ -329,6 +330,7 @@ class Settings:
     ledger_hmac_key: str = ""
     executor_mode: str = ""
     quota_reserve_ttl_s: int = 86400
+    affordance_sample_cap: int = 200
     tenant_model_keys: str = ""
     tenant_model_keys_file: str = ""
 
@@ -568,6 +570,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         ledger_hmac_key=_raw(env, "RECERTIA_LEDGER_HMAC_KEY").strip(),
         executor_mode=_raw(env, "RECERTIA_EXECUTOR_MODE").strip(),
         quota_reserve_ttl_s=_int(env, "RECERTIA_QUOTA_RESERVE_TTL_S", 86400),
+        affordance_sample_cap=_int(env, "RECERTIA_AFFORDANCE_SAMPLE_CAP", 200),
         tenant_model_keys=_raw(env, "RECERTIA_TENANT_MODEL_KEYS").strip(),
         tenant_model_keys_file=_raw(env, "RECERTIA_TENANT_MODEL_KEYS_FILE").strip(),
     )

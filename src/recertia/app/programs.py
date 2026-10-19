@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -11,6 +12,7 @@ from contracts.goal import Constraint, DesiredState, Goal, compile_goal
 from contracts.program import ExternalHandoff, MigrationProgram, MigrationStep, RepoBinding
 from recertia.app.authz import Resource
 from recertia.errors import ConfigError, Conflict, NotFound, QuotaExceeded
+from recertia.persistence.idempotency import request_hash
 from recertia.ports.identity import Principal
 from recertia.programs.materialize import (
     MaterializeError,
@@ -22,6 +24,7 @@ from recertia.programs.materialize import (
     step_is_ready,
 )
 from recertia.programs.stress import stress_program, stress_step
+from recertia.runtime.errors import PreconditionRequired
 
 
 class ProgramService:
@@ -142,12 +145,54 @@ class ProgramService:
         self, principal: Principal, *, tenant: str, runtime: Any, program_id: str
     ) -> dict[str, Any]:
         self._require(principal, "programs.read")
-        prog = self._refresh_step_statuses(self._get_program(runtime, program_id, tenant), runtime)
-        runtime.programs.put(prog)
+        current = self._get_program(runtime, program_id, tenant)
+        prog = self._refresh_step_statuses(current, runtime)
+        if _program_fingerprint(prog) != _program_fingerprint(current):
+            prog = runtime.programs.put(prog)
         return {
             "program": prog.model_dump(mode="json"),
             "warnings": [w.to_dict() for w in stress_program(prog)],
         }
+
+    def replace(
+        self,
+        principal: Principal,
+        *,
+        tenant: str,
+        runtime: Any,
+        program_id: str,
+        body: Any,
+        if_match: int | None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        self._require(principal, "programs.write")
+        existing = runtime.programs.get(program_id, tenant_id=tenant)
+        if existing is None:
+            raise NotFound("program not found")
+        if if_match is None:
+            raise PreconditionRequired("If-Match is required")
+        payload = dict(body)
+        payload["program_id"] = program_id
+        payload["tenant_id"] = tenant
+        payload.pop("version", None)
+        try:
+            prog = MigrationProgram.model_validate(payload)
+        except Exception as exc:
+            raise ConfigError("invalid program") from exc
+        digest = None
+        if idempotency_key:
+            store = _idempotency_store(runtime)
+            digest = request_hash(prog.model_dump(mode="json"))
+            replay = store.check(tenant, "program.put", idempotency_key, digest)
+            if replay is not None:
+                return replay
+        saved = runtime.programs.put(prog, if_match=if_match)
+        result = {"program": saved.model_dump(mode="json")}
+        if idempotency_key and digest is not None:
+            _idempotency_store(runtime).put(
+                tenant, "program.put", idempotency_key, digest, result
+            )
+        return result
 
     def accept(
         self, principal: Principal, *, tenant: str, runtime: Any, program_id: str, body: Any
@@ -266,16 +311,25 @@ class ProgramService:
         )
         step = self._find_step(prog, step_id)
 
+        digest = None
+        idem_scope_key = None
         if body.idempotency_key:
-            idem_key = f"{tenant}:{program_id}:{step_id}:{body.idempotency_key}"
-            prior = runtime._program_idempotency.get(idem_key)
-            if prior and step.current_run_id == prior:
-                return {
-                    "program": prog.model_dump(mode="json"),
-                    "step_id": step_id,
-                    "run_id": prior,
-                    "idempotent": True,
+            idem_scope_key = f"{program_id}:{step_id}:{body.idempotency_key}"
+            digest = request_hash(
+                {
+                    "bind_run_id": body.bind_run_id,
+                    "workdir": body.workdir,
+                    "workspace_id": body.workspace_id,
+                    "plan_only": body.plan_only,
                 }
+            )
+            replay = _idempotency_store(runtime).check(
+                tenant, "program.run_step", idem_scope_key, digest
+            )
+            if replay is not None:
+                replayed = dict(replay)
+                replayed["idempotent"] = True
+                return replayed
 
         try:
             goal = materialize_step_goal(prog, step)
@@ -409,17 +463,18 @@ class ProgramService:
             prog = self._refresh_step_statuses(prog, runtime)
 
         saved = runtime.programs.put(prog)
-        if body.idempotency_key:
-            runtime._program_idempotency[
-                f"{tenant}:{program_id}:{step_id}:{body.idempotency_key}"
-            ] = run_id
-        return {
+        result = {
             "program": saved.model_dump(mode="json"),
             "step_id": step_id,
             "run_id": run_id,
             "step_status": new_status,
             "idempotent": False,
         }
+        if idem_scope_key is not None and digest is not None:
+            _idempotency_store(runtime).put(
+                tenant, "program.run_step", idem_scope_key, digest, result
+            )
+        return result
 
     def skip_step(
         self,
@@ -628,3 +683,22 @@ class ProgramService:
             else:
                 steps2.append(step)
         return refreshed.model_copy(update={"steps": steps2})
+
+
+def _program_fingerprint(prog: MigrationProgram) -> str:
+    data = prog.model_dump(mode="json")
+    data.pop("updated_at", None)
+    data.pop("version", None)
+    return json.dumps(data, sort_keys=True, default=str)
+
+
+def _idempotency_store(runtime: Any) -> Any:
+    store = getattr(runtime, "idempotency", None)
+    if store is not None:
+        return store
+    from recertia.persistence.idempotency import IdempotencyStore
+    from recertia.persistence.layout import RuntimeLayout
+
+    store = IdempotencyStore(RuntimeLayout(Path(runtime.root)).control_db)
+    runtime.idempotency = store
+    return store

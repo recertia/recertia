@@ -8,8 +8,11 @@ __all__ = [
     "Busy",
     "ConfigError",
     "ExecutionUnavailable",
+    "IdempotencyMismatch",
     "LedgerLockTimeout",
     "LedgerUnavailable",
+    "PreconditionRequired",
+    "ProgramConflict",
     "RunIdExists",
     "StateCorrupt",
     "WorkspaceBusy",
@@ -45,6 +48,33 @@ class RunIdExists(RecertiaError):
     http_status = 409
     retryable = False
     exit_code = 5
+
+
+class IdempotencyMismatch(RecertiaError):
+    """Same idempotency key, different request hash."""
+
+    code = "idempotency_mismatch"
+    http_status = 409
+    retryable = False
+    exit_code = 5
+
+
+class ProgramConflict(RecertiaError):
+    """Program ``If-Match`` did not match the stored version."""
+
+    code = "program_conflict"
+    http_status = 409
+    retryable = False
+    exit_code = 5
+
+
+class PreconditionRequired(RecertiaError):
+    """``If-Match`` is required on an existing program."""
+
+    code = "precondition_required"
+    http_status = 428
+    retryable = False
+    exit_code = 2
 
 
 class WorkspaceBusy(Busy):

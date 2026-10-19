@@ -17,6 +17,7 @@ _STATUS_CODES: dict[int, str] = {
     403: "forbidden",
     404: "not_found",
     409: "conflict",
+    428: "precondition_required",
     413: "payload_too_large",
     429: "rate_limited",
     500: "internal_error",

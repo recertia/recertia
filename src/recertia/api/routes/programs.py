@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request
 
 from recertia.api.deps import RouteState
 from recertia.api.schemas import (
@@ -18,12 +18,29 @@ from recertia.api.schemas import (
     StepRunBody,
     StepSkipBody,
 )
-from recertia.errors import RecertiaError
+from recertia.errors import ConfigError, RecertiaError
 
 
 def _map_program_error(exc: RecertiaError) -> HTTPException:
-    detail: Any = exc.details.get("http_detail", exc.message) if exc.details else exc.message
-    return HTTPException(status_code=exc.http_status, detail=detail)
+    if exc.details.get("http_detail") is not None:
+        return HTTPException(status_code=exc.http_status, detail=exc.details["http_detail"])
+    return HTTPException(status_code=exc.http_status, detail=exc.error_body())
+
+
+def _parse_if_match(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    if text.startswith("W/"):
+        text = text[2:].strip()
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        text = text[1:-1]
+    try:
+        return int(text)
+    except ValueError as exc:
+        raise ConfigError("If-Match must be an integer version") from exc
 
 
 def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
@@ -90,6 +107,29 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
         try:
             return ctx.program_service.get(
                 principal, tenant=tenant_id, runtime=ctx, program_id=program_id
+            )
+        except RecertiaError as exc:
+            raise _map_program_error(exc) from exc
+    @app.put("/v1/programs/{program_id}")
+    def put_program(
+        program_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),
+        principal=Depends(require_runs),
+        x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
+        if_match: str | None = Header(default=None, alias="If-Match"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ) -> dict[str, Any]:
+        tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
+        try:
+            return ctx.program_service.replace(
+                principal,
+                tenant=tenant_id,
+                runtime=ctx,
+                program_id=program_id,
+                body=body,
+                if_match=_parse_if_match(if_match),
+                idempotency_key=idempotency_key,
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc

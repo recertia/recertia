@@ -124,6 +124,7 @@ class MigrationProgram(BaseModel):
     updated_at: str = ""
     source: ProgramSource = "human"
     disclaimer_acked_at: str | None = None
+    version: int = Field(default=1, ge=1)
 
     @model_validator(mode="after")
     def _linear_ordinals_unique(self) -> "MigrationProgram":

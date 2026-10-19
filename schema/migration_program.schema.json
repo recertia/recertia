@@ -783,6 +783,12 @@
       ],
       "default": null,
       "title": "Disclaimer Acked At"
+    },
+    "version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Version",
+      "type": "integer"
     }
   },
   "required": [

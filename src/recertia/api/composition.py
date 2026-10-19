@@ -20,6 +20,8 @@ from recertia.app.programs import ProgramService
 from recertia.app.promotion import PromotionService
 from recertia.app.state import AppState
 from recertia.app.workspaces import WorkspaceService
+from recertia.persistence.idempotency import IdempotencyStore
+from recertia.persistence.layout import RuntimeLayout
 from recertia.programs.store import ProgramStore
 from recertia.proposals.store import ProposalStore
 from recertia.workers.embedded import EmbeddedQueueWorker
@@ -56,6 +58,7 @@ def assemble_app_state(
     pdp = PolicyDecisionPoint.load(surface="api")
     sessions = SessionStore(path=root / "console_sessions.sqlite")
     queue = open_run_queue(root)
+    idempotency = IdempotencyStore(RuntimeLayout(root).control_db)
     queue.reconcile_orphans()
     bind = getattr(quota_store, "bind_queue", None)
     if bind is not None:
@@ -118,7 +121,7 @@ def assemble_app_state(
         ops_service=OpsService(pdp=pdp),
         sessions=sessions,
         proposals=ProposalStore(root / "proposals.sqlite"),
-        programs=ProgramStore(root / "programs.sqlite"),
+        programs=ProgramStore(root / "programs.sqlite", idempotency=idempotency),
         job_runs=JobRunStore(root / "job_runs.sqlite"),
         events=RunEventLog(root),
         queue=queue,
@@ -134,6 +137,7 @@ def assemble_app_state(
         resolve_task_class=resolve_task_class,
         settings=settings,
         principal_resolver=IdentityResolver(keys=key_store, sessions=sessions, settings=settings),
+        idempotency=idempotency,
     )
     worker = AsyncRunWorker(
         events=state.events,

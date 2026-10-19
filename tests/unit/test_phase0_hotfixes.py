@@ -652,7 +652,8 @@ def test_affordance_store_quarantines_corrupt_json(tmp_path: Path) -> None:
     quarantined = list(tmp_path.glob("affordances.json.corrupt-*"))
     assert len(quarantined) == 1
     store.save()
-    assert json.loads(path.read_text(encoding="utf-8"))["tools"] == {}
+    assert not path.exists()
+    store.close()
 
 
 def _state(run_id: str) -> RunState:

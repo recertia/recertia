@@ -58,7 +58,7 @@ class AppState:
     resolve_task_class: Callable[..., Any]
     settings: Any = None
     principal_resolver: Any = None
-    _program_idempotency: dict[str, str] = field(default_factory=dict)
+    idempotency: Any = None
     _cancel_flags: set[str] = field(default_factory=set)
 
     @property
