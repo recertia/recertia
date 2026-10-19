@@ -204,6 +204,15 @@ def test_lock_busy_open_raises_without_writing_elsewhere(
         imported.close()
 
 
+def test_exclusive_held_by_this_thread_is_removed() -> None:
+    """R4: the pid/tid holder helper is deleted, not stubbed to False."""
+
+    with pytest.raises(ImportError, match="exclusive_held_by_this_thread"):
+        from recertia.persistence.root_lock import exclusive_held_by_this_thread
+
+        del exclusive_held_by_this_thread
+
+
 def test_same_thread_holder_gets_root_busy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
