@@ -31,6 +31,7 @@ from recertia.api.auth import validate_tenant_id
 Role = Literal["operator", "reviewer", "admin"]
 _VALID_ROLES = frozenset({"operator", "reviewer", "admin"})
 _OIDC_TTL_S = 600
+_OIDC_PENDING_MAX = 1024
 
 
 def auth_mode() -> str:
@@ -330,6 +331,9 @@ class SessionStore:
         with self._oidc_lock:
             self._purge_oidc_locked()
             self._oidc[state] = OidcPending(verifier, redirect_uri, time.time(), nonce)
+            while len(self._oidc) > _OIDC_PENDING_MAX:
+                oldest = min(self._oidc, key=lambda key: self._oidc[key].created_at)
+                self._oidc.pop(oldest, None)
         return state, verifier, nonce
 
     def claim_jti(self, jti: str) -> None:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -50,8 +51,8 @@ class Telemetry:
     """Process-local span/event recorder (OTel-compatible surface)."""
 
     def __init__(self) -> None:
-        self.spans: list[SpanRecord] = []
-        self.events: list[SpanEvent] = []
+        self.spans: deque[SpanRecord] = deque(maxlen=1024)
+        self.events: deque[SpanEvent] = deque(maxlen=1024)
         self._otel = None
         self._exporters: list[Any] = []
         try:

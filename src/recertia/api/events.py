@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import threading
+import time
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from uuid import uuid4
 
 from recertia.api.auth import validate_tenant_id
@@ -77,13 +79,91 @@ class RunEventLog:
                 out.append(event)
         return out
 
-    def iter_sse(self, tenant_id: str, run_id: str, *, after: str | None = None) -> Iterator[str]:
-        """Yield SSE chunks for current backlog (caller may poll again)."""
+    def offset_after_event_id(self, tenant_id: str, run_id: str, event_id: str) -> int:
+        """Byte offset exclusive of ``event_id``. Unknown ids start at 0."""
 
-        events = self.list_after(tenant_id, run_id, after=after)
-        last_id = after
-        for event in events:
-            last_id = event["event_id"]
-            yield f"id: {event['event_id']}\nevent: {event['type']}\ndata: {json.dumps(event)}\n\n"
-        if last_id:
-            yield f": cursor {last_id}\n\n"
+        path = self._path(tenant_id, run_id)
+        if not path.exists():
+            return 0
+        pos = 0
+        with path.open(encoding="utf-8") as handle:
+            while True:
+                line = handle.readline()
+                if not line:
+                    return pos
+                if not line.endswith("\n"):
+                    return pos
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    pos = handle.tell()
+                    continue
+                pos = handle.tell()
+                if event.get("event_id") == event_id:
+                    return pos
+        return 0
+
+    def follow(
+        self,
+        tenant_id: str,
+        run_id: str,
+        *,
+        offset: int,
+        timeout_s: float = 0.0,
+        poll_s: float = 0.5,
+        keepalive_s: float = 15.0,
+        is_terminal: Callable[[], bool] | None = None,
+    ) -> Iterator[str]:
+        """Yield SSE from a byte offset. ``id`` is the exclusive end offset."""
+
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        pos = max(0, int(offset))
+        last_beat = time.monotonic()
+        while True:
+            events, pos = self._read_from(tenant_id, run_id, pos)
+            for event, end in events:
+                yield (
+                    f"id: {end}\nevent: {event['type']}\ndata: {json.dumps(event)}\n\n"
+                )
+            if is_terminal is not None and is_terminal():
+                return
+            now = time.monotonic()
+            if now >= deadline:
+                return
+            if now - last_beat >= keepalive_s:
+                yield ": keep-alive\n\n"
+                last_beat = now
+            remaining = deadline - now
+            time.sleep(min(max(poll_s, 0.0), max(remaining, 0.0)))
+
+    def _read_from(
+        self, tenant_id: str, run_id: str, offset: int
+    ) -> tuple[list[tuple[dict[str, Any], int]], int]:
+        path = self._path(tenant_id, run_id)
+        if not path.exists():
+            return [], offset
+        out: list[tuple[dict[str, Any], int]] = []
+        with path.open(encoding="utf-8") as handle:
+            handle.seek(max(0, offset))
+            while True:
+                start = handle.tell()
+                line = handle.readline()
+                if not line:
+                    return out, start
+                if not line.endswith("\n"):
+                    return out, start
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict):
+                    out.append((event, handle.tell()))
+        return out, offset
+
+    def iter_sse(self, tenant_id: str, run_id: str, *, after: str | None = None) -> Iterator[str]:
+        """Yield SSE for the current backlog. ``after`` is an event id, exclusive."""
+
+        offset = 0
+        if after:
+            offset = self.offset_after_event_id(tenant_id, run_id, after)
+        yield from self.follow(tenant_id, run_id, offset=offset, timeout_s=0.0)
