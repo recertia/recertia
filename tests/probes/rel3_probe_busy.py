@@ -1,7 +1,9 @@
-"""#90 lock-busy path: legacy state not yet imported while a writer is on runtime.db."""
-import sys, tempfile, sqlite3
+"""#90 lock-busy path: leftover import while exclusive .lock is held."""
+import tempfile
 from pathlib import Path
-from tests.probes.rel3_probe import state, record, RESULTS, subprocess_exclusive
+from tests.probes.rel3_probe import (
+    RESULTS, busy_open, leftover_digest, leftover_latest, holder_write, record, state, subprocess_exclusive,
+)
 from recertia.graph.persistence import open_run_persistence
 
 root = Path(tempfile.mkdtemp())
@@ -9,19 +11,32 @@ p0 = open_run_persistence(root, migrate="off")
 for s in (1, 2, 3): p0.checkpoints.save("legacy-run", s, f"n{s}", None, state("legacy-run"))
 p0.close()
 lock = subprocess_exclusive(root / ".lock")          # importer/backup busy
-# leftover seqs stay on disk while exclusive .lock is held (open_run_persistence is RootBusy)
-uri = (root / "checkpoints.db").resolve().as_posix().replace("?", "%3F")
-c = sqlite3.connect(f"file:{uri}?mode=ro", uri=True)
-seen = c.execute("SELECT MAX(seq) FROM checkpoints WHERE run_id='legacy-run'").fetchone()[0]
-c.close()
-record("L legacy state visible while root lock busy", seen == 3, f"latest_seq('legacy-run') on busy-path process: {seen}")
-# that process must not write somewhere else while exclusive is held
-lock.release()
-# M: a later normal open must keep ALL state (legacy seq 1-3 plus the busy-path write)
+# MAIN: open_run_persistence while exclusive is held -> typed RootBusy, or block until release (5s)
+seen = leftover_latest(root, "legacy-run")
+before = leftover_digest(root)
+ok_open, open_detail, released = busy_open(root, lock, timeout_s=5.0)
+during = leftover_digest(root)
+record("L open under exclusive RootLock: typed busy error or block-until-release", ok_open, open_detail)
+# SECONDARY: leftover seqs stay on disk (read-only SELECT); busy open does not invent n1-new
+record("L legacy state visible while root lock busy", seen == 3 and before == during,
+       f"latest_seq('legacy-run') on busy-path process: {seen}; leftover digest before={before} during={during}")
+# that process must not write somewhere else while exclusive is held (n1-new stays dropped)
+wrote_holder = False
+if not released:
+    holder_write(root, "legacy-run", 4, "holder4")
+    wrote_holder = True
+    lock.release()
+expected = [(1, "n1"), (2, "n2"), (3, "n3")]
+if wrote_holder:
+    expected.append((4, "holder4"))
+# M: a later normal open must keep ALL state (pre-existing + holder's writes; nothing from the busy attempt)
 try:
-    p3 = open_run_persistence(root); latest = p3.checkpoints.latest_seq("legacy-run"); p3.close()
+    p3 = open_run_persistence(root)
+    hist = [(int(s_), n) for s_, n, *_ in p3.checkpoints.history("legacy-run")]
+    p3.close()
     files = sorted(x.name for x in root.iterdir() if "db" in x.name)
-    record("M later import after busy-path write keeps all state", latest == 3, f"latest_seq after import={latest}; files={files}")
+    record("M later import after busy-path write keeps all state", hist == expected,
+           f"history={hist}; expected={expected}; files={files}")
 except Exception as exc:
     record("M later import after busy-path write keeps all state", False, f"open_run_persistence raises {type(exc).__name__}: {exc}")
 # M2: recorded independently of M -- the root must open again on a second, fresh attempt

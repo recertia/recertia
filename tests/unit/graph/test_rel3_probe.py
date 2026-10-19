@@ -119,12 +119,42 @@ def test_probe_h_ops_rebuild_resumable_after_crash() -> None:
     _run(probe.scen_ops_rebuild_crash)
 
 
+def _i_records() -> list[tuple[str, bool, str]]:
+    cached = getattr(_i_records, "_rows", None)
+    if cached is not None:
+        return cached
+    start = len(probe.RESULTS)
+    probe.scen_import_split_brain()
+    rows = probe.RESULTS[start:]
+    _i_records._rows = rows  # type: ignore[attr-defined]
+    return rows
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="owned by REL-3 PR #90: open_run_persistence(migrate=) and leftover import",
+)
+def test_probe_i_busy_open_typed_busy_or_block() -> None:
+    _assert_named(
+        _i_records(),
+        "I open under exclusive RootLock: typed busy error or block-until-release",
+    )
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="owned by REL-3 PR #90: open_run_persistence(migrate=) and leftover import",
+)
+def test_probe_i_leftover_visible_while_exclusive_held() -> None:
+    _assert_named(_i_records(), "I leftover visible while exclusive held")
+
+
 @pytest.mark.skipif(
     not _has_legacy_import(),
     reason="owned by REL-3 PR #90: open_run_persistence(migrate=) and leftover import",
 )
 def test_probe_i_no_state_lost_across_concurrent_import() -> None:
-    _run(probe.scen_import_split_brain)
+    _assert_named(_i_records(), "I no state lost across concurrent import")
 
 
 @pytest.mark.skipif(
@@ -143,7 +173,13 @@ def _busy_records() -> list[tuple[str, bool, str]]:
     try:
         import tests.probes.rel3_probe_busy  # noqa: F401
     except Exception as exc:
-        if not any(row[0].startswith("L ") for row in probe.RESULTS[start:]):
+        if not any(row[0].startswith("L open") for row in probe.RESULTS[start:]):
+            probe.record(
+                "L open under exclusive RootLock: typed busy error or block-until-release",
+                False,
+                f"probe error {type(exc).__name__}: {exc}",
+            )
+        if not any(row[0].startswith("L legacy") for row in probe.RESULTS[start:]):
             probe.record(
                 "L legacy state visible while root lock busy",
                 False,
@@ -173,6 +209,17 @@ def _assert_named(rows: list[tuple[str, bool, str]], name: str) -> None:
     assert matched, f"probe did not record {name!r}; got {[r[0] for r in rows]}"
     failed = [(n, detail) for n, ok, detail in matched if not ok]
     assert not failed, "; ".join(f"{n}: {detail}" for n, detail in failed)
+
+
+@pytest.mark.skipif(
+    not _has_legacy_import(),
+    reason="owned by REL-3 PR #90: open_run_persistence(migrate=) and leftover import",
+)
+def test_probe_l_busy_open_typed_busy_or_block() -> None:
+    _assert_named(
+        _busy_records(),
+        "L open under exclusive RootLock: typed busy error or block-until-release",
+    )
 
 
 @pytest.mark.skipif(

@@ -109,6 +109,7 @@ _REL3_GUARD_FILES = (
     "tests/unit/graph/test_rel3_probe.py",
     "tests/unit/graph/test_fenced_persistence.py",
     "tests/unit/persistence/test_import_legacy.py",
+    "tests/probes/rel3_",
 )
 _rel3_skip_xfail: list[str] = []
 

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Allow-list author, committer, and Co-authored-by emails on the PR range.
+"""Allow-list author, committer, and Co-authored-by emails on a commit range.
 
-Uses the pull-request base and head SHAs (``BASE`` / ``HEAD``), not GitHub's
-merge commit. Every commit in ``BASE..HEAD`` is checked. The allow-list is the
-Cursor agent address and GitHub noreply suffixes only (built at runtime so this
-file does not contain a store-time email literal).
+Uses ``BASE`` / ``HEAD`` (the pull-request base and head SHAs when a PR
+exists, not GitHub's merge commit). On push, when those are unset, the
+range is ``git merge-base origin/main HEAD`` .. ``HEAD``. Every commit in
+``BASE..HEAD`` is checked. The allow-list is the Cursor agent address and
+GitHub noreply suffixes only (built at runtime so this file does not
+contain a store-time email literal).
 """
 
 from __future__ import annotations
@@ -29,15 +31,22 @@ def _allowed(email: str) -> bool:
     return value.endswith(_ALLOWED_SUFFIX)
 
 
+def _git(*args: str) -> str:
+    return subprocess.check_output(["git", *args], text=True).strip()
+
+
 def _range() -> tuple[str, str]:
     base = os.environ.get("BASE", "").strip()
-    head = os.environ.get("HEAD", "").strip()
-    if not base or not head:
-        print(
-            "BASE and HEAD must be the pull-request base and head SHAs.",
-            file=sys.stderr,
-        )
-        return "", ""
+    head = os.environ.get("HEAD", "").strip() or "HEAD"
+    if not base:
+        try:
+            base = _git("merge-base", "origin/main", "HEAD")
+        except subprocess.CalledProcessError:
+            print(
+                "BASE is unset and git merge-base origin/main HEAD failed.",
+                file=sys.stderr,
+            )
+            return "", ""
     return base, head
 
 

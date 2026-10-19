@@ -115,11 +115,10 @@ jobs:
         run: pytest -v
 
   commit-emails:
-    name: commit emails (PR range)
+    name: commit emails (PR or push range)
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -127,9 +126,18 @@ jobs:
 
       - name: Allow-list author, committer, and Co-authored-by emails
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
-        run: python3 scripts/check_commit_trailers.py
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -n "$PR_BASE" ] && [ -n "$PR_HEAD" ]; then
+            export BASE="$PR_BASE"
+            export HEAD="$PR_HEAD"
+          else
+            git fetch --no-tags origin main:refs/remotes/origin/main
+            export BASE="$(git merge-base origin/main HEAD)"
+            export HEAD="$(git rev-parse HEAD)"
+          fi
+          python3 scripts/check_commit_trailers.py
 
   package-smoke:
     name: wheel / sdist smoke

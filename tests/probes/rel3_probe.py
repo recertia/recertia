@@ -1,7 +1,7 @@
 """Adversarial REL-3 probe. Drives real RunLease / OperationLedger / CheckpointStore /
 open_run_persistence / import_legacy code. Each scenario prints PASS or FAIL(BUG)."""
 from __future__ import annotations
-import multiprocessing as mp, os, sqlite3, sys, tempfile, threading, time, traceback
+import hashlib, multiprocessing as mp, os, sqlite3, sys, tempfile, threading, time, traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -70,6 +70,82 @@ def subprocess_exclusive(path):
                 pass
 
     return _Holder()
+
+
+def leftover_latest(root, run="legacy-run"):
+    db = Path(root) / "checkpoints.db"
+    uri = db.resolve().as_posix().replace("?", "%3F")
+    conn = sqlite3.connect(f"file:{uri}?mode=ro", uri=True)
+    try:
+        row = conn.execute("SELECT MAX(seq) FROM checkpoints WHERE run_id=?", (run,)).fetchone()
+        return None if row is None else row[0]
+    finally:
+        conn.close()
+
+
+def leftover_digest(root):
+    snap = {}
+    for name in ("checkpoints.db", "operations.db"):
+        path = Path(root) / name
+        if path.is_file():
+            snap[name] = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    return snap
+
+
+def holder_write(root, run, seq, node):
+    """Exclusive holder writes leftover ``checkpoints.db`` directly (no root open)."""
+    conn = sqlite3.connect(Path(root) / "checkpoints.db")
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(checkpoints)")]
+    prev = conn.execute(
+        "SELECT * FROM checkpoints WHERE run_id=? ORDER BY seq DESC LIMIT 1", (run,)
+    ).fetchone()
+    row = dict(zip(cols, prev))
+    row.update(seq=seq, node=node)
+    conn.execute(
+        f"INSERT INTO checkpoints ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+        [row[k] for k in cols],
+    )
+    conn.commit()
+    conn.close()
+
+
+def busy_open(root, holder, timeout_s=5.0):
+    """``open_run_persistence`` while another process holds exclusive ``.lock``.
+
+    PASS: typed ``*Busy`` within ``timeout_s``, or block and succeed only after
+    release. Returns ``(ok, detail, released)``.
+    """
+    box: dict = {}
+
+    def run() -> None:
+        started = time.monotonic()
+        try:
+            opened = open_run_persistence(root)
+            box["kind"] = "opened"
+            box["dt"] = time.monotonic() - started
+            opened.close()
+        except Exception as exc:
+            box["kind"] = "raised"
+            box["exc"] = type(exc).__name__
+            box["busy"] = "Busy" in type(exc).__name__
+            box["dt"] = time.monotonic() - started
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    worker.join(timeout=timeout_s)
+    if worker.is_alive():
+        holder.release()
+        worker.join(timeout=20.0)
+        if worker.is_alive():
+            return False, f"HANG: blocked {timeout_s}s held + 20s after release", True
+        if box.get("kind") == "opened":
+            return True, f"(b) blocked while held, opened {box['dt']:.2f}s after start, after release", True
+        return False, f"raised {box.get('exc')} only after release", True
+    if box.get("kind") == "raised" and box.get("busy"):
+        return True, f"(a) typed busy error {box['exc']} after {box['dt']:.2f}s", False
+    if box.get("kind") == "opened":
+        return False, f"open SUCCEEDED while lock held ({box['dt']:.2f}s)", False
+    return False, f"generic error {box.get('exc')}", False
 
 
 def state(run_id):
@@ -233,22 +309,22 @@ def scen_import_split_brain():
     # old-format state
     p0 = open_run_persistence(root, migrate="off"); p0.checkpoints.save("old-run", 1, "n", None, state("old-run")); p0.close()
     lock = subprocess_exclusive(root / ".lock")          # e.g. backup/another importer holds it
-    p2 = None
-    try:
-        p2 = open_run_persistence(root)                             # exclusive held -> RootBusy (no overlay)
-    except Exception:
-        p2 = None
-    lock.release()
-    if p2 is None:
-        p2 = open_run_persistence(root)                             # leftover still present after the busy window
-    p1 = open_run_persistence(root)
-    p2.checkpoints.save("p2-run", 1, "n", None, state("p2-run"))
-    p2.close(); p1.close()
+    seen = leftover_latest(root, "old-run")
+    before = leftover_digest(root)
+    ok_open, open_detail, released = busy_open(root, lock, timeout_s=5.0)
+    during = leftover_digest(root)
+    record("I open under exclusive RootLock: typed busy error or block-until-release", ok_open, open_detail)
+    record("I leftover visible while exclusive held", seen == 1 and before == during,
+           f"latest_seq={seen}; digest before={before} during={during}")
+    if not released:
+        lock.release()
     p3 = open_run_persistence(root)
     ids = sorted(p3.checkpoints.list_run_ids()) if hasattr(p3.checkpoints, "list_run_ids") else None
+    hist = [(int(s), n) for s, n, *_ in p3.checkpoints.history("old-run")]
     p3.close()
-    record("I no state lost across concurrent import", ids is not None and "p2-run" in ids and "old-run" in ids,
-           f"runs visible after re-open: {ids}; files: {sorted(x.name for x in root.iterdir())}")
+    record("I no state lost across concurrent import",
+           ids is not None and "old-run" in ids and "p2-run" not in ids and hist == [(1, "n")],
+           f"runs visible after re-open: {ids}; history={hist}; files: {sorted(x.name for x in root.iterdir())}")
 
 # --- J: import idempotent; crash after commit before retire; re-run ----------------------
 def scen_import_idempotent():
