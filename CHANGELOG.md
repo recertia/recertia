@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **REL-5a `commit_hop`** — a hop writes the checkpoint, `trajectory_events`,
+  `route_entries`, and generic `outbox` rows in one fenced SQLite transaction.
+  `checkpoint.before_commit:kill` cannot leave a taped event without its
+  checkpoint; resume event count matches committed hops (F16). The JSONL tape
+  is a projection of `trajectory_events` after commit. Eval observation
+  delivery (REL-5b) and quota/affordance/program (REL-5c) stay on later slices.
+
 - **REL-4 durable RunQueue** — `POST /v1/runs` and resume enqueue onto
   `control.db` `run_queue`. The request thread never calls
   `orchestrator.start`; an embedded drainer (or `recertia worker`) claims
