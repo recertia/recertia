@@ -150,7 +150,11 @@ def test_symlinked_input_fails_closed(tmp_path: Path, capsys) -> None:
     _expect_fail(tmp_path, capsys, manifest, split, expected, "input_hash_mismatch")
 
 
-@pytest.mark.parametrize("bad_path", ["../escape/task.json", "/abs/task.json", "top-level.json"])
+@pytest.mark.parametrize(
+    "bad_path",
+    ["../escape/task.json", "/abs/task.json", "top-level.json"],
+    ids=["dotdot", "absolute", "top-level"],
+)
 def test_unsafe_manifest_paths_fail_closed(tmp_path: Path, capsys, bad_path: str) -> None:
     manifest, split, _ = _build(tmp_path)
     doc = json.loads(manifest.read_text())
@@ -325,6 +329,7 @@ def test_fd_level_writes_go_to_audit_store_not_console(tmp_path: Path, capfd) ->
 @pytest.mark.parametrize(
     "leak",
     [FIXTURE_IDS[0], f"{FIXTURE_IDS[1]}/task.json", "golden-some-skill-v1-a1b2c3", "golden_path"],
+    ids=["fixture-dir", "fixture-path", "run-id-shape", "golden-path-key"],  # opaque ids in -v logs
 )
 def test_log_scan_fails_on_fixture_ids(tmp_path: Path, capsys, leak: str) -> None:
     manifest, _split, expected = _build(tmp_path)
