@@ -875,10 +875,16 @@ def test_workflow_cto_must_fixes_m2_to_m5_and_log_scan_job() -> None:
     code = "\n".join(line.split("#", 1)[0].rstrip() for line in text.splitlines())
     steps = _steps(code)
     evaluate = steps["evaluate/Verify root and count, container preflight, evaluate (offline)"]
-    # M3: no new privileges; supplementary groups replaced by the docker group only.
-    assert "setpriv" in evaluate and "--no-new-privs" in evaluate
-    assert '--groups="$DOCKER_GID"' in evaluate and "getent group docker" in evaluate
+    # M3: no new privileges and no supplementary groups at all; the harness reaches docker only
+    # through a uid ACL on the socket, set before the netns.
+    setpriv = evaluate.split("setpriv", 1)[1].split('"$PY"', 1)[0]
+    assert "--no-new-privs" in setpriv and "--clear-groups" in setpriv
+    for flag in ("--groups", "--init-groups", "--keep-groups"):
+        assert flag not in setpriv.replace("--clear-groups", ""), flag
     assert "--init-groups" not in code and "--keep-groups" not in code
+    acl = 'sudo setfacl -m "u:$(id -u):rw" "$SOCK"'
+    assert acl in evaluate and evaluate.index(acl) < evaluate.index("sudo unshare --net")
+    assert "docker_socket_or_setfacl_missing" in evaluate
     # M2 / N4: staging under RUNNER_TEMP; the in-module guards see the workspace and debug flag.
     for passed in (
         'TMPDIR="$HO_TMP"',

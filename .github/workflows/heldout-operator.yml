@@ -10,7 +10,7 @@ name: heldout-operator
 #   guards (debug logging, non-main ref) -> pull the digest-pinned image (network still up)
 #   -> fetch the ciphertext [TODO] -> verify the ciphertext sha256 against the public manifest
 #   -> decrypt into $RUNNER_TEMP [TODO; ::add-mask:: right after] -> inside `unshare --net`
-#   (setpriv --no-new-privs, supplementary groups = docker only): preflight refusals, refuse
+#   (setpriv --no-new-privs --clear-groups; docker via a uid ACL): preflight refusals, refuse
 #   paths in the checkout, WO-06 verify_heldout_tree on a copy staged in $RUNNER_TEMP/tmp, the
 #   M1 container preflight with --pull never, the golden executor in --network=none containers
 #   -> scan the captured console for ids -> print it -> wipe (if: always()).
@@ -148,13 +148,14 @@ jobs:
       # dropped back to the runner uid/gid with setpriv (CTO-rec M3):
       #   --no-new-privs  sudo/setuid can't regain root, so no `sudo nsenter` back to the host
       #                   netns.
-      #   --groups=$DOCKER_GID  replaces ALL supplementary groups with the docker group only.
-      #                   That is --clear-groups plus the one group the harness needs; setpriv
-      #                   makes --clear-groups and --groups mutually exclusive.
-      # Only the harness holds docker access: every fixture command runs in a --network=none
-      # container (tracked; a non-container run fails), and no fixture code runs on the host.
-      # The docker CLI reaches the daemon over the filesystem unix socket, which a netns does not
-      # isolate. env -i passes only what the runner needs, including TMPDIR (staging stays in
+      #   --clear-groups  drops EVERY supplementary group (docker, adm, sudo-capable ones).
+      # How only the harness gets docker access: before the netns, a uid ACL (setfacl
+      # u:<runner uid>:rw) is put on the docker socket, so docker access no longer rides on a
+      # group. Inside the netns the only host process with that uid is the harness
+      # (python -m recertia.evals.heldout). Every fixture command runs in a --network=none
+      # container as uid 65534 with no socket mounted (tracked; a non-container run fails), so
+      # no fixture code reaches the daemon. The docker CLI reaches the daemon over the
+      # filesystem unix socket, which a netns does not isolate. env -i passes only what the runner needs, including TMPDIR (staging stays in
       # $RUNNER_TEMP) and RUNNER_DEBUG (the in-module debug refusal stays live).
       # The runner refuses if any non-loopback interface exists (--require-offline).
       # The console goes to a file and is printed only after the id scan passes.
@@ -169,14 +170,15 @@ jobs:
           umask 077
           mkdir -p "$HO_TMP"
           PY="$(command -v python)"
-          DOCKER_GID="$(getent group docker | cut -d: -f3)"
-          if [ -z "$DOCKER_GID" ]; then
-            echo "heldout: FAIL reason=docker_group_missing executed=0"
+          SOCK=/var/run/docker.sock
+          if [ ! -S "$SOCK" ] || ! command -v setfacl > /dev/null; then
+            echo "heldout: FAIL reason=docker_socket_or_setfacl_missing executed=0"
             exit 1
           fi
+          sudo setfacl -m "u:$(id -u):rw" "$SOCK"
           set +e
           sudo unshare --net -- setpriv --reuid="$(id -u)" --regid="$(id -g)" \
-            --groups="$DOCKER_GID" --no-new-privs \
+            --clear-groups --no-new-privs \
             env -i PATH="$PATH" HOME="$HOME" PYTHONPATH=src:. TMPDIR="$HO_TMP" \
             RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
             RUNNER_DEBUG="${RUNNER_DEBUG:-}" \
