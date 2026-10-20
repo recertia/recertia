@@ -4,8 +4,9 @@
 weekly-ops.yml used to upload its eval output (metrics, probes, canary, soak log) as a
 public artifact on a public repo. It now writes only this summary. Each value comes from an
 explicit allowlist of aggregate fields. Numbers, booleans, and null are printed as they are.
-A string is printed only if it is an enum-like token (``^[a-z0-9_.-]{1,40}$``, such as a
-status). Anything else is printed as ``(omitted)``. No per-probe, per-fixture, or per-run rows.
+A string is printed only for a field listed in ``STRING_ENUMS`` and only when it is one of
+that field's known values (CTO-rec N2: a free-form token could carry a skill or fixture id).
+Anything else is printed as ``(omitted)``. No per-probe, per-fixture, or per-run rows.
 
 Usage:
   python3 scripts/weekly_ops_summary.py --artifacts artifacts >> "$GITHUB_STEP_SUMMARY"
@@ -20,7 +21,21 @@ import sys
 from pathlib import Path
 from typing import Any
 
-_TOKEN = re.compile(r"^[a-z0-9_.-]{1,40}$")
+# The only string-valued fields, each closed over its producer's values:
+# causal_lift.status <- recertia.evals.statistics (classify_lift / causal_lift / low_run_count);
+# soak.latest_reason <- recertia.ops.soak.EMPTY_EVAL (or null for a counted week).
+STRING_ENUMS: dict[str, frozenset[str]] = {
+    "causal_lift.status": frozenset(
+        {
+            "insufficient_data",
+            "not_established",
+            "established_positive",
+            "established_negative",
+            "low_run_count",
+        }
+    ),
+    "soak.latest_reason": frozenset({"empty_eval_db"}),
+}
 
 # (file, label, dotted path). ``#len`` takes the length of a list.
 FIELDS: tuple[tuple[str, str, str], ...] = (
@@ -70,7 +85,7 @@ def _get(doc: Any, path: str) -> Any:
     return cur
 
 
-def render_value(value: Any) -> str:
+def render_value(value: Any, label: str = "") -> str:
     if value is _MISSING:
         return "(missing)"
     if value is None:
@@ -79,7 +94,7 @@ def render_value(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return f"{value:.4g}" if isinstance(value, float) else str(value)
-    if isinstance(value, str) and _TOKEN.match(value):
+    if isinstance(value, str) and value in STRING_ENUMS.get(label, frozenset()):
         return value
     return "(omitted)"
 
@@ -87,16 +102,16 @@ def render_value(value: Any) -> str:
 def summarise(artifacts: Path) -> str:
     docs: dict[str, Any] = {}
     for name in {f for f, _, _ in FIELDS}:
-        path = artifacts / name
+        source = artifacts / name
         try:
-            docs[name] = json.loads(path.read_text(encoding="utf-8"))
+            docs[name] = json.loads(source.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             docs[name] = _MISSING
     lines = ["## weekly-ops (aggregate counts only)", "", "| metric | value |", "|---|---|"]
-    for name, label, path in FIELDS:
+    for name, label, dotted in FIELDS:
         doc = docs[name]
-        value = _MISSING if doc is _MISSING else _get(doc, path)
-        lines.append(f"| {label} | {render_value(value)} |")
+        value = _MISSING if doc is _MISSING else _get(doc, dotted)
+        lines.append(f"| {label} | {render_value(value, label)} |")
     return "\n".join(lines) + "\n"
 
 

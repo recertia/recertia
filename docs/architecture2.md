@@ -1928,7 +1928,7 @@ written and **not counted**.
 
 | Item | Kind | Detail |
 | --- | --- | --- |
-| Soak log | ops | Four consecutive Monday `weekly-ops` runs (or `recertia soak record` on a host with live eval rows) with artifacts retained. Empty-eval-DB JSON is **not** a soak week; the harness refuses to count it. |
+| Soak log | ops | Four consecutive Monday `weekly-ops` runs (or `recertia soak record` on a host with live eval rows). The public run publishes only an aggregate step summary (REC-022, `scripts/weekly_ops_summary.py`), so per-run soak evidence is kept by the operator, not as a public artifact. Empty-eval-DB JSON is **not** a soak week; the harness refuses to count it. |
 | Live traffic | ops | Operator runs against a real repo with `RECERTIA_EXECUTION_BACKEND=container` and a non-stub model. Record `reuse_rate`, `first_attempt_success`, `attempts_to_success`, `cost_per_solved_task`. |
 | Tabletop log | ops | Run `recertia tabletop <run_id> --restore-from <backup.tar.gz>` and keep the JSON (date, run id, restore source, TTR, follow-up). Pass it to `recertia soak status --tabletop`. Tooling is shipped; the filled log is ops. |
 | Postgres soak | ops | `scripts/soak_postgres.py --recertia-root .recertia` against compose Postgres **with** a snapshot if one exists. CI already migrates an empty DB and reports `recertia_snapshot=absent`. |
@@ -1964,8 +1964,9 @@ without updating `a4` from CI.
 
 **Done when (engineering):** CI synthetic observations produce `library_yield` and
 `retrieval_decay` (or `unavailable`); probe runner fails CI if labelled precision
-drops below the M1 floor of 0.7 on the committed probe set; weekly workflow uploads a
-report that includes probe precision when an eval DB is present.
+drops below the M1 floor of 0.7 on the committed probe set; weekly workflow writes an
+aggregate-only step summary (no public artifact, REC-022) that includes probe precision when an
+eval DB is present.
 
 **Done when (ops):** the weekly report runs against live eval rows; `causal_lift`
 prints `"not established"` whenever the Wilson interval spans zero.

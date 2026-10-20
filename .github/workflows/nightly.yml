@@ -34,9 +34,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
+        env:
+          DEPS: ${{ matrix.deps }}
         run: |
           python -m pip install --upgrade pip
-          if [ "${{ matrix.deps }}" = "lowest" ]; then
+          if [ "$DEPS" = "lowest" ]; then
             python - <<'PY'
           import tomllib
           from pathlib import Path

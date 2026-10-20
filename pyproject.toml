@@ -49,6 +49,8 @@ dev = [
     # as a >= floor with an equal ceiling because nightly lowest-deps parses ">=".
     "mypy>=2.4.0,<=2.4.0",
     "import-linter>=2.15",
+    # REC-022: workflow tests parse .github/workflows with yaml.safe_load.
+    "pyyaml>=6.0.2",
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "httpx>=0.27",
