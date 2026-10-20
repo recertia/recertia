@@ -1,47 +1,37 @@
-"""Operator-only held-out eval runner that fails closed on any hash mismatch (REC-022).
+"""Operator-only held-out eval runner that fails closed (REC-022, WO-rec-20261020-08).
 
-The public golden split under ``evals/golden/`` stays the CI gate (``.github/workflows/ci.yml``
-runs ``pytest``). The private held-out split never lives in this public repo. It runs only
-from ``.github/workflows/heldout-eval.yml`` (``workflow_dispatch``) or an operator shell.
+The public golden split under ``evals/golden/`` stays the CI gate (``ci.yml`` runs ``pytest``).
+The private held-out split never lives in this public repo. It runs only from
+``.github/workflows/heldout-operator.yml`` (``workflow_dispatch``) or an operator shell.
 
-A pinned manifest is a JSON file::
+Manifest (Harper-rec spec). The public manifest ``evals/heldout/<split_id>.manifest.json`` holds
+only ``schema_version, split_id, count, hash_rule ("sha256-sorted-relpath-v1"), root_sha256,
+ciphertext_sha256, created_at_pt``. Per-file and per-task hashes exist only in the encrypted
+private manifest. This module does NOT parse the manifest or hash the tree. It calls Build
+Bot-rec's WO-06 loader, ``load_heldout_manifest`` and ``compute_root_sha256`` from
+``LOADER_MODULE``. Until that loader merges, the run fails closed with ``loader_unavailable``.
 
-    {
-      "schema": "recertia.heldout-manifest/v1",
-      "task_class": "repo-chore",
-      "files": [{"path": "<fixture>/task.json", "sha256": "<64 hex>"}, ...]
-    }
+Order. Every step fails closed before any eval runs:
 
-``path`` is relative to ``--split-root``. The first path segment is the fixture directory.
+0. Preflight (exit ``EXIT_REFUSED``). Refuses if debug logging is on, if the provider env is not
+   empty, if any env selects a non-container backend or local exec, or (with
+   ``--require-offline``) if a non-loopback interface exists.
+1. Hash the ciphertext and compare it with ``ciphertext_sha256`` (``verify-ciphertext``, then
+   again in ``run``).
+2. Decrypt into ``$RUNNER_TEMP``. This is the workflow's TODO step; the key is pending approval.
+3. Stage a copy of the decrypted tree (symlinks and special files are rejected), then
+   recompute ``root_sha256`` with the loader and the task count, and compare both.
+4. Run the container preflight from M1 (``solver/container.py`` ``ensure_execution_ready`` and
+   ``probe_container_runtime``) against the digest-pinned local image. Digest pins run with
+   ``--pull never`` and ``--network=none``.
+5. Golden executor only (``use_skill_script=True``) on the staged copy. Constructing any
+   ``ModelClient`` exits 1, and so does any fixture whose commands used a backend other than
+   ``container``.
 
-Preflight (exit ``EXIT_REFUSED`` before the manifest is read): debug logging is off
-(``RUNNER_DEBUG`` / ``ACTIONS_STEP_DEBUG`` / ``ACTIONS_RUNNER_DEBUG``), the provider key env is
-empty, and with ``--require-offline`` the process sees a network interface other than loopback.
-
-Fail closed. Before anything runs, this module checks, in order:
-
-1. ``--expected-sha256`` is 64 lowercase hex characters.
-2. The sha256 of the manifest bytes equals ``--expected-sha256``.
-3. The manifest parses, names the v1 schema, and lists at least one file. Every path is
-   relative, has no ``..``, and is unique.
-4. Every listed file exists under ``--split-root`` as a regular file (not a symlink), and its
-   bytes hash to the listed sha256.
-5. The split root holds no files that the manifest does not list.
-
-Verified bytes are copied into a private staging directory while they are hashed. The eval
-then reads the staged copy, not the split root, so a file swapped after the check is never run.
-Any failure exits ``EXIT_VERIFY_FAILED`` and the executor is never called.
-
-While the eval runs, constructing any model client (``recertia.solver.model.ModelClient``)
-is refused and makes the run exit 1 (WO-08 Amendment 1: no model key, golden executor only).
-
-Output rule. stdout and stderr carry only counts, hashes, and PASS/FAIL. Fixture ids, paths,
-and contents never go to stdout or stderr, because a workflow run's logs are public. Per-fixture
-results and failure details go only to ``--audit-store``, the operator-only audit store. While
-the eval runs, fd 1/2 and sys.stdout/stderr are redirected into that store so engine logs cannot
-leak ids. Every console line is checked against a deny list (fixture dirs, paths, skill ids,
-run_id shapes) and replaced by ``FAIL reason=log_scan`` on a hit (exit ``EXIT_LEAK``). The
-``scan`` subcommand runs the same check over captured console files after the run.
+Output rule. The console gets only counts, hashes, and fixed reasons ("hash mismatch",
+"count mismatch"), never names or paths. While the eval runs, fd 1/2 and sys.stdout/stderr go
+to ``--audit-store``. Console lines are checked against a deny list built from the staged tree;
+a hit exits ``EXIT_LEAK``. The ``scan`` subcommand re-checks captured console files.
 """
 
 from __future__ import annotations
@@ -49,19 +39,25 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import importlib
 import json
 import os
 import re
+import shutil
 import stat
 import sys
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, TextIO
 
-MANIFEST_SCHEMA = "recertia.heldout-manifest/v1"
+# Build Bot-rec's WO-06 loader (not on main yet). The expected names are taken from the WO-08
+# spec; the module path is a guess (see the PR body). Imported by name so that nothing here
+# reimplements it.
+LOADER_MODULE = "recertia.evals.heldout_manifest"
+LOADER_FUNCS = ("load_heldout_manifest", "compute_root_sha256")
+HASH_RULE = "sha256-sorted-relpath-v1"
 
 EXIT_OK = 0
 EXIT_EVAL_FAILED = 1
@@ -72,32 +68,60 @@ EXIT_LEAK = 5
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _CHUNK = 1 << 20
+_PUBLIC_EVALS = Path("evals")
 
-# Executor: (staged fixture dirs, task_class, audit run dir) -> (passed, failed).
-Executor = Callable[[list[Path], str, Path], tuple[int, int]]
+# Executor: (staged fixture dir, task_class, audit run dir) -> passed.
+Executor = Callable[[Path, str, Path], bool]
 
 
-class VerificationError(Exception):
-    """The pinned inputs did not verify. ``reason`` is a fixed code with no ids or paths."""
+class Refused(Exception):
+    """A fail-closed stop. ``reason`` is a fixed phrase with no ids or paths."""
 
-    def __init__(self, reason: str, *, detail: dict[str, Any] | None = None) -> None:
+    def __init__(self, reason: str, code: int = EXIT_VERIFY_FAILED) -> None:
         super().__init__(reason)
         self.reason = reason
-        self.detail = detail or {}
+        self.code = code
 
 
-@dataclass
-class Verified:
-    manifest_sha256: str
-    task_class: str
-    file_count: int
-    fixture_count: int
-    inputs_digest: str
-    staged_fixtures: list[Path] = field(default_factory=list)
-    entries: list[tuple[PurePosixPath, str]] = field(default_factory=list)
+# --------------------------------------------------------------------------- loader (WO-06)
 
 
-def sha256_file(path: Path) -> str:
+def _loader() -> Any:
+    try:
+        mod = importlib.import_module(LOADER_MODULE)
+    except ImportError:
+        raise Refused("loader_unavailable") from None
+    if not all(callable(getattr(mod, name, None)) for name in LOADER_FUNCS):
+        raise Refused("loader_unavailable")
+    return mod
+
+
+def _field(manifest: Any, name: str) -> Any:
+    if isinstance(manifest, Mapping):
+        return manifest.get(name)
+    return getattr(manifest, name, None)
+
+
+def load_manifest(path: Path) -> Any:
+    loader = _loader()
+    try:
+        manifest = loader.load_heldout_manifest(path)
+    except Exception:  # noqa: BLE001 - the loader owns validation; any error fails closed
+        raise Refused("manifest invalid") from None
+    if _field(manifest, "hash_rule") != HASH_RULE:
+        raise Refused("manifest invalid")
+    for name in ("root_sha256", "ciphertext_sha256"):
+        if not isinstance(_field(manifest, name), str) or not _HEX64.match(_field(manifest, name)):
+            raise Refused("manifest invalid")
+    if not isinstance(_field(manifest, "count"), int) or _field(manifest, "count") < 1:
+        raise Refused("manifest invalid")
+    return manifest
+
+
+# --------------------------------------------------------------------------- verification
+
+
+def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(_CHUNK), b""):
@@ -105,130 +129,81 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _safe_rel(raw: object) -> PurePosixPath | None:
-    if not isinstance(raw, str) or not raw or "\\" in raw or "\x00" in raw:
-        return None
-    rel = PurePosixPath(raw)
-    if rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
-        return None
-    if len(rel.parts) < 2:
-        return None  # files must sit inside a fixture directory
-    return rel
+def verify_ciphertext(manifest: Any, ciphertext: Path) -> None:
+    """Step 1: the ciphertext file hash (a single opaque blob, not the tree rule)."""
 
-
-def _parse_manifest(data: bytes) -> tuple[str, list[tuple[PurePosixPath, str]]]:
     try:
-        doc = json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        raise VerificationError("manifest_unparseable") from None
-    if not isinstance(doc, dict) or doc.get("schema") != MANIFEST_SCHEMA:
-        raise VerificationError("manifest_schema")
-    task_class = doc.get("task_class")
-    if not isinstance(task_class, str) or not task_class:
-        raise VerificationError("manifest_task_class")
-    files = doc.get("files")
-    if not isinstance(files, list) or not files:
-        raise VerificationError("manifest_no_files")
-    entries: list[tuple[PurePosixPath, str]] = []
-    seen: set[PurePosixPath] = set()
-    bad = 0
-    for item in files:
-        rel = _safe_rel(item.get("path")) if isinstance(item, dict) else None
-        digest = item.get("sha256") if isinstance(item, dict) else None
-        if rel is None or not isinstance(digest, str) or not _HEX64.match(digest) or rel in seen:
-            bad += 1
-            continue
-        seen.add(rel)
-        entries.append((rel, digest))
-    if bad:
-        raise VerificationError("manifest_bad_entries", detail={"bad_entries": bad})
-    return task_class, entries
+        st = os.lstat(ciphertext)
+    except OSError:
+        raise Refused("hash mismatch stage=ciphertext") from None
+    if not stat.S_ISREG(st.st_mode) or _sha256_file(ciphertext) != _field(manifest, "ciphertext_sha256"):
+        raise Refused("hash mismatch stage=ciphertext")
 
 
-def verify_and_stage(
-    manifest_path: Path, expected_sha256: str, split_root: Path, staging: Path
-) -> Verified:
-    """Verify every pinned hash and copy verified bytes to ``staging``. Raises on any failure."""
+def _inside(path: Path, parent: Path) -> bool:
+    return path.resolve().is_relative_to(parent.resolve())
 
-    expected = expected_sha256.strip().lower()
-    if not _HEX64.match(expected):
-        raise VerificationError("expected_sha256_malformed")
-    if not manifest_path.is_file():
-        raise VerificationError("manifest_missing")
-    data = manifest_path.read_bytes()
-    manifest_sha = hashlib.sha256(data).hexdigest()
-    if manifest_sha != expected:
-        raise VerificationError("manifest_hash_mismatch", detail={"manifest_sha256": manifest_sha})
-    task_class, entries = _parse_manifest(data)
-    if not split_root.is_dir():
-        raise VerificationError("split_root_missing")
 
-    root = split_root.resolve()
-    missing: list[str] = []
-    mismatched: list[str] = []
-    for rel, want in entries:
-        src = split_root.joinpath(*rel.parts)
-        try:
-            st = os.lstat(src)
-        except FileNotFoundError:
-            missing.append(str(rel))
-            continue
-        if not stat.S_ISREG(st.st_mode) or not src.resolve().is_relative_to(root):
-            mismatched.append(str(rel))
-            continue
-        dest = staging.joinpath(*rel.parts)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        digest = hashlib.sha256()
-        with src.open("rb") as fin, dest.open("wb") as fout:
-            for chunk in iter(lambda: fin.read(_CHUNK), b""):
-                digest.update(chunk)
-                fout.write(chunk)
-        if digest.hexdigest() != want:
-            mismatched.append(str(rel))
+def stage_tree(split_root: Path, staging: Path) -> None:
+    """Copy regular files and dirs only. Symlinks and special files fail closed."""
 
-    listed = {str(rel) for rel, _ in entries}
-    unlisted = sorted(
-        p.relative_to(split_root).as_posix()
-        for p in split_root.rglob("*")
-        if (p.is_file() or p.is_symlink()) and p.relative_to(split_root).as_posix() not in listed
-        and p.resolve() != manifest_path.resolve()
-    )
-    if missing or mismatched or unlisted:
-        reason = (
-            "input_missing" if missing else "input_hash_mismatch" if mismatched else "input_unlisted"
-        )
-        raise VerificationError(
-            reason,
-            detail={"missing": missing, "mismatched": mismatched, "unlisted": unlisted},
-        )
+    if not split_root.is_dir() or split_root.is_symlink():
+        raise Refused("hash mismatch stage=root")
+    for dirpath, dirnames, filenames in os.walk(split_root, followlinks=False):
+        src_dir = Path(dirpath)
+        dest_dir = staging / src_dir.relative_to(split_root)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for name in dirnames + filenames:
+            st = os.lstat(src_dir / name)
+            if stat.S_ISDIR(st.st_mode):
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                raise Refused("hash mismatch stage=root")
+            shutil.copyfile(src_dir / name, dest_dir / name, follow_symlinks=False)
 
-    inputs_digest = hashlib.sha256(
-        "".join(f"{rel.as_posix()}\0{want}\n" for rel, want in sorted(entries)).encode()
-    ).hexdigest()
-    fixtures = sorted({rel.parts[0] for rel, _ in entries})
-    return Verified(
-        manifest_sha256=manifest_sha,
-        task_class=task_class,
-        file_count=len(entries),
-        fixture_count=len(fixtures),
-        inputs_digest=inputs_digest,
-        staged_fixtures=[staging / name for name in fixtures],
-        entries=entries,
-    )
+
+def task_dirs(root: Path) -> list[Path]:
+    """Fixture dirs, ``<root>/<task_class>/<task>/`` holding ``task.json`` or ``goal.json``."""
+
+    found = []
+    for cls in sorted(p for p in root.iterdir() if p.is_dir()):
+        for task in sorted(p for p in cls.iterdir() if p.is_dir()):
+            if (task / "task.json").is_file() or (task / "goal.json").is_file():
+                found.append(task)
+    return found
+
+
+def verify_root(manifest: Any, staged: Path) -> list[Path]:
+    """Step 3: the loader's root hash and the task count over the staged copy."""
+
+    loader = _loader()
+    try:
+        root = loader.compute_root_sha256(staged)
+    except Exception:  # noqa: BLE001 - e.g. the loader rejects a special file
+        raise Refused("hash mismatch stage=root") from None
+    if root != _field(manifest, "root_sha256"):
+        raise Refused("hash mismatch stage=root")
+    tasks = task_dirs(staged)
+    if len(tasks) != _field(manifest, "count"):
+        raise Refused(f"count mismatch expected={_field(manifest, 'count')} got={len(tasks)}")
+    return tasks
+
+
+# --------------------------------------------------------------------------- guards
 
 
 class ModelClientForbidden(RuntimeError):
-    """A model client was constructed during a held-out run (WO-08 Amendment 1: no model key)."""
+    """A model client was constructed during a held-out run (WO-08 Amendment 1)."""
 
 
 @contextlib.contextmanager
 def forbid_model_clients(constructed: list[str]) -> Iterator[None]:
-    """Make every ``ModelClient`` constructor raise, and record each attempt in ``constructed``.
+    """Make every ``ModelClient`` constructor raise, and record each attempt.
 
-    All model clients subclass ``recertia.solver.model.ModelClient`` and call its ``__init__``
-    (``StubModelClient``, ``AnthropicModelClient``, ``OpenAIModelClient``). Patching the base
-    ``__init__`` therefore covers every client. The record survives even if the engine catches
-    the exception, so ``run`` still exits 1.
+    Every client subclasses ``recertia.solver.model.ModelClient`` and calls its ``__init__``.
+    The patch is on the class object, so lazy imports that run later (for example
+    ``nodes/plan.py``'s ``guide_stitch`` import) see it too. The record survives even if an engine
+    catches the error, so ``run`` still exits 1.
     """
 
     from recertia.solver import model
@@ -247,62 +222,44 @@ def forbid_model_clients(constructed: list[str]) -> Iterator[None]:
         model.ModelClient.__init__ = original  # type: ignore[method-assign]
 
 
-def _skill_id_for(fixture: Path) -> str:
-    """``task.json`` ``expected_skill_id`` (supports opaque dir names), else the dir name."""
+@contextlib.contextmanager
+def track_backends(used: list[str]) -> Iterator[None]:
+    """Record the backend of every command, and refuse every local run.
 
-    task = fixture / "task.json"
-    if task.is_file():
-        spec = json.loads(task.read_text(encoding="utf-8"))
-        if isinstance(spec, dict) and isinstance(spec.get("expected_skill_id"), str):
-            return str(spec["expected_skill_id"])
-    return fixture.name
-
-
-def golden_executor(fixtures: list[Path], task_class: str, run_dir: Path) -> tuple[int, int]:
-    """Golden executor only: each fixture runs its skill's own script (``use_skill_script=True``).
-
-    No proposer, no LLM plan or review stage, no model key. A fixture with no matching skill
-    version (a goal-only fixture would need the proposer path) counts as failed; it is not
-    routed to ``run_goal_fixture``.
+    ``_container_run`` and ``_local_run`` (``solver/container.py``) are the only process
+    launchers. ``solver/executor.py`` imports both by name, so both modules are patched.
     """
 
-    from recertia.evals.golden import run_golden_for_skill
-    from recertia.evals.store import EvalStore
-    from recertia.memory.procedural.seeds import SEED_SKILLS
-    from recertia.memory.procedural.store import SkillStore
+    from recertia.solver import container, executor
+    from recertia.solver.sandbox import SandboxError
 
-    store = EvalStore(run_dir / "evals.db")
-    skills = SkillStore(Path("skills"))
-    loaded = [v for v, _st, _stats in skills.iter_loaded()] + list(SEED_SKILLS)
-    results: list[dict[str, Any]] = []
+    real_container = container._container_run
+
+    def _container(*args: Any, **kwargs: Any) -> Any:
+        used.append("container")
+        return real_container(*args, **kwargs)
+
+    def _local(*args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        used.append("local")
+        raise SandboxError("held-out runs refuse the local backend")
+
+    saved = [(m, n, getattr(m, n)) for m in (container, executor) for n in ("_container_run", "_local_run")]
+    for mod in (container, executor):
+        setattr(mod, "_container_run", _container)
+        setattr(mod, "_local_run", _local)
     try:
-        for fixture in fixtures:
-            skill_id = _skill_id_for(fixture)
-            versions = [v for v in loaded if v.skill_id == skill_id and v.task_class == task_class]
-            if not versions:
-                results.append({"fixture": fixture.name, "passed": False, "detail": "no_skill_version"})
-                continue
-            r = run_golden_for_skill(
-                versions[0],
-                fixture,
-                runs_root=run_dir / "runs",
-                use_skill_script=True,
-                snapshot_id="heldout",
-                eval_store=store,
-            )
-            results.append(
-                {"fixture": fixture.name, "passed": r.passed, "terminal": r.terminal, "detail": r.detail}
-            )
+        yield
     finally:
-        store.close()
-    (run_dir / "results.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
-    passed = sum(1 for r in results if r["passed"])
-    return passed, len(results) - passed
+        for mod, name, value in saved:
+            setattr(mod, name, value)
 
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _DEBUG_VARS = ("RUNNER_DEBUG", "ACTIONS_STEP_DEBUG", "ACTIONS_RUNNER_DEBUG")
 _PROVIDER_VARS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+_BACKEND_VARS = ("RECERTIA_EXECUTION_BACKEND", "RECERTIA_GOLDEN_BACKEND")
+_LOCAL_EXEC_VARS = ("RECERTIA_API_ALLOW_LOCAL_EXEC",)
 _NET_DEV = Path("/proc/self/net/dev")
 
 
@@ -313,9 +270,9 @@ def debug_logging_on(env: Mapping[str, str]) -> bool:
 def network_reachable(net_dev: Path = _NET_DEV) -> bool:
     """True unless loopback is this process's only interface (a fresh ``unshare --net``).
 
-    Reads ``/proc/self/net/dev``, which reflects the caller's network namespace (``/sys/class/net``
-    does not without a remount). Opens no socket (tests/boundary/test_network_egress_boundary.py).
-    Fails closed: if the interface table cannot be read, the network counts as reachable.
+    It reads ``/proc/self/net/dev``, which reflects the caller's network namespace. It opens no
+    socket (tests/boundary/test_network_egress_boundary.py). If the table can't be read, it
+    fails closed.
     """
 
     try:
@@ -327,18 +284,100 @@ def network_reachable(net_dev: Path = _NET_DEV) -> bool:
 
 
 def preflight(env: Mapping[str, str], *, require_offline: bool) -> str | None:
-    """Return a refusal reason, or ``None``. Runs before the manifest is even read."""
+    """Return a refusal reason, or ``None``. Runs before the manifest is read."""
 
     if debug_logging_on(env):
         return "debug_logging_on"
     if any(env.get(name, "") for name in _PROVIDER_VARS):
         return "provider_env_not_empty"
+    if any(env.get(name, "container").strip().lower() != "container" for name in _BACKEND_VARS):
+        return "backend_not_container"
+    if any(env.get(name, "").strip().lower() in _TRUTHY for name in _LOCAL_EXEC_VARS):
+        return "backend_not_container"
     if require_offline and network_reachable():
         return "network_reachable"
     return None
 
 
-# Shapes that carry fixture ids in this repo's eval output (golden.py run_id and report fields).
+def container_preflight() -> None:
+    """M1 container preflight (``solver/container.py:101,176``) against the local image.
+
+    It requires the container backend for both the run and the golden surface, and a
+    ``@sha256:`` image, so that ``_container_run`` passes ``--pull never`` (a missing image
+    then fails instead of pulling). ``ensure_execution_ready`` checks the runtime, and
+    ``probe_container_runtime`` runs ``true`` in a ``--network=none`` container. Any failure
+    raises.
+    """
+
+    from recertia.settings import load_settings
+    from recertia.solver.container import (
+        configured_backend,
+        default_container_image,
+        ensure_execution_ready,
+        probe_container_runtime,
+    )
+    from recertia.solver.sandbox import SandboxError
+
+    settings = load_settings()
+    if configured_backend() != "container" or settings.resolved_golden_backend() != "container":
+        raise SandboxError("held-out runs require the container backend")
+    if "@sha256:" not in default_container_image():
+        raise SandboxError("held-out runs require a digest-pinned image")
+    if ensure_execution_ready() != "container":
+        raise SandboxError("execution backend is not container")
+    probe_container_runtime(timeout_s=60)
+
+
+# --------------------------------------------------------------------------- executor
+
+
+def _skill_id_for(fixture: Path) -> str:
+    task = fixture / "task.json"
+    if task.is_file():
+        spec = json.loads(task.read_text(encoding="utf-8"))
+        if isinstance(spec, dict) and isinstance(spec.get("expected_skill_id"), str):
+            return str(spec["expected_skill_id"])
+    return fixture.name
+
+
+def golden_executor(fixture: Path, task_class: str, run_dir: Path) -> bool:
+    """Golden executor only: the skill's own script (``use_skill_script=True``).
+
+    No proposer, no LLM plan or review stage, no model key. A fixture with no matching skill
+    version fails; it is not routed to ``run_goal_fixture``.
+    """
+
+    from recertia.evals.golden import run_golden_for_skill
+    from recertia.evals.store import EvalStore
+    from recertia.memory.procedural.seeds import SEED_SKILLS
+    from recertia.memory.procedural.store import SkillStore
+    from recertia.settings import load_settings
+
+    if load_settings().resolved_golden_backend() != "container":
+        raise RuntimeError("golden backend is not container")
+    skill_id = _skill_id_for(fixture)
+    loaded = [v for v, _st, _stats in SkillStore(Path("skills")).iter_loaded()] + list(SEED_SKILLS)
+    versions = [v for v in loaded if v.skill_id == skill_id and v.task_class == task_class]
+    if not versions:
+        return False
+    store = EvalStore(run_dir / "evals.db")
+    try:
+        result = run_golden_for_skill(
+            versions[0],
+            fixture,
+            runs_root=run_dir / "runs",
+            use_skill_script=True,
+            snapshot_id="heldout",
+            eval_store=store,
+        )
+    finally:
+        store.close()
+    return bool(result.passed)
+
+
+# --------------------------------------------------------------------------- output
+
+
 _DENY_PATTERNS = (
     re.compile(r"golden-[A-Za-z0-9._-]+-v[0-9]+-[0-9a-f]{6}"),
     re.compile(r"golden-[A-Za-z0-9._-]+-[0-9a-f]{6}"),
@@ -347,10 +386,17 @@ _DENY_PATTERNS = (
 )
 
 
-def deny_terms(entries: Sequence[tuple[PurePosixPath, str]], extra: Sequence[str] = ()) -> list[str]:
-    terms = {rel.parts[0] for rel, _ in entries} | {rel.as_posix() for rel, _ in entries}
-    terms |= {t for t in extra if t}
-    return sorted(terms, key=len, reverse=True)
+def deny_terms(root: Path) -> list[str]:
+    """Every dir and file name, relpath, and skill id under ``root``."""
+
+    terms: set[str] = set()
+    for path in root.rglob("*"):
+        rel = path.relative_to(root)
+        terms.add(rel.as_posix())
+        terms.update(rel.parts)
+    for task in task_dirs(root) if root.is_dir() else []:
+        terms.add(_skill_id_for(task))
+    return sorted((t for t in terms if t), key=len, reverse=True)
 
 
 def count_leaks(text: str, terms: Sequence[str]) -> int:
@@ -386,21 +432,24 @@ def _new_run_dir(audit_store: Path) -> Path:
     return run_dir
 
 
-def _write_record(run_dir: Path, record: dict[str, Any]) -> None:
-    path = run_dir / "record.json"
-    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+def _write_json(path: Path, payload: Any) -> None:
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.chmod(path, 0o600)
+
+
+# --------------------------------------------------------------------------- entry points
 
 
 def run(
     *,
     manifest_path: Path,
-    expected_sha256: str,
+    ciphertext: Path,
     split_root: Path,
     audit_store: Path,
     verify_only: bool = False,
     require_offline: bool = False,
     executor: Executor | None = None,
+    preflight_containers: Callable[[], None] | None = None,
     env: Mapping[str, str] | None = None,
     out: TextIO | None = None,
 ) -> int:
@@ -410,7 +459,6 @@ def run(
     leaks: list[int] = []
 
     def say(line: str) -> None:
-        # In-job log-scan guard: nothing reaches the public console if it matches the deny list.
         text = f"heldout: {line}"
         hits = count_leaks(text, deny)
         if hits:
@@ -422,6 +470,9 @@ def run(
     if refusal is not None:
         say(f"FAIL reason={refusal} executed=0")
         return EXIT_REFUSED
+    if _PUBLIC_EVALS.exists() and _inside(split_root, _PUBLIC_EVALS):
+        say("FAIL reason=split_root_in_repo executed=0")
+        return EXIT_REFUSED
 
     with contextlib.ExitStack() as stack:
         try:
@@ -431,89 +482,98 @@ def run(
             say("FAIL reason=audit_store_unwritable")
             return EXIT_VERIFY_FAILED
         staging = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="heldout-")))
-        record: dict[str, Any] = {"schema": MANIFEST_SCHEMA, "verify_only": verify_only}
+        record: dict[str, Any] = {"verify_only": verify_only}
         try:
-            verified = verify_and_stage(manifest_path, expected_sha256, split_root, staging)
-        except VerificationError as exc:
-            record.update(status="verify_failed", reason=exc.reason, detail=exc.detail)
-            _write_record(run_dir, record)
-            counts = {k: len(v) for k, v in exc.detail.items() if isinstance(v, list)}
-            extra = "".join(f" {k}={n}" for k, n in sorted(counts.items()))
-            say(f"FAIL reason={exc.reason}{extra} executed=0")
-            return EXIT_VERIFY_FAILED
+            manifest = load_manifest(manifest_path)  # loader (WO-06)
+            verify_ciphertext(manifest, ciphertext)  # step 1
+            stage_tree(split_root, staging)  # step 2 output, staged
+            tasks = verify_root(manifest, staging)  # step 3
+        except Refused as exc:
+            record.update(status="verify_failed", reason=exc.reason)
+            _write_json(run_dir / "record.json", record)
+            say(f"FAIL {exc.reason} executed=0")
+            return exc.code
         except OSError:
             record.update(status="verify_failed", reason="io_error")
-            _write_record(run_dir, record)
+            _write_json(run_dir / "record.json", record)
             say("FAIL reason=io_error executed=0")
             return EXIT_VERIFY_FAILED
 
-        deny = deny_terms(
-            verified.entries, [_skill_id_for(f) for f in verified.staged_fixtures if f.is_dir()]
-        )
-        say(
-            f"VERIFIED manifest_sha256={verified.manifest_sha256} inputs_sha256={verified.inputs_digest} "
-            f"files={verified.file_count} fixtures={verified.fixture_count}"
-        )
-        record.update(
-            manifest_sha256=verified.manifest_sha256,
-            inputs_sha256=verified.inputs_digest,
-            files=verified.file_count,
-            fixtures=verified.fixture_count,
-        )
+        deny = deny_terms(staging)
+        root_sha = _field(manifest, "root_sha256")
+        say(f"VERIFIED root_sha256={root_sha} count={len(tasks)}")
+        record.update(root_sha256=root_sha, count=len(tasks))
         if verify_only:
             record.update(status="verified")
-            _write_record(run_dir, record)
+            _write_json(run_dir / "record.json", record)
             say("PASS verify-only executed=0")
             return EXIT_LEAK if leaks else EXIT_OK
 
         execute = executor or golden_executor
+        check_containers = preflight_containers or container_preflight
         constructed: list[str] = []
-        log_path = run_dir / "eval.log"
-        error: str | None = None
-        passed = failed = 0
-        with log_path.open("w", encoding="utf-8") as log:
-            try:
-                with _capture_fds(log), forbid_model_clients(constructed):
-                    passed, failed = execute(verified.staged_fixtures, verified.task_class, run_dir)
-            except Exception as exc:  # noqa: BLE001 - detail goes only to the audit store
-                error = type(exc).__name__
+        results: list[dict[str, Any]] = []
+        stage_failed: str | None = None
+        with (run_dir / "eval.log").open("w", encoding="utf-8") as log:
+            os.chmod(run_dir / "eval.log", 0o600)
+            # Both guards go in before the container preflight and before any node can run.
+            with _capture_fds(log), forbid_model_clients(constructed):
+                preflight_used: list[str] = []
+                try:
+                    with track_backends(preflight_used):
+                        check_containers()
+                except Exception as exc:  # noqa: BLE001 - detail only in the audit log
+                    print(f"container preflight failed: {type(exc).__name__}: {exc}", file=log)
+                    stage_failed = "container_preflight"
+                for index, task in enumerate([] if stage_failed else tasks):
+                    used: list[str] = []
+                    passed = False
+                    error = None
+                    try:
+                        with track_backends(used):
+                            passed = execute(task, task.parent.name, run_dir)
+                    except Exception as exc:  # noqa: BLE001
+                        error = type(exc).__name__
+                    backends = sorted(set(used)) or ["none"]
+                    results.append(
+                        {"index": index, "fixture": task.name, "passed": bool(passed) and error is None,
+                         "backend_used": backends, "error": error}
+                    )
+        _write_json(run_dir / "results.json", results)
+        if stage_failed:
+            record.update(status=stage_failed)
+            _write_json(run_dir / "record.json", record)
+            say(f"FAIL reason={stage_failed} executed=0")
+            return EXIT_REFUSED
         if constructed:
             record.update(status="model_client_constructed", model_clients=constructed)
-            _write_record(run_dir, record)
+            _write_json(run_dir / "record.json", record)
             say(f"FAIL reason=model_client_constructed count={len(constructed)}")
             return EXIT_EVAL_FAILED
-        if error is not None:
-            record.update(status="eval_error", error_type=error)
-            _write_record(run_dir, record)
-            say("FAIL reason=eval_error")
+        off_backend = sum(1 for r in results if r["backend_used"] != ["container"])
+        if off_backend:
+            record.update(status="backend_mismatch")
+            _write_json(run_dir / "record.json", record)
+            say(f"FAIL reason=backend_not_container runs={off_backend}")
             return EXIT_EVAL_FAILED
-        record.update(status="evaluated", passed=passed, failed=failed)
-        _write_record(run_dir, record)
-        verdict = "PASS" if failed == 0 and passed > 0 else "FAIL"
-        say(f"{verdict} passed={passed} failed={failed}")
+        passed_n = sum(1 for r in results if r["passed"])
+        failed_n = len(results) - passed_n
+        record.update(status="evaluated", passed=passed_n, failed=failed_n)
+        _write_json(run_dir / "record.json", record)
+        verdict = "PASS" if failed_n == 0 and passed_n > 0 else "FAIL"
+        say(f"{verdict} passed={passed_n} failed={failed_n}")
         if leaks:
             return EXIT_LEAK
         return EXIT_OK if verdict == "PASS" else EXIT_EVAL_FAILED
 
 
-def scan(*, manifest_path: Path, expected_sha256: str, logs: Sequence[Path], out: TextIO) -> int:
-    """Post-run scan of captured console output against the verified manifest's ids."""
+def scan(*, split_root: Path, logs: Sequence[Path], out: TextIO) -> int:
+    """Post-run scan of captured console files against names under the decrypted tree."""
 
-    expected = expected_sha256.strip().lower()
-    try:
-        data = manifest_path.read_bytes()
-    except OSError:
-        print("log-scan: FAIL reason=manifest_missing", file=out)
+    if not split_root.is_dir():
+        print("log-scan: FAIL reason=split_root_missing", file=out)
         return EXIT_VERIFY_FAILED
-    if not _HEX64.match(expected) or hashlib.sha256(data).hexdigest() != expected:
-        print("log-scan: FAIL reason=manifest_hash_mismatch", file=out)
-        return EXIT_VERIFY_FAILED
-    try:
-        _task_class, entries = _parse_manifest(data)
-    except VerificationError as exc:
-        print(f"log-scan: FAIL reason={exc.reason}", file=out)
-        return EXIT_VERIFY_FAILED
-    terms = deny_terms(entries)
+    terms = deny_terms(split_root)
     hits = 0
     for log in logs:
         try:
@@ -537,40 +597,46 @@ class _QuietParser(argparse.ArgumentParser):
         raise SystemExit(EXIT_USAGE)
 
 
+def _parse(parser: argparse.ArgumentParser, argv: Sequence[str]) -> argparse.Namespace | None:
+    try:
+        return parser.parse_args(argv)
+    except SystemExit:
+        return None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args_list = list(sys.argv[1:] if argv is None else argv)
-    if args_list[:1] == ["scan"]:
-        sp = _QuietParser(prog="python -m recertia.evals.heldout scan")
-        sp.add_argument("--manifest", type=Path, required=True)
-        sp.add_argument("--expected-sha256", required=True)
-        sp.add_argument("--log", type=Path, action="append", required=True)
-        try:
-            sargs = sp.parse_args(args_list[1:])
-        except SystemExit as exc:
-            return EXIT_USAGE if exc.code else EXIT_OK
-        return scan(
-            manifest_path=sargs.manifest,
-            expected_sha256=sargs.expected_sha256,
-            logs=sargs.log,
-            out=sys.stdout,
-        )
-    parser = _QuietParser(
-        prog="python -m recertia.evals.heldout",
-        description="Operator-only held-out eval runner; fails closed on any hash mismatch.",
-    )
+    command = args_list[0] if args_list and args_list[0] in ("scan", "verify-ciphertext") else "run"
+    rest = args_list[1:] if command != "run" else args_list
+    parser = _QuietParser(prog=f"python -m recertia.evals.heldout {command}")
+    if command == "scan":
+        parser.add_argument("--split-root", type=Path, required=True)
+        parser.add_argument("--log", type=Path, action="append", required=True)
+        args = _parse(parser, rest)
+        return EXIT_USAGE if args is None else scan(split_root=args.split_root, logs=args.log, out=sys.stdout)
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--expected-sha256", required=True)
+    parser.add_argument("--ciphertext", type=Path, required=True)
+    if command == "verify-ciphertext":
+        args = _parse(parser, rest)
+        if args is None:
+            return EXIT_USAGE
+        try:
+            verify_ciphertext(load_manifest(args.manifest), args.ciphertext)
+        except Refused as exc:
+            print(f"heldout: FAIL {exc.reason} executed=0")
+            return exc.code
+        print("heldout: VERIFIED ciphertext")
+        return EXIT_OK
     parser.add_argument("--split-root", type=Path, required=True)
     parser.add_argument("--audit-store", type=Path, required=True)
     parser.add_argument("--verify-only", action="store_true")
     parser.add_argument("--require-offline", action="store_true")
-    try:
-        args = parser.parse_args(args_list)
-    except SystemExit as exc:
-        return EXIT_USAGE if exc.code else EXIT_OK
+    args = _parse(parser, rest)
+    if args is None:
+        return EXIT_USAGE
     return run(
         manifest_path=args.manifest,
-        expected_sha256=args.expected_sha256,
+        ciphertext=args.ciphertext,
         split_root=args.split_root,
         audit_store=args.audit_store,
         verify_only=args.verify_only,

@@ -2,29 +2,29 @@ name: heldout-operator
 
 # REC-022 (WO-rec-20261020-08). Operator-only, reproducible run of the PRIVATE held-out split.
 # The public split under evals/golden/ stays the CI gate (ci.yml). This is not a required check.
-# Design follows Harper-rec's ACCESS_STORAGE_PROPOSAL.md (WO-08 folder) §3-§5 and CTO-rec's
-# WO-08 Amendment 1 (golden executor only, no model key, provider env empty).
+# Design: Harper-rec's ACCESS_STORAGE_PROPOSAL.md §3-§5 and manifest spec; CTO-rec's WO-08
+# Amendment 1 (golden executor only, no model key) and answers (container backend only, M1
+# container preflight, plan-node guard).
 #
-# Fail closed: src/recertia/evals/heldout.py refuses debug logging, a non-empty provider env,
-# and a reachable network; then verifies the pinned manifest sha256 and every input sha256 it
-# lists, and exits non-zero before any eval runs on a mismatch, a missing file, or an unlisted
-# file. A constructed model client exits 1. Console output is captured to a file, scanned for
-# fixture ids, and printed only if the scan is clean. Per-fixture results go to the
-# operator-only audit store. No artifacts, no caches, no step summary beyond counts.
+# Order. Every step fails closed before any eval runs:
+#   guards (debug logging, non-main ref) -> pull the digest-pinned image (network still up)
+#   -> fetch the ciphertext [TODO] -> verify the ciphertext sha256 against the public manifest
+#   -> decrypt into $RUNNER_TEMP [TODO] -> inside `unshare --net`: preflight refusals, recompute
+#   the root sha256 and count (WO-06 loader), run the M1 container preflight with --pull never,
+#   run the golden executor in --network=none containers -> scan the captured console for ids
+#   -> print it.
+# Logs show only counts, hashes, and fixed reasons. No artifacts, no caches, no step summary.
 #
 # TODO(REC-022): PENDING Harper-rec's proposal §7 items AND Rob's approval of each exact change.
 # Until then this workflow:
-#   - references NO secret and NO deployment environment (proposal item 8-10: `heldout-operator`
-#     environment, HELDOUT_* secrets and variables; none may be created or referenced yet),
-#   - has NO fetch/decrypt step for the private split, NO age install, and NO audit-store sink.
-#     The "Fetch private split" and "Persist to audit store" steps exit 1 on purpose,
-#   - pins the manifest sha256 to a placeholder that fails the format check (WO-06 manifest),
-#   - has NO `log-scan` job (proposal §4.12: needs `actions: read` plus the decrypted private
-#     manifest; added with the secrets, not before).
-# Debug guard: the proposal also checks secrets.ACTIONS_STEP_DEBUG / ACTIONS_RUNNER_DEBUG. This
-# draft checks runner.debug, RUNNER_DEBUG, and the vars.* forms only, so that it references no
-# secrets context before approval; when debug logging is on, runner.debug is "1" (proposal §7
-# item 12 also confirms no such secret or variable exists).
+#   - references NO secret and NO deployment environment (proposal items 8-10),
+#   - has stub steps that exit 1 for fetch, decrypt, and the audit-store sink,
+#   - has NO `log-scan` job (proposal §4.12: needs `actions: read` + decrypted names),
+#   - depends on the WO-06 manifest evals/heldout/heldout-repo-chore-v1.manifest.json and loader
+#     (not on main yet; the runner fails closed with loader_unavailable).
+# Debug guard: the proposal also checks secrets.ACTIONS_*_DEBUG. This draft checks runner.debug,
+# RUNNER_DEBUG, and the vars.* forms only, so it references no secrets context yet.
+# TODO(REC-022): hash-pin pip and setuptools before the first real run (CTO-rec residual).
 # CTO-rec reviews every edit to this file.
 
 on:
@@ -55,10 +55,16 @@ jobs:
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
       RECERTIA_NO_NETWORK: "1"
-      RECERTIA_EXECUTION_BACKEND: local
-      RECERTIA_GOLDEN_BACKEND: local
-      # TODO(REC-022): replace with the WO-06 manifest sha256 once Rob approves the split.
-      HELDOUT_MANIFEST_SHA256: "TODO-REC-022-pending-approval"
+      # Container backend only (CTO-rec). Allowlisted python:3.12-slim, pinned by digest, so
+      # solver/container.py passes --pull never; every sandbox runs with --network=none.
+      RECERTIA_EXECUTION_BACKEND: container
+      RECERTIA_GOLDEN_BACKEND: container
+      RECERTIA_REQUIRE_IMAGE_DIGEST: "1"
+      RECERTIA_CONTAINER_IMAGE: python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+      # As in ci.yml container smoke: the sandbox user (65534) needs to write the bind-mounted
+      # workdir on a single-tenant, ephemeral hosted runner.
+      RECERTIA_WORKDIR_WORLD_WRITE: "1"
+      HELDOUT_MANIFEST: evals/heldout/heldout-repo-chore-v1.manifest.json
     steps:
       - name: Refuse debug logging
         env:
@@ -92,22 +98,46 @@ jobs:
       - name: Install pinned deps (hash-checked)
         run: python -m pip install -q --no-deps --require-hashes -r requirements/heldout-eval.txt
 
-      - name: Fetch private split (PENDING approval; fails closed)
+      # Network is still up here. Anonymous public pull by digest; no secret in this step's env.
+      - name: Pull allowlisted image by digest
+        run: |
+          docker pull -q "$RECERTIA_CONTAINER_IMAGE" > /dev/null
+          docker image inspect "$RECERTIA_CONTAINER_IMAGE" > /dev/null
+
+      - name: Fetch ciphertext (PENDING approval; fails closed)
         env:
           SPLIT_ID: ${{ inputs.split_id }}
-          SPLIT_ROOT: ${{ runner.temp }}/ho
+          CIPHERTEXT: ${{ runner.temp }}/ct/split.tar.gz.age
         run: |
-          # TODO(REC-022): proposal §3/§7 items 6, 9, 10: read-only deploy key, age identity,
-          # data-repo URL. Decrypt to $SPLIT_ROOT (outside $GITHUB_WORKSPACE). Not approved yet.
+          # TODO(REC-022): proposal §3/§7 items 6, 9, 10 (read-only deploy key, data-repo URL).
           echo "heldout: FAIL reason=split_fetch_not_approved executed=0"
           exit 1
 
-      # No network: the eval runs in a fresh network namespace (loopback only, down) via
-      # `sudo unshare --net`, dropped back to the runner user with setpriv. The runner also
-      # passes --require-offline, which refuses to start if any interface other than loopback exists.
-      # stdout/stderr go to a file; it is printed only after the id scan passes.
-      - name: Verify pinned inputs and evaluate (offline, output to file)
+      - name: Verify ciphertext sha256 (before decrypt)
         env:
+          PYTHONPATH: src:.
+          CIPHERTEXT: ${{ runner.temp }}/ct/split.tar.gz.age
+        run: |
+          python -m recertia.evals.heldout verify-ciphertext \
+            --manifest "$HELDOUT_MANIFEST" --ciphertext "$CIPHERTEXT"
+
+      - name: Decrypt into RUNNER_TEMP (PENDING approval; fails closed)
+        env:
+          SPLIT_ROOT: ${{ runner.temp }}/ho
+        run: |
+          # TODO(REC-022): proposal §3 item 9 (age identity). Decrypt to $SPLIT_ROOT only,
+          # outside $GITHUB_WORKSPACE. Not approved yet.
+          echo "heldout: FAIL reason=decrypt_not_approved executed=0"
+          exit 1
+
+      # No network: a fresh network namespace (loopback only, down) via `sudo unshare --net`,
+      # dropped back to the runner user with setpriv (docker group kept by --init-groups). The
+      # docker CLI reaches the daemon over the filesystem unix socket, which a netns does not
+      # isolate. The runner refuses if any non-loopback interface exists (--require-offline).
+      # The console goes to a file and is printed only after the id scan passes.
+      - name: Verify root and count, container preflight, evaluate (offline)
+        env:
+          CIPHERTEXT: ${{ runner.temp }}/ct/split.tar.gz.age
           SPLIT_ROOT: ${{ runner.temp }}/ho
           AUDIT_STORE: ${{ runner.temp }}/audit
           CONSOLE: ${{ runner.temp }}/console.txt
@@ -118,25 +148,26 @@ jobs:
           sudo unshare --net -- setpriv --reuid="$(id -u)" --regid="$(id -g)" --init-groups \
             env -i PATH="$PATH" HOME="$HOME" PYTHONPATH=src:. \
             OPENAI_API_KEY= ANTHROPIC_API_KEY= RECERTIA_NO_NETWORK=1 \
-            RECERTIA_EXECUTION_BACKEND=local RECERTIA_GOLDEN_BACKEND=local \
+            RECERTIA_EXECUTION_BACKEND=container RECERTIA_GOLDEN_BACKEND=container \
+            RECERTIA_REQUIRE_IMAGE_DIGEST=1 RECERTIA_CONTAINER_IMAGE="$RECERTIA_CONTAINER_IMAGE" \
+            RECERTIA_WORKDIR_WORLD_WRITE=1 \
             "$PY" -m recertia.evals.heldout \
-              --manifest "$SPLIT_ROOT/manifest.json" \
-              --expected-sha256 "$HELDOUT_MANIFEST_SHA256" \
+              --manifest "$HELDOUT_MANIFEST" \
+              --ciphertext "$CIPHERTEXT" \
               --split-root "$SPLIT_ROOT" \
               --audit-store "$AUDIT_STORE" \
               --require-offline > "$CONSOLE" 2>&1
           rc=$?
           set -e
           PYTHONPATH=src:. python -m recertia.evals.heldout scan \
-            --manifest "$SPLIT_ROOT/manifest.json" \
-            --expected-sha256 "$HELDOUT_MANIFEST_SHA256" \
-            --log "$CONSOLE"
+            --split-root "$SPLIT_ROOT" --log "$CONSOLE"
           cat "$CONSOLE"
           exit "$rc"
 
       - name: Persist to audit store and clean up (PENDING approval; fails closed)
         if: always()
         env:
+          CT_DIR: ${{ runner.temp }}/ct
           SPLIT_ROOT: ${{ runner.temp }}/ho
           AUDIT_STORE: ${{ runner.temp }}/audit
           CONSOLE: ${{ runner.temp }}/console.txt
@@ -144,6 +175,6 @@ jobs:
           # TODO(REC-022): proposal §5 / §7 items 5, 7, 10: encrypt the record to Rob and the
           # operator and append it to the private audit repo. Never upload $AUDIT_STORE as an
           # artifact or cache, and never write it to $GITHUB_STEP_SUMMARY.
-          rm -rf "$SPLIT_ROOT" "$AUDIT_STORE" "$CONSOLE"
+          rm -rf "$CT_DIR" "$SPLIT_ROOT" "$AUDIT_STORE" "$CONSOLE"
           echo "heldout: FAIL reason=audit_sink_not_approved"
           exit 1
