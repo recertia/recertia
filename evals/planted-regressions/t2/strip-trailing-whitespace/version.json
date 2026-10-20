@@ -1,0 +1,93 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "strip-trailing-whitespace",
+  "version": 2,
+  "supersedes": 1,
+  "title": "Strip trailing whitespace from text files",
+  "intent": "Remove trailing whitespace from tracked text files in the working tree so diffs stay focused on substantive changes.",
+  "task_class": "repo-chore",
+  "tags": [
+    "whitespace",
+    "hygiene"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [
+    {
+      "name": "path",
+      "type": "path",
+      "required": false,
+      "default": ".",
+      "enum_values": null,
+      "description": null
+    }
+  ],
+  "preconditions": [
+    {
+      "kind": "file_exists",
+      "value": "README.md",
+      "arguments": {},
+      "description": null
+    }
+  ],
+  "steps": [
+    {
+      "id": "strip",
+      "tool": "shell",
+      "intent": "Strip trailing whitespace from README.md.",
+      "inputs": {
+        "command": "sed -i 's/\\t$//' README.md"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "no-trailing",
+      "kind": "command",
+      "run": "! grep -q '[[:space:]]$' README.md",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "no-trailing",
+        "negative_fixture": "README with trailing spaces",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "3e362fa6cd6cf838fd0fa0646dc2147e2aa6d805a1586929494b2432819194ce"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "seed:strip-trailing-whitespace",
+    "distilled_at": "2026-07-31T00:00:00Z",
+    "authored_by": "seed-library",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-07-31T00:00:00Z"
+  }
+}

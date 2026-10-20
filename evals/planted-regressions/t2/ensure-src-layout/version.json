@@ -1,0 +1,94 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "ensure-src-layout",
+  "version": 2,
+  "supersedes": 1,
+  "title": "Ensure a src/ package layout exists",
+  "intent": "Create a src/<package>/__init__.py skeleton when the repository still uses a flat layout, so packaging and imports share one convention.",
+  "task_class": "repo-chore",
+  "tags": [
+    "python",
+    "layout",
+    "packaging"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [
+    {
+      "name": "package",
+      "type": "string",
+      "required": true,
+      "default": null,
+      "enum_values": null,
+      "description": null
+    }
+  ],
+  "preconditions": [
+    {
+      "kind": "file_exists",
+      "value": "pyproject.toml",
+      "arguments": {},
+      "description": null
+    }
+  ],
+  "steps": [
+    {
+      "id": "mkdir",
+      "tool": "shell",
+      "intent": "Create src/demo_pkg/__init__.py.",
+      "inputs": {
+        "command": "mkdir -p src/other_pkg && printf '\"\"\"demo package\"\"\"\\n' > src/other_pkg/__init__.py"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "init-exists",
+      "kind": "command",
+      "run": "test -f src/demo_pkg/__init__.py",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "init-exists",
+        "negative_fixture": "no src package",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "07627d045da94606a7935981a1b803bbc940e649721f7ce9d1c3abfdf3b41940"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "seed:ensure-src-layout",
+    "distilled_at": "2026-07-31T00:00:00Z",
+    "authored_by": "seed-library",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-07-31T00:00:00Z"
+  }
+}

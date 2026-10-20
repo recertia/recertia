@@ -1,0 +1,104 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "add-makefile-target",
+  "version": 2,
+  "supersedes": 1,
+  "title": "Add a test target to the Makefile",
+  "intent": "Ensure the repository Makefile exposes a `test` target that runs the project's test suite, creating the Makefile if it does not yet exist.",
+  "task_class": "repo-chore",
+  "tags": [
+    "makefile",
+    "tests"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "ensure",
+      "tool": "shell",
+      "intent": "Create Makefile with a test target if missing.",
+      "inputs": {
+        "command": "if [ ! -f Makefile ] || ! grep -q '^check:' Makefile; then printf 'check:\\n\\tpytest -q\\n' >> Makefile; fi"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "makefile-exists",
+      "kind": "command",
+      "run": "test -f Makefile",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "makefile-exists",
+        "negative_fixture": "no Makefile",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "185297b3c1c3e01c5cf6bb3dab39f7ef7d00021ec161fc007ba7fac03699b6a9"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "has-test-target",
+      "kind": "command",
+      "run": "grep -q '^test:' Makefile",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "has-test-target",
+        "negative_fixture": "Makefile without test",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "ed90800fdd1e57385ac2280c4533509f4578a83b9e7c0e6b2acb4d5943e3d601"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "seed:add-makefile-target",
+    "distilled_at": "2026-07-31T00:00:00Z",
+    "authored_by": "seed-library",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-07-31T00:00:00Z"
+  }
+}

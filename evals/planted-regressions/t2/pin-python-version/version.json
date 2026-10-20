@@ -1,0 +1,114 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "pin-python-version",
+  "version": 2,
+  "supersedes": 1,
+  "title": "Pin the repository Python version",
+  "intent": "Write a .python-version file pinning the interpreter so local tooling and CI agree on the same minor version.",
+  "task_class": "repo-chore",
+  "tags": [
+    "python",
+    "version",
+    "pin"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [
+    {
+      "name": "version",
+      "type": "string",
+      "required": false,
+      "default": "3.12",
+      "enum_values": null,
+      "description": null
+    }
+  ],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Write .python-version with {{version}}.",
+      "inputs": {
+        "command": "echo '3.11' > .python-version"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "pin-file",
+      "kind": "command",
+      "run": "test -f .python-version",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "pin-file",
+        "negative_fixture": "no .python-version",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "70098a900194ac5b64d266eae4d7af15297b122b05f8e86e7355a3652079c023"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "pin-value",
+      "kind": "command",
+      "run": "grep -q '3.12' .python-version",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "pin-value",
+        "negative_fixture": "wrong pin",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "088d612faa1cf2f8519bacb30dbca6cdae1021e9f3ca7c2fee655c24d1d0fbdd"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "seed:pin-python-version",
+    "distilled_at": "2026-07-31T00:00:00Z",
+    "authored_by": "seed-library",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-07-31T00:00:00Z"
+  }
+}

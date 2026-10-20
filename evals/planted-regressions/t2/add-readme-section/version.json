@@ -1,0 +1,84 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "add-readme-section",
+  "version": 2,
+  "supersedes": 1,
+  "title": "Add an Installation section to the README",
+  "intent": "Ensure README.md contains an Installation heading with a minimal install command so newcomers can get a working environment quickly.",
+  "task_class": "repo-chore",
+  "tags": [
+    "readme",
+    "docs"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [
+    {
+      "kind": "file_exists",
+      "value": "README.md",
+      "arguments": {},
+      "description": null
+    }
+  ],
+  "steps": [
+    {
+      "id": "append",
+      "tool": "shell",
+      "intent": "Append Installation section if missing.",
+      "inputs": {
+        "command": "grep -q '^## Setup' README.md || printf '\\n## Setup\\n\\n```\\npip install -e .\\n```\\n' >> README.md"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "has-install",
+      "kind": "command",
+      "run": "grep -q '^## Installation' README.md",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "has-install",
+        "negative_fixture": "README without Installation",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "8dcb5bc21de1d41a87a2ea0af5ee8e039f92ab30da41f4988451083828001a0a"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "seed:add-readme-section",
+    "distilled_at": "2026-07-31T00:00:00Z",
+    "authored_by": "seed-library",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-07-31T00:00:00Z"
+  }
+}

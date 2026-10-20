@@ -1,0 +1,104 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "add-editorconfig",
+  "version": 2,
+  "supersedes": 1,
+  "title": "Add a root EditorConfig file",
+  "intent": "Create a root .editorconfig that sets UTF-8, LF endings, and a 4-space indent for Python so editors agree without per-developer setup.",
+  "task_class": "repo-chore",
+  "tags": [
+    "editorconfig",
+    "style"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Write .editorconfig with Python defaults.",
+      "inputs": {
+        "command": "printf 'root = true\\n\\n[*]\\ncharset = utf-8\\nend_of_line = lf\\n' > .editorconfig"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "ec-exists",
+      "kind": "command",
+      "run": "test -f .editorconfig",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "ec-exists",
+        "negative_fixture": "no editorconfig",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "452951181722e9ef89b8d6e089cd346498117843f7c1b78f68175be49042c5bf"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "ec-python",
+      "kind": "command",
+      "run": "grep -q '\\[\\*\\.py\\]' .editorconfig",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "ec-python",
+        "negative_fixture": "no python section",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "33cca04c108b236fea324ea81d72683269b8ce87e2e7e87968b39267d27e1745"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "seed:add-editorconfig",
+    "distilled_at": "2026-07-31T00:00:00Z",
+    "authored_by": "seed-library",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-07-31T00:00:00Z"
+  }
+}
