@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from contracts.common import Curation
 
+RunResolution = Literal["decided", "unresolved", "invalid"]
+
 
 class ConfidenceInterval(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -127,6 +129,22 @@ class EvalObservation(BaseModel):
     evidence_hash: str | None = None
     curation: Curation | None = None
     practice_converted: bool | None = None
+    resolution: RunResolution | None = Field(
+        default=None,
+        description=(
+            "append_run classification: decided, unresolved, or invalid. "
+            "NULL/omitted on pre-REC-011 rows (legacy) and is never coerced to decided. "
+            "Recording only: arm_counts, lift, gates, and promotion do not read this field."
+        ),
+    )
+    exit_code: int | None = Field(
+        default=None,
+        description="Criterion exit that classified unresolved (124 timeout / 126 unavailable).",
+    )
+    reason: str | None = Field(
+        default=None,
+        description="Human-readable reason for the recorded resolution.",
+    )
 
 
 class MetricReport(BaseModel):

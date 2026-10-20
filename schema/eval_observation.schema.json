@@ -235,6 +235,50 @@
       ],
       "default": null,
       "title": "Practice Converted"
+    },
+    "resolution": {
+      "anyOf": [
+        {
+          "enum": [
+            "decided",
+            "unresolved",
+            "invalid"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "append_run classification: decided, unresolved, or invalid. NULL/omitted on pre-REC-011 rows (legacy) and is never coerced to decided. Recording only: arm_counts, lift, gates, and promotion do not read this field.",
+      "title": "Resolution"
+    },
+    "exit_code": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Criterion exit that classified unresolved (124 timeout / 126 unavailable).",
+      "title": "Exit Code"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Human-readable reason for the recorded resolution.",
+      "title": "Reason"
     }
   },
   "required": [
