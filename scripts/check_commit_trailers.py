@@ -1,9 +1,24 @@
 #!/usr/bin/env python3
-"""Allow-list author, committer, and Co-authored-by emails on the PR range.
+"""Allow-list author, committer, and Co-authored-by emails on a commit range.
 
-Uses the pull-request base and head SHAs (``BASE`` / ``HEAD``), not GitHub's
-merge commit. Historical commits outside the allow-list fail this check;
-they are not rewritten here.
+Pull request: uses the pull-request base and head SHAs (``BASE`` / ``HEAD``),
+not GitHub's merge commit.
+
+Push (``BASE`` / ``HEAD`` unset): checks the pushed range
+``PUSH_BEFORE..PUSH_AFTER`` (``github.event.before`` / ``github.sha``), so a
+direct push to the default branch is never an empty range. When
+``PUSH_BEFORE`` is all zeros, empty, or not a commit in this clone (new
+branch, first push, or a force push whose old tip was not fetched):
+
+1. if the pushed branch (``PUSH_REF``) is not ``DEFAULT_BRANCH`` and
+   ``origin/<DEFAULT_BRANCH>`` exists, the range is
+   ``merge-base(origin/<DEFAULT_BRANCH>, PUSH_AFTER)..PUSH_AFTER``;
+2. otherwise, the full history of ``PUSH_AFTER``.
+
+On any push, an empty range falls back to checking ``PUSH_AFTER`` alone.
+
+Historical commits outside the allow-list fail this check; they are not
+rewritten here.
 """
 
 from __future__ import annotations
@@ -32,16 +47,49 @@ def _allowed(email: str) -> bool:
     return value.endswith(_ALLOWED_SUFFIX)
 
 
-def _range() -> tuple[str, str]:
+_ZERO_SHA = "0" * 40
+
+
+def _git(*args: str) -> str:
+    return subprocess.check_output(["git", *args], text=True).strip()
+
+
+def _is_commit(rev: str) -> bool:
+    probe = subprocess.run(
+        ["git", "cat-file", "-e", f"{rev}^{{commit}}"],
+        capture_output=True,
+    )
+    return probe.returncode == 0
+
+
+def _push_revs(before: str, after: str) -> list[str]:
+    """rev-list arguments for a push; see the module docstring for the fallback."""
+    if before and before != _ZERO_SHA and _is_commit(before):
+        return [f"{before}..{after}"]
+    default = os.environ.get("DEFAULT_BRANCH", "").strip()
+    ref = os.environ.get("PUSH_REF", "").strip().removeprefix("refs/heads/")
+    if default and ref != default and _is_commit(f"origin/{default}"):
+        try:
+            return [f"{_git('merge-base', f'origin/{default}', after)}..{after}"]
+        except subprocess.CalledProcessError:
+            pass
+    return [after]
+
+
+def _range() -> tuple[str, list[str], bool]:
     base = os.environ.get("BASE", "").strip()
     head = os.environ.get("HEAD", "").strip()
-    if not base or not head:
+    if base and head:
+        return head, [f"{base}..{head}"], False
+    after = os.environ.get("PUSH_AFTER", "").strip()
+    if not after:
         print(
-            "BASE and HEAD must be the pull-request base and head SHAs.",
+            "Set BASE and HEAD (pull request) or PUSH_BEFORE and PUSH_AFTER (push).",
             file=sys.stderr,
         )
-        return "", ""
-    return base, head
+        return "", [], False
+    before = os.environ.get("PUSH_BEFORE", "").strip()
+    return after, _push_revs(before, after), True
 
 
 def _emails_for(commit: str) -> list[tuple[str, str]]:
@@ -71,13 +119,16 @@ def _emails_for(commit: str) -> list[tuple[str, str]]:
 
 
 def main() -> int:
-    base, head = _range()
-    if not base or not head:
+    head, revs, push = _range()
+    if not revs:
         return 2
     shas = subprocess.check_output(
-        ["git", "rev-list", "--reverse", f"{base}..{head}"],
+        ["git", "rev-list", "--reverse", *revs],
         text=True,
     ).split()
+    if push and not shas:
+        shas = [_git("rev-parse", f"{head}^{{commit}}")]
+    span = " ".join(revs)
     failed: list[str] = []
     for sha in shas:
         bad = [
@@ -90,11 +141,11 @@ def main() -> int:
             print(f"FAIL {sha}: {', '.join(bad)}", file=sys.stderr)
     if failed:
         print(
-            f"{len(failed)} commit(s) in {base}..{head} are outside the email allow-list.",
+            f"{len(failed)} commit(s) in {span} are outside the email allow-list.",
             file=sys.stderr,
         )
         return 1
-    print(f"ok {len(shas)} commit(s) in {base}..{head}")
+    print(f"ok {len(shas)} commit(s) in {span}")
     return 0
 
 

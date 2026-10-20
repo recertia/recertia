@@ -111,11 +111,10 @@ jobs:
         run: pytest -v
 
   commit-emails:
-    name: commit emails (PR range)
+    name: commit emails (PR or push range)
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -125,6 +124,12 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          # Push: the pushed range before..after; fallback when before is all
+          # zeros is documented in scripts/check_commit_trailers.py.
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+          PUSH_REF: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: python3 scripts/check_commit_trailers.py
 
   package-smoke:
