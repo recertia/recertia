@@ -5,6 +5,10 @@ on:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
   workflow_dispatch:
 
+# REC-022: least privilege. Every job reads the repo only; none needs more.
+permissions:
+  contents: read
+
 jobs:
   gitleaks-full-history:
     runs-on: ubuntu-latest
@@ -25,6 +29,8 @@ jobs:
 
   metrics-report:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -78,19 +84,16 @@ jobs:
             --probes artifacts/probes.json \
             --canary artifacts/canary.json \
             --log artifacts/soak-log.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: weekly-metrics
-          if-no-files-found: warn
-          path: |
-            artifacts/weekly-metrics.json
-            artifacts/probes.json
-            artifacts/canary.json
-            artifacts/canary-live.json
-            artifacts/soak-log.json
+      # REC-022: no public artifact. Eval output (metrics, probes, canary, soak log) stays on
+      # the runner; only allowlisted aggregate counts go to the step summary.
+      - name: Aggregate summary (counts only)
+        if: always()
+        run: python3 scripts/weekly_ops_summary.py --artifacts artifacts >> "$GITHUB_STEP_SUMMARY"
 
   postgres-soak:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         # Migrations require CREATE EXTENSION vector (pgvector).
