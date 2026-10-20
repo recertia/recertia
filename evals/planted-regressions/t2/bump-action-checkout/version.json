@@ -1,0 +1,93 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "bump-action-checkout",
+  "version": 2,
+  "supersedes": 1,
+  "title": "Bump actions/checkout in a workflow file",
+  "intent": "Raise the actions/checkout pin in .github/workflows to a target major version so CI stays on a maintained action release.",
+  "task_class": "repo-chore",
+  "tags": [
+    "github-actions",
+    "ci"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [
+    {
+      "name": "major",
+      "type": "string",
+      "required": false,
+      "default": "4",
+      "enum_values": null,
+      "description": null
+    }
+  ],
+  "preconditions": [
+    {
+      "kind": "path_glob",
+      "value": ".github/workflows/*.yml",
+      "arguments": {},
+      "description": null
+    }
+  ],
+  "steps": [
+    {
+      "id": "bump",
+      "tool": "shell",
+      "intent": "Rewrite actions/checkout@vN to @v4.",
+      "inputs": {
+        "command": "for f in .github/workflows/*.yml; do sed -i 's|actions/checkout@v[0-9]*|actions/checkout@v2|g' \"$f\"; done"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "checkout-v4",
+      "kind": "command",
+      "run": "grep -q 'actions/checkout@v4' .github/workflows/*.yml",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "checkout-v4",
+        "negative_fixture": "workflow still on checkout@v3",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "75f611d6a037480fbdf0cff859eb7bc590327c9961d71bc3cafe0a7370bba73e"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "seed:bump-action-checkout",
+    "distilled_at": "2026-07-31T00:00:00Z",
+    "authored_by": "seed-library",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-07-31T00:00:00Z"
+  }
+}
