@@ -50,15 +50,44 @@ class Repo:
         )
         return subprocess.check_output(["git", *args], cwd=self.path, env=env, text=True).strip()
 
-    def commit(self, email: str = GOOD, coauthor: str | None = None) -> str:
+    def commit(self, email: str = GOOD, coauthor: str | None = None, trailers: tuple[str, ...] = ()) -> str:
         self.n += 1
         (self.path / f"f{self.n}.txt").write_text(str(self.n))
         self.git("add", ".")
-        msg = f"change {self.n}"
+        lines = list(trailers)
         if coauthor:
-            msg += f"\n\nCo-authored-by: placeholder <{coauthor}>"
+            lines.append(f"Co-authored-by: placeholder <{coauthor}>")
+        msg = f"change {self.n}"
+        if lines:
+            msg += "\n\n" + "\n".join(lines)
         self.git("commit", "-q", "-m", msg, email=email)
         return self.git("rev-parse", "HEAD")
+
+    def raw_commit(self, author_email: str) -> str:
+        """A commit object with an arbitrary (possibly empty) author email."""
+        tree = self.git("write-tree")
+        parent = self.git("rev-parse", "HEAD")
+        body = (
+            f"tree {tree}\nparent {parent}\n"
+            f"author placeholder <{author_email}> 1700000000 +0000\n"
+            f"committer placeholder <{GOOD}> 1700000000 +0000\n\nraw\n"
+        )
+        sha = subprocess.run(
+            ["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+            cwd=self.path,
+            env=_env(self.tmp),
+            input=body,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        self.git("update-ref", "HEAD", sha)
+        return sha
+
+    def drop_unreachable(self) -> None:
+        """Remove objects no ref reaches, like an old tip a fresh clone never had."""
+        self.git("reflog", "expire", "--expire=now", "--all")
+        self.git("gc", "-q", "--prune=now")
 
     def publish_main(self) -> None:
         """Stand in for actions/checkout: origin/main points at the pushed tip."""
@@ -139,33 +168,35 @@ def test_zero_before_new_branch_checks_commits_since_default_branch(repo: Repo) 
     assert f"FAIL {bad}" in result.stderr
 
 
-def test_zero_before_on_default_branch_checks_after_alone(repo: Repo) -> None:
-    # Pre-policy history on the default branch is not walked or grandfathered.
+def test_zero_before_on_default_branch_fails_closed(repo: Repo) -> None:
+    # Creating the default branch: history is not grandfathered and the tip
+    # alone is not enough, so the check fails closed even if the tip is good.
     repo.commit(email=BAD)
-    repo.commit(coauthor=BAD)
     after = repo.commit()
     repo.publish_main()
-    result = _push(repo, ZERO, after)
-    assert result.returncode == 0, result
-    assert f"ok 1 commit(s) in --max-count=1 {after}" in result.stdout
-
-    bad = repo.commit(email=BAD)
-    repo.publish_main()
-    result = _push(repo, ZERO, bad)
-    assert result.returncode == 1, result
-    assert f"FAIL {bad}" in result.stderr
-    assert "1 commit(s)" in result.stderr
+    for before in (ZERO, ""):
+        result = _push(repo, before, after)
+        assert result.returncode == 1, result
+        assert "creates the default branch" in result.stderr
+        assert "Failing closed" in result.stderr
 
 
-def test_zero_before_unrelated_branch_checks_after_alone(repo: Repo) -> None:
+def test_zero_before_unrelated_branch_fails_closed(repo: Repo) -> None:
     repo.commit()
     repo.publish_main()
     repo.git("checkout", "-q", "--orphan", "other")
     repo.commit(email=BAD)
     after = repo.commit()
     result = _push(repo, ZERO, after, ref="other")
-    assert result.returncode == 0, result
-    assert "ok 1 commit(s)" in result.stdout
+    assert result.returncode == 1, result
+    assert "shares no history" in result.stderr
+
+
+def test_zero_before_without_default_branch_ref_fails_closed(repo: Repo) -> None:
+    after = repo.commit()
+    result = _push(repo, ZERO, after, ref="feature")
+    assert result.returncode == 1, result
+    assert "origin/main is not in this clone" in result.stderr
 
 
 def test_zero_before_new_branch_at_existing_commit_checks_after_alone(repo: Repo) -> None:
@@ -174,21 +205,131 @@ def test_zero_before_new_branch_at_existing_commit_checks_after_alone(repo: Repo
     repo.publish_main()
     result = _push(repo, ZERO, after, ref="feature")
     assert result.returncode == 0, result
-    assert "ok 1 commit(s)" in result.stdout
+    assert f"ok 1 commit(s) in commit {after[:12]} (tip only, empty push range)" in result.stdout
 
 
-def test_unknown_before_uses_the_same_fallback(repo: Repo) -> None:
+# --- force push (CTO case e5) -------------------------------------------------
+
+
+def _force_push_setup(repo: Repo) -> tuple[str, str, str]:
+    """main had old_tip; it is rewritten to base -> bad -> good (new tip)."""
+    base = repo.commit()
+    old_tip = repo.commit()
+    repo.git("reset", "-q", "--hard", base)
     bad = repo.commit(email=BAD)
+    after = repo.commit()  # the tip itself is compliant
     repo.publish_main()
-    result = _push(repo, "f" * 40, bad)
+    return old_tip, bad, after
+
+
+def test_e5_force_push_to_main_with_missing_old_tip_fails_closed(repo: Repo) -> None:
+    old_tip, bad, after = _force_push_setup(repo)
+    repo.drop_unreachable()
+    assert (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{old_tip}^{{commit}}"], cwd=repo.path, capture_output=True
+        ).returncode
+        != 0
+    )
+    result = _push(repo, old_tip, after)
+    assert result.returncode == 1, result
+    assert "not in this clone" in result.stderr
+    assert "Failing closed" in result.stderr
+    assert "ok " not in result.stdout
+
+
+def test_e5_force_push_to_main_with_fetched_old_tip_checks_rewritten_range(repo: Repo) -> None:
+    # CI fetches PUSH_BEFORE first; with the old tip present, before..after
+    # includes the earlier bad commit, not just the tip.
+    old_tip, bad, after = _force_push_setup(repo)
+    result = _push(repo, old_tip, after)
     assert result.returncode == 1, result
     assert f"FAIL {bad}" in result.stderr
+
+
+def test_force_push_to_main_good_rewrite_passes(repo: Repo) -> None:
+    base = repo.commit()
+    old_tip = repo.commit()
+    repo.git("reset", "-q", "--hard", base)
+    repo.commit()
+    after = repo.commit(email=AGENT)
+    repo.publish_main()
+    result = _push(repo, old_tip, after)
+    assert result.returncode == 0, result
+    assert f"ok 2 commit(s) in {old_tip}..{after}" in result.stdout
+
+
+def test_missing_before_on_feature_branch_uses_merge_base(repo: Repo) -> None:
+    base = repo.commit()
+    repo.publish_main()
+    repo.git("checkout", "-q", "-b", "feature")
+    bad = repo.commit(email=BAD)
+    after = repo.commit()
+    result = _push(repo, "f" * 40, after, ref="feature")
+    assert result.returncode == 1, result
+    assert f"FAIL {bad}" in result.stderr
+    assert f"in {base}..{after}" in result.stderr
 
 
 # --- allow-list forms ---------------------------------------------------------
 
 AGENT = "cursoragent@" + "cursor.com"
 WEB_FLOW = "noreply@" + "github.com"
+IDENTITY_TRAILERS = (
+    "Co-authored-by",
+    "Signed-off-by",
+    "Reviewed-by",
+    "Acked-by",
+    "Tested-by",
+    "Reported-by",
+    "sIGNED-oFF-bY",
+    "REVIEWED-BY",
+    "co-AUTHORED-by",
+)
+
+
+@pytest.mark.parametrize("key", IDENTITY_TRAILERS)
+def test_every_by_trailer_is_scanned_case_insensitively(repo: Repo, key: str) -> None:
+    before = repo.commit()
+    after = repo.commit(trailers=(f"{key}: placeholder <{BAD}>",))
+    result = _push(repo, before, after)
+    assert result.returncode == 1, result
+    assert f"{key}={BAD}" in result.stderr
+
+
+def test_good_by_trailers_pass(repo: Repo) -> None:
+    before = repo.commit()
+    after = repo.commit(
+        trailers=tuple(f"{key}: placeholder <{GOOD}>" for key in IDENTITY_TRAILERS)
+        + (f"Signed-off-by: placeholder <{AGENT}>", "Refs: #97")
+    )
+    result = _push(repo, before, after)
+    assert result.returncode == 0, result
+
+
+def test_signed_off_by_without_email_fails(repo: Repo) -> None:
+    before = repo.commit()
+    after = repo.commit(trailers=("Signed-off-by: placeholder",))
+    result = _push(repo, before, after)
+    assert result.returncode == 1, result
+    assert "Signed-off-by=placeholder" in result.stderr
+
+
+def test_empty_author_email_fails(repo: Repo) -> None:
+    before = repo.commit()
+    after = repo.raw_commit("")
+    assert repo.git("log", "-1", "--format=%ae", after) == ""
+    result = _push(repo, before, after)
+    assert result.returncode == 1, result
+    assert f"FAIL {after}: author=<empty>" in result.stderr
+
+
+def test_empty_trailer_email_fails(repo: Repo) -> None:
+    before = repo.commit()
+    after = repo.commit(trailers=("Signed-off-by: placeholder <>",))
+    result = _push(repo, before, after)
+    assert result.returncode == 1, result
+    assert "Signed-off-by=<empty>" in result.stderr
 
 
 def test_agent_author_and_coauthor_forms_pass(repo: Repo) -> None:

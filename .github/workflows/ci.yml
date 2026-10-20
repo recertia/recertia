@@ -121,17 +121,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Allow-list author, committer, and Co-authored-by emails
+      - name: Allow-list author, committer, and *-by trailer emails
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
-          # Push: the pushed range before..after; fallback when before is all
-          # zeros is documented in scripts/check_commit_trailers.py.
+          # Push: the pushed range before..after. Zero or unfetchable before is
+          # handled (fail closed on the default branch) in the script docstring.
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_AFTER: ${{ github.sha }}
           PUSH_REF: ${{ github.ref_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: python3 scripts/check_commit_trailers.py
+        run: |
+          # fetch-depth: 0 above has the full history of every branch; a force
+          # push's old tip is unreachable, so fetch it by SHA (best effort).
+          if [ -z "$BASE" ] && [[ "$PUSH_BEFORE" =~ ^[0-9a-f]{40}$ ]] \
+            && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            git fetch --no-tags origin "$PUSH_BEFORE" || true
+          fi
+          python3 scripts/check_commit_trailers.py
 
   package-smoke:
     name: wheel / sdist smoke
