@@ -33,10 +33,20 @@ alone.
 GitHub's web-flow address is accepted as committer only (merge button,
 squash merges, and "Update branch"), never as author or in a trailer.
 
+Every ``<...>`` and every bare ``x@y`` token in a ``*-by`` trailer value is
+checked; one non-allowlisted address fails the trailer even if another is
+allowed. Each address must be a single ``local@domain`` token (no spaces,
+commas, quotes, angle brackets or second ``@``). A value with unbalanced or nested
+angle brackets, or with no address at all, fails closed.
+
 Output is redacted because CI logs are public: a failing value is reported
 only as ``<sha>: <role>=non-allowlisted`` (or ``<role>=<empty>``), never the
-address, its parts, or a name. git's own stderr is captured and discarded,
-and unexpected errors print only their type.
+address, its parts, or a name. Roles are ``author``, ``committer``, a known
+trailer key in canonical case, or ``trailer`` for any other ``*-by`` key.
+Environment inputs are echoed only if they are 40-hex SHAs or plain branch
+names, otherwise as ``<invalid>``. git's own stderr is captured and
+discarded, non-UTF-8 identity bytes are classified per commit, and
+unexpected errors print only their type.
 """
 
 from __future__ import annotations
@@ -54,12 +64,31 @@ _ALLOWED_EXACT = frozenset(
 _ALLOWED_SUFFIX = "@users.noreply." + "github.com"
 _WEB_FLOW_COMMITTER = "noreply@" + "github.com"
 _IDENTITY_TRAILER = re.compile(r"^([A-Za-z0-9-]*-by)\s*:\s*(.*)$", re.IGNORECASE)
-_ANGLE_EMAIL = re.compile(r"<([^>]*)>")
+_ANGLE_EMAIL = re.compile(r"<([^<>]*)>")
+# One local@domain token. Square brackets stay legal: GitHub App noreply
+# forms look like <id>+<app>[bot]@<noreply suffix>.
+_ADDRESS = re.compile(r"[^\s<>,;:\"'()@]+@[^\s<>,;:\"'()@]+")
+_MALFORMED = "\x00malformed"
+_KNOWN_TRAILERS = {
+    key.lower(): key
+    for key in (
+        "Co-authored-by",
+        "Signed-off-by",
+        "Reviewed-by",
+        "Acked-by",
+        "Tested-by",
+        "Reported-by",
+        "Suggested-by",
+        "Helped-by",
+    )
+}
+_SHA = re.compile(r"[0-9a-f]{40}")
+_BRANCH = re.compile(r"[A-Za-z0-9._/-]+")
 
 
 def _allowed(email: str, kind: str = "author") -> bool:
     value = email.strip().lower()
-    if not value:
+    if not value or not _ADDRESS.fullmatch(value):
         return False
     if value in _ALLOWED_EXACT:
         return True
@@ -69,6 +98,15 @@ def _allowed(email: str, kind: str = "author") -> bool:
 
 
 _ZERO_SHA = "0" * 40
+
+
+def _show(rev: str, width: int = 40) -> str:
+    """An env-supplied SHA for output, or ``<invalid>`` if it is not one."""
+    return rev[:width] if _SHA.fullmatch(rev) else "<invalid>"
+
+
+def _show_branch(name: str) -> str:
+    return name if _BRANCH.fullmatch(name) else "<invalid>"
 
 
 def _git(*args: str) -> str:
@@ -91,37 +129,37 @@ def _push_revs(before: str, after: str) -> tuple[list[str], str]:
     """rev-list arguments and a label for a push; see the module docstring."""
     zero = not before or before == _ZERO_SHA
     if not zero and _is_commit(before):
-        return [f"{before}..{after}"], f"{before}..{after}"
+        return [f"{before}..{after}"], f"{_show(before)}..{_show(after)}"
     default = os.environ.get("DEFAULT_BRANCH", "").strip()
     ref = os.environ.get("PUSH_REF", "").strip().removeprefix("refs/heads/")
     if not default or ref == default:
         if zero:
             raise RangeError(
-                f"push creates the default branch at {after[:12]}; its history is"
+                f"push creates the default branch at {_show(after, 12)}; its history is"
                 " not grandfathered, so the range cannot be checked. Failing"
                 " closed: a maintainer must review this push."
             )
         raise RangeError(
-            f"push before={before[:12]} is not in this clone (force push whose"
+            f"push before={_show(before, 12)} is not in this clone (force push whose"
             " old tip could not be fetched); the pushed range cannot be"
             " computed. Failing closed instead of checking only the tip."
         )
     if not _is_commit(f"origin/{default}"):
-        raise RangeError(f"origin/{default} is not in this clone; failing closed.")
+        raise RangeError(f"origin/{_show_branch(default)} is not in this clone; failing closed.")
     try:
         base = _git("merge-base", f"origin/{default}", after)
     except subprocess.CalledProcessError as exc:
         raise RangeError(
-            f"{after[:12]} shares no history with origin/{default}; failing closed."
+            f"{_show(after, 12)} shares no history with origin/{_show_branch(default)}; failing closed."
         ) from exc
-    return [f"{base}..{after}"], f"{base}..{after}"
+    return [f"{base}..{after}"], f"{_show(base)}..{_show(after)}"
 
 
 def _range() -> tuple[str, list[str], str, bool]:
     base = os.environ.get("BASE", "").strip()
     head = os.environ.get("HEAD", "").strip()
     if base and head:
-        return head, [f"{base}..{head}"], f"{base}..{head}", False
+        return head, [f"{base}..{head}"], f"{_show(base)}..{_show(head)}", False
     after = os.environ.get("PUSH_AFTER", "").strip()
     if not after:
         print(
@@ -144,6 +182,7 @@ def _emails_for(commit: str) -> list[tuple[str, str]]:
             commit,
         ],
         text=True,
+        errors="surrogateescape",
         stderr=subprocess.PIPE,
     )
     lines = blob.splitlines()
@@ -155,10 +194,22 @@ def _emails_for(commit: str) -> list[tuple[str, str]]:
         match = _IDENTITY_TRAILER.match(line.strip())
         if not match:
             continue
-        value = match.group(2).strip()
-        email = _ANGLE_EMAIL.search(value)
-        rows.append((match.group(1), email.group(1) if email else value))
+        role = _KNOWN_TRAILERS.get(match.group(1).lower(), "trailer")
+        rows.extend((role, value) for value in _trailer_values(match.group(2)))
     return rows
+
+
+def _trailer_values(value: str) -> list[str]:
+    """Every address in one trailer value; malformed values fail closed."""
+    value = value.strip()
+    if not value:
+        return [""]
+    bracketed = [inner.strip() for inner in _ANGLE_EMAIL.findall(value)]
+    rest = _ANGLE_EMAIL.sub(" ", value)
+    if "<" in rest or ">" in rest:
+        return [_MALFORMED]
+    bare = [token for token in rest.split() if "@" in token]
+    return bracketed + bare or [value]
 
 
 def _redacted(kind: str, email: str) -> str:
@@ -184,11 +235,11 @@ def _main() -> int:
         label = f"commit {shas[0][:12]} (tip only, empty push range)"
     failed: list[str] = []
     for sha in shas:
-        bad = [
-            _redacted(kind, email)
-            for kind, email in _emails_for(sha)
-            if not _allowed(email, kind)
-        ]
+        bad = list(
+            dict.fromkeys(
+                _redacted(kind, email) for kind, email in _emails_for(sha) if not _allowed(email, kind)
+            )
+        )
         if bad:
             failed.append(f"{sha} {' '.join(bad)}")
             print(f"FAIL {sha}: {', '.join(bad)}", file=sys.stderr)
