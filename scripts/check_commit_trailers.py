@@ -13,12 +13,14 @@ branch, first push, or a force push whose old tip was not fetched):
 1. if the pushed branch (``PUSH_REF``) is not ``DEFAULT_BRANCH`` and
    ``origin/<DEFAULT_BRANCH>`` exists, the range is
    ``merge-base(origin/<DEFAULT_BRANCH>, PUSH_AFTER)..PUSH_AFTER``;
-2. otherwise, the full history of ``PUSH_AFTER``.
+2. otherwise (the default branch itself, or no merge-base), ``PUSH_AFTER``
+   alone. Full history is not walked: pre-policy commits on the default
+   branch are outside the allow-list and are not rewritten or grandfathered.
 
 On any push, an empty range falls back to checking ``PUSH_AFTER`` alone.
 
-Historical commits outside the allow-list fail this check; they are not
-rewritten here.
+GitHub's web-flow address is accepted as committer only (merge button,
+squash merges, and "Update branch"), never as author or co-author.
 """
 
 from __future__ import annotations
@@ -31,18 +33,20 @@ import sys
 _ALLOWED_EXACT = frozenset(
     {
         "cursoragent@" + "cursor.com",
-        "robs@" + "gatech.edu",
     }
 )
 _ALLOWED_SUFFIX = "@users.noreply." + "github.com"
+_WEB_FLOW_COMMITTER = "noreply@" + "github.com"
 _COAUTHOR = re.compile(r"^Co-authored-by:\s*.*<([^>]+)>\s*$", re.IGNORECASE)
 
 
-def _allowed(email: str) -> bool:
+def _allowed(email: str, kind: str = "author") -> bool:
     value = email.strip().lower()
     if not value:
         return True
     if value in _ALLOWED_EXACT:
+        return True
+    if kind == "committer" and value == _WEB_FLOW_COMMITTER:
         return True
     return value.endswith(_ALLOWED_SUFFIX)
 
@@ -73,7 +77,7 @@ def _push_revs(before: str, after: str) -> list[str]:
             return [f"{_git('merge-base', f'origin/{default}', after)}..{after}"]
         except subprocess.CalledProcessError:
             pass
-    return [after]
+    return ["--max-count=1", after]
 
 
 def _range() -> tuple[str, list[str], bool]:
@@ -134,7 +138,7 @@ def main() -> int:
         bad = [
             f"{kind}={email}"
             for kind, email in _emails_for(sha)
-            if not _allowed(email)
+            if not _allowed(email, kind)
         ]
         if bad:
             failed.append(f"{sha} {' '.join(bad)}")

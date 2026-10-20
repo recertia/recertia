@@ -139,24 +139,33 @@ def test_zero_before_new_branch_checks_commits_since_default_branch(repo: Repo) 
     assert f"FAIL {bad}" in result.stderr
 
 
-def test_zero_before_on_default_branch_checks_full_history(repo: Repo) -> None:
-    repo.commit()
-    repo.commit()
+def test_zero_before_on_default_branch_checks_after_alone(repo: Repo) -> None:
+    # Pre-policy history on the default branch is not walked or grandfathered.
+    repo.commit(email=BAD)
+    repo.commit(coauthor=BAD)
     after = repo.commit()
     repo.publish_main()
     result = _push(repo, ZERO, after)
     assert result.returncode == 0, result
-    assert "ok 3 commit(s)" in result.stdout
+    assert f"ok 1 commit(s) in --max-count=1 {after}" in result.stdout
 
-    repo.git("checkout", "-q", "--orphan", "other")
-    bad_root = repo.commit(email=BAD)
-    repo.git("checkout", "-q", "main")
-    repo.git("merge", "-q", "--allow-unrelated-histories", "-m", "merge", "other")
-    tip = repo.git("rev-parse", "HEAD")
+    bad = repo.commit(email=BAD)
     repo.publish_main()
-    result = _push(repo, ZERO, tip)
+    result = _push(repo, ZERO, bad)
     assert result.returncode == 1, result
-    assert f"FAIL {bad_root}" in result.stderr
+    assert f"FAIL {bad}" in result.stderr
+    assert "1 commit(s)" in result.stderr
+
+
+def test_zero_before_unrelated_branch_checks_after_alone(repo: Repo) -> None:
+    repo.commit()
+    repo.publish_main()
+    repo.git("checkout", "-q", "--orphan", "other")
+    repo.commit(email=BAD)
+    after = repo.commit()
+    result = _push(repo, ZERO, after, ref="other")
+    assert result.returncode == 0, result
+    assert "ok 1 commit(s)" in result.stdout
 
 
 def test_zero_before_new_branch_at_existing_commit_checks_after_alone(repo: Repo) -> None:
@@ -174,6 +183,46 @@ def test_unknown_before_uses_the_same_fallback(repo: Repo) -> None:
     result = _push(repo, "f" * 40, bad)
     assert result.returncode == 1, result
     assert f"FAIL {bad}" in result.stderr
+
+
+# --- allow-list forms ---------------------------------------------------------
+
+AGENT = "cursoragent@" + "cursor.com"
+WEB_FLOW = "noreply@" + "github.com"
+
+
+def test_agent_author_and_coauthor_forms_pass(repo: Repo) -> None:
+    before = repo.commit()
+    repo.commit(email=AGENT, coauthor=AGENT)
+    after = repo.commit(email=GOOD, coauthor=GOOD)
+    result = _push(repo, before, after)
+    assert result.returncode == 0, result
+    assert "ok 2 commit(s)" in result.stdout
+
+
+def test_web_flow_is_allowed_as_committer_only(repo: Repo) -> None:
+    before = repo.commit()
+    (repo.path / "m.txt").write_text("m")
+    repo.git("add", ".")
+    env = _env(
+        repo.tmp,
+        GIT_AUTHOR_NAME="placeholder",
+        GIT_AUTHOR_EMAIL=GOOD,
+        GIT_COMMITTER_NAME="placeholder",
+        GIT_COMMITTER_EMAIL=WEB_FLOW,
+    )
+    subprocess.check_call(["git", "commit", "-q", "-m", "squash"], cwd=repo.path, env=env)
+    merged = repo.git("rev-parse", "HEAD")
+    result = _push(repo, before, merged)
+    assert result.returncode == 0, result
+
+    as_author = repo.commit(email=WEB_FLOW)
+    result = _push(repo, merged, as_author)
+    assert result.returncode == 1, result
+    as_coauthor = repo.commit(coauthor=WEB_FLOW)
+    result = _push(repo, as_author, as_coauthor)
+    assert result.returncode == 1, result
+    assert "Co-authored-by=" in result.stderr
 
 
 # --- pull_request path is unchanged ------------------------------------------
