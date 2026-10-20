@@ -97,13 +97,14 @@ jobs:
         env:
           GL_SHA256: 5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           curl -sSfLo gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
           echo "$GL_SHA256  gl.tgz" | sha256sum -c - && tar -xzf gl.tgz gitleaks
           if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
-            RANGE="${{ github.sha }}~1..${{ github.sha }}"
+            RANGE="$HEAD_SHA~1..$HEAD_SHA"
           else
-            RANGE="$BASE..${{ github.sha }}"
+            RANGE="$BASE..$HEAD_SHA"
           fi
           ./gitleaks git --redact --exit-code 1 --log-opts="$RANGE" .
 
@@ -111,21 +112,33 @@ jobs:
         run: pytest -v
 
   commit-emails:
-    name: commit emails (PR range)
+    name: commit emails (PR or push range)
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Allow-list author, committer, and Co-authored-by emails
+      - name: Allow-list author, committer, and *-by trailer emails
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
-        run: python3 scripts/check_commit_trailers.py
+          # Push: the pushed range before..after. Zero or unfetchable before is
+          # handled (fail closed on the default branch) in the script docstring.
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+          PUSH_REF: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          # fetch-depth: 0 above has the full history of every branch; a force
+          # push's old tip is unreachable, so fetch it by SHA (best effort).
+          if [ -z "$BASE" ] && [[ "$PUSH_BEFORE" =~ ^[0-9a-f]{40}$ ]] \
+            && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            git fetch --no-tags origin "$PUSH_BEFORE" || true
+          fi
+          python3 scripts/check_commit_trailers.py
 
   package-smoke:
     name: wheel / sdist smoke
