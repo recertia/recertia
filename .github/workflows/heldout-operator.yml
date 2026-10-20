@@ -138,7 +138,7 @@ jobs:
           # TODO(REC-022): proposal §3 item 9 (age identity). Write the identity to $KEY_DIR only,
           # decrypt to $SPLIT_ROOT only (outside $GITHUB_WORKSPACE). Not approved yet.
           # TODO(REC-022) CTO-rec M4 / proposal §4 item 8: RIGHT AFTER decrypting and before any
-          # echo, emit `::add-mask::` (shell variables only, never ${{ }}) for every fixture dir
+          # echo, emit `::add-mask::` (shell variables only, never an expression) for every fixture dir
           # name, every skill id, the first 40 chars of each request, and $SPLIT_ROOT. A test
           # fails if this step stops being a stub without an add-mask line.
           echo "heldout: FAIL reason=decrypt_not_approved executed=0"

@@ -853,8 +853,10 @@ def test_workflow_is_dispatch_only_pinned_container_and_secretless() -> None:
     assert 'OPENAI_API_KEY: ""' in code and 'ANTHROPIC_API_KEY: ""' in code
     pull = code.split("Pull allowlisted image by digest", 1)[1].split("- name:", 1)[0]
     assert "docker pull" in pull and "KEY" not in pull and "TOKEN" not in pull
-    for line in code.splitlines():
-        if "${{" in line:
+    # Raw text, not comment-stripped: GitHub expands ${{ }} even inside a shell comment in run:
+    # (a literal one there made the file invalid). Only column-0 YAML header comments may hold one.
+    for line in text.splitlines():
+        if "${{" in line and not line.startswith("#"):
             assert re.fullmatch(r"\s+[A-Z_0-9]+: \$\{\{ [a-z_.A-Z]+ \}\}(/[a-z.]+)*", line), line
 
 
