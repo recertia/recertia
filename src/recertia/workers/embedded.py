@@ -11,6 +11,8 @@ import os
 import threading
 import time
 from dataclasses import replace
+from typing import ClassVar
+from weakref import WeakSet
 
 from recertia.workers.queue import Claim, RunQueue
 from recertia.workers.run_worker import AsyncRunWorker, load_async_request
@@ -18,6 +20,8 @@ from recertia.workers.run_worker import AsyncRunWorker, load_async_request
 
 class EmbeddedQueueWorker:
     """One daemon thread. Claim, execute, finish."""
+
+    _live: ClassVar[WeakSet[EmbeddedQueueWorker]] = WeakSet()
 
     def __init__(self, worker: AsyncRunWorker, queue: RunQueue, *, worker_id: str = "embedded") -> None:
         self.worker = worker
@@ -27,6 +31,7 @@ class EmbeddedQueueWorker:
         self._guard = threading.Lock()
         self._thread: threading.Thread | None = None
         self._busy = False
+        type(self)._live.add(self)
 
     def ensure_started(self) -> None:
         with self._guard:
@@ -44,6 +49,19 @@ class EmbeddedQueueWorker:
             )
             self._thread.start()
 
+    def stop(self, timeout: float = 5.0) -> None:
+        """Signal the drain loop to exit and join the polling thread."""
+
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                raise TimeoutError("embedded queue worker did not stop")
+        with self._guard:
+            if self._thread is thread:
+                self._thread = None
+
     def flush(self, timeout: float = 30.0) -> None:
         """Block until queued and in-flight items have a terminal status."""
 
@@ -60,7 +78,7 @@ class EmbeddedQueueWorker:
             self.queue.heartbeat_worker(self.worker_id)
             claims = self.queue.claim(self.worker_id, limit=1)
             if not claims:
-                time.sleep(0.05)
+                self._stop.wait(0.05)
                 continue
             self._busy = True
             try:

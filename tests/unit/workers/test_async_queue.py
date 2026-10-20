@@ -36,3 +36,21 @@ def test_async_run_is_finished_by_the_queue_worker(tmp_path: Path) -> None:
     got = client.get("/v1/runs/async-q", headers={"X-API-Key": issued.secret})
     assert got.status_code == 200
     assert got.json()["terminal"] in {"solved", "unsolved", "abstained"}
+
+
+def test_embedded_queue_worker_stop_joins_thread(tmp_path: Path) -> None:
+    from recertia.api.events import RunEventLog
+    from recertia.workers.embedded import EmbeddedQueueWorker
+    from recertia.workers.queue import open_run_queue
+    from recertia.workers.run_worker import AsyncRunWorker
+
+    queue = open_run_queue(tmp_path / "root")
+    worker = AsyncRunWorker(events=RunEventLog(tmp_path / "root"))
+    worker.attach_queue(queue)
+    embedded = EmbeddedQueueWorker(worker, queue, worker_id="stop-test")
+    embedded.ensure_started()
+    thread = embedded._thread
+    assert thread is not None and thread.is_alive()
+    embedded.stop(timeout=5)
+    assert not thread.is_alive()
+    embedded.stop(timeout=5)

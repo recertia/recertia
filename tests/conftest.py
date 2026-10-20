@@ -26,7 +26,10 @@ os.environ.setdefault("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
 
 import ipaddress  # noqa: E402
 import socket  # noqa: E402
+from collections.abc import Iterator  # noqa: E402
 from typing import Any  # noqa: E402
+
+import pytest  # noqa: E402
 
 _LOOPBACK_NAMES = {"localhost", "localhost.localdomain", "ip6-localhost", ""}
 _REAL: dict[str, Any] = {
@@ -111,3 +114,26 @@ def pytest_runtest_setup(item: Any) -> None:
     from recertia.solver.resilience import default_breaker
 
     default_breaker().reset()
+
+
+@pytest.fixture(autouse=True)
+def _stop_embedded_queue_workers() -> Iterator[None]:
+    """Join leaked SQLite poll threads so later tests do not fork with them held."""
+
+    yield
+    from recertia.workers.embedded import EmbeddedQueueWorker
+    from recertia.workers.run_worker import AsyncRunWorker
+
+    errors: list[BaseException] = []
+    for worker in list(EmbeddedQueueWorker._live):
+        try:
+            worker.stop()
+        except BaseException as exc:  # noqa: BLE001 — surface every teardown failure
+            errors.append(exc)
+    for worker in list(AsyncRunWorker._live):
+        try:
+            worker.shutdown(wait=True)
+        except BaseException as exc:  # noqa: BLE001 — surface every teardown failure
+            errors.append(exc)
+    if errors:
+        raise errors[0]

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **REL-3 probe_b hang (REC-017 / REC-018)** — `tests/probes/rel3_probe.py` now
+  uses the multiprocessing `spawn` context with barrier/join timeouts, and
+  `EmbeddedQueueWorker.stop()` joins the SQLite poll thread so pytest does not
+  fork while that mutex is held. Probe `record()` assertions are unchanged.
+
 ### Added
 
 - **REL-5a `commit_hop`** — a hop writes the checkpoint, `trajectory_events`,

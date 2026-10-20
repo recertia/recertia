@@ -11,7 +11,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
+from weakref import WeakSet
 
 from contracts.budget import Budget
 from contracts.common import Arm
@@ -124,6 +125,8 @@ def load_async_request(payload: dict[str, Any]) -> AsyncRunRequest:
 
 
 class AsyncRunWorker:
+    _live: ClassVar[WeakSet[AsyncRunWorker]] = WeakSet()
+
     def __init__(
         self,
         *,
@@ -140,14 +143,15 @@ class AsyncRunWorker:
         self._lock = threading.Lock()
         self._futures: dict[tuple[str, str], Future[Any]] = {}
         self._queue: Any = None
+        type(self)._live.add(self)
 
     def attach_queue(self, queue: Any) -> None:
         """Forward cancel onto the durable queue. The pool remains the shim."""
 
         self._queue = queue
 
-    def shutdown(self) -> None:
-        self._pool.shutdown(wait=False, cancel_futures=True)
+    def shutdown(self, wait: bool = False) -> None:
+        self._pool.shutdown(wait=wait, cancel_futures=True)
 
     def request_cancel(self, tenant_id: str, run_id: str) -> None:
         with self._lock:

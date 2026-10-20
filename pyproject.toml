@@ -41,6 +41,7 @@ otel = [
 ]
 dev = [
     "pytest>=8",
+    "pytest-timeout>=2.3.0",
     # Nightly lowest-deps requires a >= floor. 0.17.1 is the version CI lint
     # pins; do not lower this floor to 0.6.
     "ruff>=0.17.1",
@@ -56,6 +57,12 @@ recertia = "recertia.cli.main:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+timeout = 60
+timeout_method = "signal"
+faulthandler_timeout = 60
+filterwarnings = [
+    "error:This process \\(pid=.*\\) is multi-threaded, use of fork\\(\\) may lead to deadlocks in the child.:DeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 110
