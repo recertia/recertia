@@ -9,14 +9,72 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from contracts.eval import BinomialSample, ControlBaseline, EvalObservation
+from contracts.eval import BinomialSample, ControlBaseline, EvalObservation, RunResolution
 from contracts.run import RunState
 from contracts.stats import RetrievalAblationEffect
 from recertia.persistence.db import open_db
 
+_UNRESOLVED_EXITS = frozenset({124, 126})
+_UNRESOLVED_REASONS = {
+    124: "required criterion timed out (exit 124)",
+    126: "required criterion unavailable (exit 126)",
+}
+
 
 class ObservationError(ValueError):
     """A run cannot be represented as durable evaluation evidence."""
+
+
+def _first_required_exit_code(state: RunState) -> int | None:
+    results = {result.criterion_id: result for result in state.results}
+    for criterion in state.criteria:
+        if not criterion.is_required:
+            continue
+        result = results.get(criterion.id)
+        if result is None or result.exit_code is None:
+            continue
+        return int(result.exit_code)
+    return None
+
+
+def classify_run_resolution(state: RunState) -> tuple[RunResolution, int | None, str]:
+    """Derive the recording-only resolution from a locked terminal ``RunState``.
+
+    Validation already stores criterion ``exit_code`` on ``RunState.results``
+    (timeout → 124, ``ExecutionUnavailable`` / sandbox refusal → 126). ``Terminal``
+    has no distinct value for those cases, so this reads the results vector instead
+    of extending the terminal enum.
+
+    ``terminal="error"`` is ``invalid`` and keeps the required criterion exit
+    code. Exit 124 or 126 on a required criterion is ``unresolved``. Everything
+    else is ``decided``. Callers must not feed this into ``arm_counts``, lift,
+    gates, or promotion.
+    """
+
+    if state.terminal == "error":
+        return "invalid", _first_required_exit_code(state), "terminal=error"
+    results = {result.criterion_id: result for result in state.results}
+    for criterion in state.criteria:
+        if not criterion.is_required:
+            continue
+        result = results.get(criterion.id)
+        if result is None or result.exit_code not in _UNRESOLVED_EXITS:
+            continue
+        code = int(result.exit_code)
+        return "unresolved", code, _UNRESOLVED_REASONS[code]
+    return "decided", None, "decided"
+
+
+def reported_resolution(stored: str | None) -> str:
+    """Map a stored resolution column to the reported label.
+
+    Pre-REC-011 rows are NULL and are reported as ``legacy``. They are never
+    coerced to ``decided``.
+    """
+
+    if stored is None:
+        return "legacy"
+    return stored
 
 
 class EvalStore:
@@ -60,7 +118,10 @@ class EvalStore:
                     valid_non_judge_evidence INTEGER NOT NULL DEFAULT 0,
                     evidence_hash TEXT NOT NULL,
                     recorded_at TEXT NOT NULL,
-                    payload TEXT NOT NULL
+                    payload TEXT NOT NULL,
+                    resolution TEXT,
+                    exit_code INTEGER,
+                    reason TEXT
                 );
                 CREATE TABLE IF NOT EXISTS baselines (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,6 +173,9 @@ class EvalStore:
                 "valid_non_judge_evidence": "INTEGER NOT NULL DEFAULT 0",
                 "evidence_hash": "TEXT NOT NULL DEFAULT ''",
                 "tenant_id": "TEXT",
+                "resolution": "TEXT",
+                "exit_code": "INTEGER",
+                "reason": "TEXT",
             }
             for column, definition in migrations.items():
                 if column not in existing:
@@ -160,6 +224,7 @@ class EvalStore:
         )
         is_fixture = bool(state.task.is_eval_fixture or force_eval_fixture)
         fixture_id = state.task.task_id if is_fixture else None
+        resolution, resolution_exit_code, resolution_reason = classify_run_resolution(state)
         obs = EvalObservation(
             run_id=state.run_id,
             task_class=state.task.task_class,
@@ -186,6 +251,9 @@ class EvalStore:
             ),
             valid_non_judge_evidence=valid_non_judge_evidence,
             evidence_hash=evidence_hash,
+            resolution=resolution,
+            exit_code=resolution_exit_code,
+            reason=resolution_reason,
         )
         self._append_observation(obs, tenant_id=tenant_id)
         return obs
@@ -206,9 +274,10 @@ class EvalStore:
                     first_attempt_success, predicted_success, terminal, fixture_id,
                     is_eval_fixture, strategy, attempt_no, cost_usd, abstention_confirmed,
                     skill_id, skill_version, suppressed_skill_id, suppressed_skill_version,
-                    valid_non_judge_evidence, evidence_hash, recorded_at, payload, tenant_id
+                    valid_non_judge_evidence, evidence_hash, recorded_at, payload, tenant_id,
+                    resolution, exit_code, reason
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 (
@@ -235,6 +304,9 @@ class EvalStore:
                     obs.recorded_at.isoformat(),
                     obs.model_dump_json(),
                     tenant_id,
+                    obs.resolution,
+                    obs.exit_code,
+                    obs.reason,
                 ),
             )
             except sqlite3.IntegrityError as exc:

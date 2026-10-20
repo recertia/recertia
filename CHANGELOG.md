@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **REC-011 C1 part 1 run resolution** — `EvalStore.append_run` records
+  `resolution` (`decided` | `unresolved` | `invalid`), `exit_code`, and
+  `reason`. Exit 124/126 on a required criterion is unresolved;
+  `terminal=error` is invalid and keeps the criterion `exit_code`; otherwise
+  decided. Pre-existing rows stay SQL `NULL` and report as `legacy`. Recording
+  only: `arm_counts`, lift, gates, and promotion do not read the field. The
+  Eq. 5 envelope is a later commit (T4 base: field exists, no envelope).
+
 - **REL-5a `commit_hop`** — a hop writes the checkpoint, `trajectory_events`,
   `route_entries`, and generic `outbox` rows in one fenced SQLite transaction.
   `checkpoint.before_commit:kill` cannot leave a taped event without its
