@@ -294,7 +294,8 @@ def test_every_by_trailer_is_scanned_case_insensitively(repo: Repo, key: str) ->
     after = repo.commit(trailers=(f"{key}: placeholder <{BAD}>",))
     result = _push(repo, before, after)
     assert result.returncode == 1, result
-    assert f"{key}={BAD}" in result.stderr
+    assert f"{key}=non-allowlisted" in result.stderr
+    assert BAD not in result.stderr
 
 
 def test_good_by_trailers_pass(repo: Repo) -> None:
@@ -312,7 +313,8 @@ def test_signed_off_by_without_email_fails(repo: Repo) -> None:
     after = repo.commit(trailers=("Signed-off-by: placeholder",))
     result = _push(repo, before, after)
     assert result.returncode == 1, result
-    assert "Signed-off-by=placeholder" in result.stderr
+    assert f"FAIL {after}: Signed-off-by=non-allowlisted" in result.stderr
+    assert "placeholder" not in result.stderr + result.stdout
 
 
 def test_empty_author_email_fails(repo: Repo) -> None:
@@ -386,3 +388,85 @@ def test_pull_request_range_ignores_push_inputs(repo: Repo) -> None:
 def test_missing_inputs_exit_2(repo: Repo) -> None:
     repo.commit()
     assert repo.check().returncode == 2
+
+
+# --- REC-024: output is redacted ---------------------------------------------
+
+LEAK_LOCAL = "zz-local"
+LEAK_DOMAIN = "leak-domain.invalid"
+LEAK = LEAK_LOCAL + "@" + LEAK_DOMAIN
+LEAK_NAME = "Zz Leakname"
+
+
+def _assert_redacted(result: subprocess.CompletedProcess[str]) -> None:
+    out = result.stdout + result.stderr
+    for fragment in (LEAK, LEAK_LOCAL, LEAK_DOMAIN, "leak-domain", "zz-local", LEAK_NAME, "Leakname"):
+        assert fragment not in out, (fragment, out)
+    assert "@" not in out, out
+
+
+def _leaky_commit(repo: Repo, role: str) -> str:
+    """One commit whose ``role`` carries the non-allowlisted address and name."""
+    repo.n += 1
+    (repo.path / f"f{repo.n}.txt").write_text(str(repo.n))
+    repo.git("add", ".")
+    names = {"author": "placeholder", "committer": "placeholder"}
+    emails = {"author": GOOD, "committer": GOOD}
+    msg = f"change {repo.n}"
+    if role in names:
+        names[role], emails[role] = LEAK_NAME, LEAK
+    else:
+        msg += f"\n\n{role}: {LEAK_NAME} <{LEAK}>"
+    env = _env(
+        repo.tmp,
+        GIT_AUTHOR_NAME=names["author"],
+        GIT_AUTHOR_EMAIL=emails["author"],
+        GIT_COMMITTER_NAME=names["committer"],
+        GIT_COMMITTER_EMAIL=emails["committer"],
+    )
+    subprocess.check_call(["git", "commit", "-q", "-m", msg], cwd=repo.path, env=env)
+    return repo.git("rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("role", ["author", "committer", "Co-authored-by", "Signed-off-by", "reviewed-BY"])
+@pytest.mark.parametrize("path", ["push", "pull_request"])
+def test_non_allowlisted_value_is_redacted(repo: Repo, role: str, path: str) -> None:
+    before = repo.commit()
+    leaky = _leaky_commit(repo, role)
+    if path == "push":
+        result = _push(repo, before, leaky)
+    else:
+        result = repo.check(BASE=before, HEAD=leaky)
+    assert result.returncode == 1, result
+    assert f"FAIL {leaky}: {role}=non-allowlisted" in result.stderr
+    _assert_redacted(result)
+
+
+def test_trailer_name_without_address_is_redacted(repo: Repo) -> None:
+    before = repo.commit()
+    after = repo.commit(trailers=(f"Signed-off-by: {LEAK_NAME}",))
+    result = _push(repo, before, after)
+    assert result.returncode == 1, result
+    assert f"FAIL {after}: Signed-off-by=non-allowlisted" in result.stderr
+    _assert_redacted(result)
+
+
+def test_empty_email_keeps_empty_marker(repo: Repo) -> None:
+    before = repo.commit()
+    after = repo.commit(trailers=(f"Signed-off-by: {LEAK_NAME} <>",))
+    result = _push(repo, before, after)
+    assert result.returncode == 1, result
+    assert f"FAIL {after}: Signed-off-by=<empty>" in result.stderr
+    _assert_redacted(result)
+
+
+def test_git_error_output_is_suppressed(repo: Repo) -> None:
+    # A bad revision makes git fail; its stderr (which echoes the argument)
+    # must not reach the log, and the exit code stays 1 as for a crash.
+    repo.commit()
+    head = repo.git("rev-parse", "HEAD")
+    result = repo.check(BASE=LEAK, HEAD=head)
+    assert result.returncode == 1, result
+    assert "FAIL git rev-list exited" in result.stderr
+    assert "Traceback" not in result.stderr
+    _assert_redacted(result)
