@@ -1,12 +1,15 @@
 """REC-022: the held-out runner fails closed, in spec order, and never prints ids or contents.
 
-The WO-06 tree verifier (``verify_heldout_tree(manifest_path, root)``) is not on main yet.
-These tests install a minimal test double under ``heldout.LOADER_MODULE``. It is a double,
-not an implementation for production use.
+The WO-06 tree verifier is not on main yet. Interface (confirmed by Build Bot-rec):
+``verify_heldout_tree(manifest_path: Path, root: Path) -> HeldoutManifest``, raising
+``HeldoutManifestError`` (hash/count-only messages) on any refusal or mismatch. These tests install
+a minimal test double with that signature and exception under ``heldout.LOADER_MODULE``. It is a
+double, not an implementation for production use.
 """
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -14,6 +17,7 @@ import subprocess
 import sys
 import types
 import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -31,7 +35,7 @@ _KEYS = {
     "hash_rule",
     "root_sha256",
     "ciphertext_sha256",
-    "created_at_pt",
+    "created_at",
 }
 
 
@@ -50,12 +54,17 @@ def _double_root(root: Path) -> str:
     return _sha(b"".join(line for _, line in sorted(lines)))
 
 
-class HashMismatch(ValueError):
-    pass
+class HeldoutManifestError(Exception):
+    """Double of WO-06's error: one type for every refusal or mismatch."""
 
 
-class CountMismatch(ValueError):
-    pass
+@dataclass(frozen=True)
+class HeldoutManifest:
+    """Double of WO-06's return value."""
+
+    split_id: str
+    count: int
+    root_sha256: str
 
 
 @pytest.fixture
@@ -65,18 +74,25 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     order: list[str] = []
     mod = types.ModuleType(heldout.LOADER_MODULE)
 
-    def verify_heldout_tree(manifest_path: Path, root: Path) -> None:
+    def verify_heldout_tree(manifest_path: Path, root: Path) -> HeldoutManifest:
         order.append("root")
         doc = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
         if set(doc) != _KEYS:
-            raise ValueError("unknown or missing keys")
-        if _double_root(Path(root)) != doc["root_sha256"]:
-            raise HashMismatch("root")
+            raise HeldoutManifestError(f"manifest invalid keys={len(doc)}")
+        try:
+            got = _double_root(Path(root))
+        except ValueError:
+            raise HeldoutManifestError("hash mismatch stage=root special_files=1") from None
+        if got != doc["root_sha256"]:
+            raise HeldoutManifestError(f"hash mismatch stage=root expected={doc['root_sha256']} got={got}")
         tasks = [p for p in Path(root).glob("*/*") if (p / "task.json").is_file()]
         if len(tasks) != doc["count"]:
-            raise CountMismatch("count")
+            raise HeldoutManifestError(f"count mismatch expected={doc['count']} got={len(tasks)}")
+        return HeldoutManifest(doc["split_id"], doc["count"], doc["root_sha256"])
 
     mod.verify_heldout_tree = verify_heldout_tree  # type: ignore[attr-defined]
+    mod.HeldoutManifestError = HeldoutManifestError  # type: ignore[attr-defined]
+    mod.HeldoutManifest = HeldoutManifest  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, heldout.LOADER_MODULE, mod)
     real_ct = heldout.verify_ciphertext
     real_read = heldout.read_public_manifest
@@ -111,7 +127,7 @@ def _build(tmp_path: Path, **override: object) -> tuple[Path, Path, Path]:
         "hash_rule": heldout.HASH_RULE,
         "root_sha256": _double_root(split),
         "ciphertext_sha256": _sha(ciphertext.read_bytes()),
-        "created_at_pt": "2026-10-20T14:00:00-07:00",
+        "created_at": "2026-10-20T14:00:00-07:00",
     }
     doc.update(override)
     manifest = tmp_path / "heldout-test-v1.manifest.json"
@@ -224,6 +240,139 @@ def test_loader_missing_fails_closed(tmp_path: Path, capsys, monkeypatch) -> Non
     monkeypatch.setitem(sys.modules, heldout.LOADER_MODULE, None)  # import raises ImportError
     manifest, ct, split = _build(tmp_path)
     _expect_fail(tmp_path, capsys, manifest, ct, split, [], "loader_unavailable", 2, [])
+
+
+def test_loader_without_the_error_type_fails_closed(tmp_path: Path, capsys, monkeypatch) -> None:
+    mod = types.ModuleType(heldout.LOADER_MODULE)
+    mod.verify_heldout_tree = lambda manifest_path, root: None  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, heldout.LOADER_MODULE, mod)  # no HeldoutManifestError
+    manifest, ct, split = _build(tmp_path)
+    _expect_fail(tmp_path, capsys, manifest, ct, split, [], "loader_unavailable", 2, [])
+
+
+def test_heldout_manifest_error_logs_its_hash_message(tmp_path: Path, capsys, calls) -> None:
+    manifest, ct, split = _build(tmp_path)
+    expected = json.loads(manifest.read_text())["root_sha256"]
+    (split / "repo-chore" / FIXTURE_IDS[0] / "task.json").write_text("tampered")
+    spy = _Spy(calls)
+    assert _run(tmp_path, manifest, ct, split, spy) == heldout.EXIT_VERIFY_FAILED
+    out = capsys.readouterr()
+    _assert_no_leak(out.out + out.err)
+    assert f"FAIL hash mismatch stage=root expected={expected} got=" in out.out
+    assert "execute" not in calls and "container_preflight" not in calls
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "hash mismatch at repo-chore/zz-secret-fixture-alpha/task.json",
+        "unexpected file zz-secret-fixture-bravo",
+        "Hash Mismatch: root",
+        "hash mismatch stage=root editorconfig",
+        "count mismatch skill=add-gitignore-entry",
+        "x" * 400,
+        "",
+    ],
+    ids=["path", "id", "free-text", "bare-word", "id-value", "too-long", "empty"],
+)
+def test_heldout_manifest_error_with_names_logs_a_fixed_phrase(
+    tmp_path: Path, capsys, monkeypatch, calls, message: str
+) -> None:
+    mod = sys.modules[heldout.LOADER_MODULE]
+
+    def refuse(manifest_path: Path, root: Path) -> HeldoutManifest:
+        raise HeldoutManifestError(message)
+
+    monkeypatch.setattr(mod, "verify_heldout_tree", refuse)
+    manifest, ct, split = _build(tmp_path)
+    spy = _Spy([])
+    assert _run(tmp_path, manifest, ct, split, spy) == heldout.EXIT_VERIFY_FAILED
+    out = capsys.readouterr()
+    _assert_no_leak(out.out + out.err)
+    assert "heldout: FAIL hash mismatch stage=root executed=0" in out.out
+    assert not message or message not in out.out + out.err
+
+
+@pytest.mark.parametrize("result", ["raise", None, False], ids=["other-exception", "none", "false"])
+def test_verifier_outside_the_contract_fails_closed(
+    tmp_path: Path, capsys, monkeypatch, calls, result: object
+) -> None:
+    mod = sys.modules[heldout.LOADER_MODULE]
+
+    def odd(manifest_path: Path, root: Path) -> object:
+        if result == "raise":
+            raise RuntimeError("zz-secret-fixture-alpha")
+        return result
+
+    monkeypatch.setattr(mod, "verify_heldout_tree", odd)
+    manifest, ct, split = _build(tmp_path)
+    _expect_fail(tmp_path, capsys, manifest, ct, split, [], "verifier_error", 2, [])
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"created_at": "2026-10-20T14:00:00"},
+        {"created_at": "2026-10-20 14:00"},
+        {"created_at": 1760994000},
+        {"created_at": "2026-13-40T14:00:00-07:00"},
+    ],
+    ids=["no-offset", "not-rfc3339", "not-a-string", "invalid-date"],
+)
+def test_created_at_must_be_rfc3339_with_offset(tmp_path: Path, capsys, calls, override: dict) -> None:
+    manifest, ct, split = _build(tmp_path, **override)
+    _expect_fail(tmp_path, capsys, manifest, ct, split, calls, "manifest invalid", 2, ["load"])
+
+
+def test_legacy_pt_timestamp_key_is_refused(tmp_path: Path, capsys, calls) -> None:
+    manifest, ct, split = _build(tmp_path)
+    doc = json.loads(manifest.read_text())
+    doc["created_at_" + "pt"] = doc.pop("created_at")
+    manifest.write_text(json.dumps(doc))
+    _expect_fail(tmp_path, capsys, manifest, ct, split, calls, "manifest invalid", 2, ["load"])
+
+
+def test_created_at_accepts_z_and_numeric_offsets(tmp_path: Path, capsys, calls) -> None:
+    for i, stamp in enumerate(("2026-10-20T21:00:00Z", "2026-10-20T14:00:00.5-07:00")):
+        manifest, ct, split = _build(tmp_path / str(i), created_at=stamp)
+        spy = _Spy(calls)
+        assert _run(tmp_path / str(i), manifest, ct, split, spy, verify_only=True) == heldout.EXIT_OK
+
+
+def test_only_verify_heldout_tree_is_used_from_wo06() -> None:
+    """CTO-rec: #102 calls ONLY verify_heldout_tree; no separate load or root-hash call."""
+
+    forbidden = ("load_heldout" + "_manifest", "compute_root" + "_sha256")
+    src = REPO / "src/recertia/evals/heldout.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    froms = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == heldout.LOADER_MODULE]
+    assert len(froms) == 1
+    assert sorted(a.name for a in froms[0].names) == ["HeldoutManifestError", "verify_heldout_tree"]
+    assert all(a.asname is None for a in froms[0].names)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert all(not a.name.startswith(heldout.LOADER_MODULE) for a in node.names)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            assert node.func.attr not in ("import_module", "__import__"), "no dynamic loader import"
+        if isinstance(node, ast.Name | ast.Attribute):
+            name = node.id if isinstance(node, ast.Name) else node.attr
+            assert name not in forbidden, name
+    calls_to_loader = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "verify_heldout_tree"
+    ]
+    assert len(calls_to_loader) == 1
+    for rel in (
+        "src/recertia/evals/heldout.py",
+        ".github/workflows/heldout-operator.yml",
+        "requirements/heldout-eval.txt",
+        "tests/unit/evals/test_heldout.py",
+    ):
+        text = (REPO / rel).read_text(encoding="utf-8")
+        for name in forbidden:
+            assert name not in text, (rel, name)
+        assert "created_at_" + "pt" not in text, rel
 
 
 def test_unknown_manifest_key_fails_closed(tmp_path: Path, capsys, calls) -> None:
