@@ -1,6 +1,6 @@
 """REC-022: the held-out runner fails closed, in spec order, and never prints ids or contents.
 
-The WO-06 loader (``load_heldout_manifest`` / ``compute_root_sha256``) is not on main yet.
+The WO-06 tree verifier (``verify_heldout_tree(manifest_path, root)``) is not on main yet.
 These tests install a minimal test double under ``heldout.LOADER_MODULE``. It is a double,
 not an implementation for production use.
 """
@@ -25,7 +25,13 @@ FIXTURE_IDS = ("zz-secret-fixture-alpha", "zz-secret-fixture-bravo")
 CONTENT_MARK = "zz-private-content-marker"
 CLEAN_ENV = {"RECERTIA_EXECUTION_BACKEND": "container", "RECERTIA_GOLDEN_BACKEND": "container"}
 _KEYS = {
-    "schema_version", "split_id", "count", "hash_rule", "root_sha256", "ciphertext_sha256", "created_at_pt",
+    "schema_version",
+    "split_id",
+    "count",
+    "hash_rule",
+    "root_sha256",
+    "ciphertext_sha256",
+    "created_at_pt",
 }
 
 
@@ -44,34 +50,47 @@ def _double_root(root: Path) -> str:
     return _sha(b"".join(line for _, line in sorted(lines)))
 
 
+class HashMismatch(ValueError):
+    pass
+
+
+class CountMismatch(ValueError):
+    pass
+
+
 @pytest.fixture
 def calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Install the loader test double and record call order."""
+    """Install the WO-06 test double and record call order."""
 
     order: list[str] = []
     mod = types.ModuleType(heldout.LOADER_MODULE)
 
-    def load_heldout_manifest(path: Path) -> dict:
-        order.append("load")
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
-        if set(doc) != _KEYS or doc["schema_version"] != 1:
-            raise ValueError("unknown or missing keys")
-        return doc
-
-    def compute_root_sha256(root: Path) -> str:
+    def verify_heldout_tree(manifest_path: Path, root: Path) -> None:
         order.append("root")
-        return _double_root(Path(root))
+        doc = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        if set(doc) != _KEYS:
+            raise ValueError("unknown or missing keys")
+        if _double_root(Path(root)) != doc["root_sha256"]:
+            raise HashMismatch("root")
+        tasks = [p for p in Path(root).glob("*/*") if (p / "task.json").is_file()]
+        if len(tasks) != doc["count"]:
+            raise CountMismatch("count")
 
-    mod.load_heldout_manifest = load_heldout_manifest  # type: ignore[attr-defined]
-    mod.compute_root_sha256 = compute_root_sha256  # type: ignore[attr-defined]
+    mod.verify_heldout_tree = verify_heldout_tree  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, heldout.LOADER_MODULE, mod)
     real_ct = heldout.verify_ciphertext
+    real_read = heldout.read_public_manifest
 
     def ct(manifest, path):  # noqa: ANN001
         order.append("ciphertext")
         return real_ct(manifest, path)
 
+    def read(path):  # noqa: ANN001
+        order.append("load")
+        return real_read(path)
+
     monkeypatch.setattr(heldout, "verify_ciphertext", ct)
+    monkeypatch.setattr(heldout, "read_public_manifest", read)
     return order
 
 
@@ -221,7 +240,14 @@ def test_ciphertext_mismatch_stops_before_root(tmp_path: Path, capsys, calls) ->
     manifest, ct, split = _build(tmp_path)
     ct.write_bytes(b"tampered")
     _expect_fail(
-        tmp_path, capsys, manifest, ct, split, calls, "hash mismatch stage=ciphertext", 2,
+        tmp_path,
+        capsys,
+        manifest,
+        ct,
+        split,
+        calls,
+        "hash mismatch stage=ciphertext",
+        2,
         ["load", "ciphertext"],
     )
 
@@ -230,7 +256,14 @@ def test_missing_ciphertext_fails_closed(tmp_path: Path, capsys, calls) -> None:
     manifest, ct, split = _build(tmp_path)
     ct.unlink()
     _expect_fail(
-        tmp_path, capsys, manifest, ct, split, calls, "hash mismatch stage=ciphertext", 2,
+        tmp_path,
+        capsys,
+        manifest,
+        ct,
+        split,
+        calls,
+        "hash mismatch stage=ciphertext",
+        2,
         ["load", "ciphertext"],
     )
 
@@ -239,7 +272,14 @@ def test_tampered_file_root_mismatch(tmp_path: Path, capsys, calls) -> None:
     manifest, ct, split = _build(tmp_path)
     (split / "repo-chore" / FIXTURE_IDS[1] / "task.json").write_text("tampered")
     _expect_fail(
-        tmp_path, capsys, manifest, ct, split, calls, "hash mismatch stage=root", 2,
+        tmp_path,
+        capsys,
+        manifest,
+        ct,
+        split,
+        calls,
+        "hash mismatch stage=root",
+        2,
         ["load", "ciphertext", "root"],
     )
 
@@ -249,7 +289,14 @@ def test_missing_and_extra_files_root_mismatch(tmp_path: Path, capsys, calls) ->
     (split / "repo-chore" / FIXTURE_IDS[0] / "expect.json").unlink()
     (split / "extra.txt").write_text("x")
     _expect_fail(
-        tmp_path, capsys, manifest, ct, split, calls, "hash mismatch stage=root", 2,
+        tmp_path,
+        capsys,
+        manifest,
+        ct,
+        split,
+        calls,
+        "hash mismatch stage=root",
+        2,
         ["load", "ciphertext", "root"],
     )
 
@@ -265,7 +312,14 @@ def test_symlink_in_split_fails_closed(tmp_path: Path, capsys, calls) -> None:
 def test_count_mismatch_logs_counts_only(tmp_path: Path, capsys, calls) -> None:
     manifest, ct, split = _build(tmp_path, count=3)
     _expect_fail(
-        tmp_path, capsys, manifest, ct, split, calls, "count mismatch expected=3 got=2", 2,
+        tmp_path,
+        capsys,
+        manifest,
+        ct,
+        split,
+        calls,
+        "count mismatch expected=3 got=2",
+        2,
         ["load", "ciphertext", "root"],
     )
 
@@ -279,6 +333,80 @@ def test_split_root_inside_public_evals_is_refused(tmp_path: Path, capsys, monke
     assert _run(tmp_path, manifest, ct, inside, spy) == heldout.EXIT_REFUSED
     assert calls == []
     assert "reason=split_root_in_repo" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("where", ["github_workspace", "repo_root", "cwd"])
+def test_split_root_inside_checkout_is_refused(
+    tmp_path: Path, capsys, monkeypatch, calls, where: str
+) -> None:
+    """CTO-rec M2 / P6: a split root anywhere in the checkout is refused before any read."""
+
+    manifest, ct, split = _build(tmp_path)
+    env = dict(CLEAN_ENV)
+    if where == "github_workspace":
+        env["GITHUB_WORKSPACE"] = str(tmp_path)
+    elif where == "repo_root":
+        monkeypatch.setattr(heldout, "_REPO_ROOT", tmp_path)
+    else:
+        monkeypatch.chdir(tmp_path)
+    assert _run(tmp_path, manifest, ct, split, _Spy(calls), env=env) == heldout.EXIT_REFUSED
+    assert calls == []
+    out = capsys.readouterr()
+    _assert_no_leak(out.out + out.err)
+    assert "reason=path_in_checkout executed=0" in out.out
+
+
+def test_staging_and_audit_store_inside_checkout_are_refused(
+    tmp_path: Path, capsys, monkeypatch, calls
+) -> None:
+    manifest, ct, split = _build(tmp_path)
+    ws = tmp_path / "ws"
+    (ws / "tmp").mkdir(parents=True)
+    env = {**CLEAN_ENV, "GITHUB_WORKSPACE": str(ws)}
+    monkeypatch.setattr(heldout.tempfile, "tempdir", str(ws / "tmp"))  # TMPDIR inside the checkout
+    assert _run(tmp_path, manifest, ct, split, _Spy(calls), env=env) == heldout.EXIT_REFUSED
+    assert "reason=path_in_checkout" in capsys.readouterr().out
+    monkeypatch.setattr(heldout.tempfile, "tempdir", str(tmp_path / "rt"))
+    reason = heldout.location_refusal(env, split_root=split, audit_store=ws / "audit")
+    assert reason == "path_in_checkout" and calls == []
+
+
+def test_staging_outside_runner_temp_is_refused(tmp_path: Path, capsys, monkeypatch, calls) -> None:
+    """Under ``env -i`` TMPDIR fell back to /tmp (P1t). With RUNNER_TEMP set, staging must be in it."""
+
+    manifest, ct, split = _build(tmp_path)  # split is tmp_path/ho
+    elsewhere = tmp_path.parent / f"{tmp_path.name}-elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.setattr(heldout.tempfile, "tempdir", str(elsewhere))
+    env = {**CLEAN_ENV, "RUNNER_TEMP": str(tmp_path)}
+    assert _run(tmp_path, manifest, ct, split, _Spy(calls), env=env) == heldout.EXIT_REFUSED
+    assert "reason=path_outside_runner_temp executed=0" in capsys.readouterr().out
+    rt_tmp = tmp_path / "tmp"
+    rt_tmp.mkdir()
+    monkeypatch.setattr(heldout.tempfile, "tempdir", str(rt_tmp))
+    assert heldout.location_refusal(env, split_root=split, audit_store=tmp_path / "audit") is None
+    assert calls == []
+
+
+def test_staged_copy_lives_under_tmpdir_and_is_removed(
+    tmp_path: Path, capsys, monkeypatch, calls, fake_docker
+) -> None:
+    rt_tmp = tmp_path / "tmp"
+    rt_tmp.mkdir()
+    monkeypatch.setattr(heldout.tempfile, "tempdir", str(rt_tmp))
+    seen: list[Path] = []
+
+    class Where(_Spy):
+        def __call__(self, fixture: Path, task_class: str, run_dir: Path) -> bool:
+            seen.append(fixture)
+            return super().__call__(fixture, task_class, run_dir)
+
+    manifest, ct, split = _build(tmp_path)
+    env = {**CLEAN_ENV, "RUNNER_TEMP": str(tmp_path)}
+    assert _run(tmp_path, manifest, ct, split, Where(calls), env=env) == heldout.EXIT_OK
+    assert seen and all(p.resolve().is_relative_to(rt_tmp.resolve()) for p in seen)
+    assert list(rt_tmp.iterdir()) == []  # finally: the staged copy is gone
+    capsys.readouterr()
 
 
 # ------------------------------------------------------------------ preflight refusals
@@ -494,7 +622,7 @@ def test_plan_node_lazy_import_is_guarded(tmp_path: Path, capsys, calls, fake_do
     class PlanPath(_Spy):
         def __call__(self, fixture: Path, task_class: str, run_dir: Path) -> bool:
             super().__call__(fixture, task_class, run_dir)
-            state["guard_on_at_import"] = ModelClient.__init__.__name__ == "_refuse"
+            state["guard_on_at_import"] = ModelClient.__init__.__name__ == "_refuse_init"
             import recertia.nodes.guide_stitch as gs  # the plan.py:108 lazy import, under the guard
 
             monkeypatch.setattr(gs, "stitch_guide", lambda skills: StubModelClient(responses=["x"]))
@@ -509,6 +637,68 @@ def test_plan_node_lazy_import_is_guarded(tmp_path: Path, capsys, calls, fake_do
     assert _run(tmp_path, manifest, ct, split, PlanPath(calls)) == 1
     assert state["guard_on_at_import"] is True
     assert "reason=model_client_constructed" in capsys.readouterr().out
+
+
+def test_subclass_skipping_super_init_is_still_refused(tmp_path: Path, capsys, calls, fake_docker) -> None:
+    """CTO-rec N3 / P8-nosuper: ``__new__`` is guarded, not only ``ModelClient.__init__``."""
+
+    from recertia.solver.model import ModelClient, StubModelClient
+
+    class NoSuper(StubModelClient):
+        def __init__(self) -> None:  # deliberately skips super().__init__
+            self.x = 1
+
+    manifest, ct, split = _build(tmp_path)
+
+    class Builds(_Spy):
+        def __call__(self, fixture: Path, task_class: str, run_dir: Path) -> bool:
+            super().__call__(fixture, task_class, run_dir)
+
+            class LateNoSuper(ModelClient):  # defined during the run
+                def __init__(self) -> None:
+                    self.y = 2
+
+                def _complete_once(self, prompt, *, system):  # noqa: ANN001, ANN201
+                    raise NotImplementedError
+
+            for make in (NoSuper, LateNoSuper):
+                try:
+                    make()
+                except heldout.ModelClientForbidden:
+                    pass
+            state.append(LateNoSuper)
+            return True
+
+    state: list[type] = []
+    original = ModelClient.__init__
+    assert _run(tmp_path, manifest, ct, split, Builds(calls)) == 1
+    assert "reason=model_client_constructed count=4" in capsys.readouterr().out
+    assert ModelClient.__init__ is original and "__init_subclass__" not in ModelClient.__dict__
+    assert NoSuper().x == 1 and StubModelClient(responses=["x"]) is not None
+
+
+@pytest.mark.parametrize("module", ["recertia.solver.providers", "anthropic", "openai.types"])
+def test_provider_module_import_is_refused(tmp_path: Path, capsys, calls, fake_docker, module: str) -> None:
+    """The guard is in place at provider-module import: importing one during a run exits 1."""
+
+    import importlib
+
+    before = "recertia.solver.providers" in sys.modules
+    manifest, ct, split = _build(tmp_path)
+
+    class Imports(_Spy):
+        def __call__(self, fixture: Path, task_class: str, run_dir: Path) -> bool:
+            super().__call__(fixture, task_class, run_dir)
+            try:
+                importlib.import_module(module)
+            except Exception:  # noqa: BLE001 - swallowed, still fails the run
+                pass
+            return True
+
+    assert _run(tmp_path, manifest, ct, split, Imports(calls)) == 1
+    assert "reason=model_client_constructed count=2" in capsys.readouterr().out
+    assert ("recertia.solver.providers" in sys.modules) is before  # hidden modules restored
+    importlib.import_module("recertia.solver.providers")  # importable again after the run
 
 
 # ------------------------------------------------------------------ output and scan
@@ -549,6 +739,45 @@ def test_log_scan_fails_on_fixture_ids(tmp_path: Path, capsys, leak: str) -> Non
         assert needle not in out.out + out.err
 
 
+def test_deny_list_has_skill_ids_request_prefixes_and_split_root(tmp_path: Path) -> None:
+    """CTO-rec N2 / proposal §4 item 11, for both the in-run guard and ``scan``."""
+
+    _m, _c, split = _build(tmp_path)
+    task = split / "repo-chore" / FIXTURE_IDS[0] / "task.json"
+    task.write_text(
+        json.dumps(
+            {
+                "request": "zz-request-text that runs on past forty characters",
+                "expected_skill_id": "zz-skill-x",
+            }
+        )
+    )
+    terms = heldout.deny_terms(split, [str(split)])
+    assert "zz-skill-x" in terms and str(split) in terms
+    assert "zz-request-text that runs on past forty" in terms  # first 40 chars
+    for leak in ("zz-skill-x", "zz-request-text that runs on past forty", f"path {split}/x"):
+        console = tmp_path / "c.txt"
+        console.write_text(f"heldout: PASS\n{leak}\n")
+        assert heldout.main(["scan", "--split-root", str(split), "--log", str(console)]) == heldout.EXIT_LEAK
+
+
+def test_scan_drops_terms_that_are_already_public(tmp_path: Path, capsys) -> None:
+    """The published log echoes step env (paths) and the workflow; those are not leaks."""
+
+    _m, _c, split = _build(tmp_path)
+    log = tmp_path / "published.log"
+    log.write_text(f"2026-10-20T00:00:00Z   SPLIT_ROOT: {split}\nheldout: PASS passed=2 failed=0\n")
+    public = tmp_path / "public.txt"
+    public.write_text(f"{split}\n")
+    args = ["scan", "--split-root", str(split), "--log", str(log)]
+    assert heldout.main(args) == heldout.EXIT_LEAK
+    assert heldout.main([*args, "--public-text", str(public)]) == heldout.EXIT_OK
+    log.write_text(log.read_text() + f"oops {FIXTURE_IDS[0]}\n")
+    assert heldout.main([*args, "--public-text", str(public)]) == heldout.EXIT_LEAK
+    out = capsys.readouterr().out
+    assert FIXTURE_IDS[0] not in out and str(split) not in out
+
+
 def test_log_scan_passes_clean_console(tmp_path: Path, capsys, calls) -> None:
     manifest, ct, split = _build(tmp_path)
     assert _run(tmp_path, manifest, ct, split, _Spy(calls), verify_only=True) == heldout.EXIT_OK
@@ -581,13 +810,25 @@ def test_workflow_is_dispatch_only_pinned_container_and_secretless() -> None:
     assert re.findall(r"^  ([a-z_]+):", on_block, flags=re.MULTILINE) == ["workflow_dispatch"]
     assert "type: choice" in on_block and "type: string" not in on_block
     assert "\npermissions: {}\n" in code
-    assert re.findall(r"runs-on:\s*(\S+)", code) == ["ubuntu-24.04"]
+    assert re.findall(r"runs-on:\s*(\S+)", code) == ["ubuntu-24.04", "ubuntu-24.04"]
     uses = re.findall(r"uses:\s*(\S+)", code)
     assert uses and all(re.fullmatch(r"actions/(checkout|setup-python)@[0-9a-f]{40}", u) for u in uses), uses
     for banned in (
-        "environment:", "secrets.", "upload-artifact", "actions/cache", "cache:", "GITHUB_STEP_SUMMARY",
-        "pull_request", "workflow_run", "issue_comment", "schedule", "push:", "self-hosted", "outputs:",
-        "local", "evals/golden",
+        "environment:",
+        "secrets.",
+        "upload-artifact",
+        "actions/cache",
+        "cache:",
+        "GITHUB_STEP_SUMMARY",
+        "pull_request",
+        "workflow_run",
+        "issue_comment",
+        "schedule",
+        "push:",
+        "self-hosted",
+        "outputs:",
+        "local",
+        "evals/golden",
     ):
         assert banned not in code, banned
     assert re.search(r'python-version: "3\.12\.\d+"', code)
@@ -596,7 +837,9 @@ def test_workflow_is_dispatch_only_pinned_container_and_secretless() -> None:
     names = re.findall(r"- name: (.+)", code)
     assert names[:2] == ["Refuse debug logging", "Refuse non-main ref"], names
     order = [
-        "Pull allowlisted image by digest", "Verify ciphertext sha256", "Decrypt into RUNNER_TEMP",
+        "Pull allowlisted image by digest",
+        "Verify ciphertext sha256",
+        "Decrypt into RUNNER_TEMP",
         "Verify root and count, container preflight, evaluate",
     ]
     idx = [next(i for i, n in enumerate(names) if n.startswith(o)) for o in order]
@@ -613,3 +856,61 @@ def test_workflow_is_dispatch_only_pinned_container_and_secretless() -> None:
     for line in code.splitlines():
         if "${{" in line:
             assert re.fullmatch(r"\s+[A-Z_0-9]+: \$\{\{ [a-z_.A-Z]+ \}\}(/[a-z.]+)*", line), line
+
+
+def _steps(code: str) -> dict[str, str]:
+    """``- name:`` -> step body (comments stripped), evaluate job first, then log-scan."""
+
+    out: dict[str, str] = {}
+    for job, body in re.findall(r"^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:\n|\Z)", code, flags=re.M | re.S):
+        for name, step in re.findall(r"- name: ([^\n]+)\n(.*?)(?=^      - |\Z)", body, flags=re.M | re.S):
+            out[f"{job}/{name}"] = step
+    return out
+
+
+def test_workflow_cto_must_fixes_m2_to_m5_and_log_scan_job() -> None:
+    text = (REPO / ".github/workflows/heldout-operator.yml").read_text(encoding="utf-8")
+    code = "\n".join(line.split("#", 1)[0].rstrip() for line in text.splitlines())
+    steps = _steps(code)
+    evaluate = steps["evaluate/Verify root and count, container preflight, evaluate (offline)"]
+    # M3: no new privileges; supplementary groups replaced by the docker group only.
+    assert "setpriv" in evaluate and "--no-new-privs" in evaluate
+    assert '--groups="$DOCKER_GID"' in evaluate and "getent group docker" in evaluate
+    assert "--init-groups" not in code and "--keep-groups" not in code
+    # M2 / N4: staging under RUNNER_TEMP; the in-module guards see the workspace and debug flag.
+    for passed in (
+        'TMPDIR="$HO_TMP"',
+        'RUNNER_TEMP="$RUNNER_TEMP"',
+        'GITHUB_WORKSPACE="$GITHUB_WORKSPACE"',
+        'RUNNER_DEBUG="${RUNNER_DEBUG:-}"',
+    ):
+        assert passed in evaluate, passed
+    assert "HO_TMP: ${{ runner.temp }}/tmp" in evaluate
+    # M2 / N5: key files never outlive the decrypt step, and the last step always wipes all.
+    for job in ("evaluate", "log-scan"):
+        names = [k for k in steps if k.startswith(job + "/")]
+        wipe = steps[names[-1]]
+        assert names[-1] == f"{job}/Wipe held-out material", names
+        assert "if: always()" in wipe and "*.key" in wipe
+        for d in ('"$RT/ho"', '"$RT/tmp"', '"$RT/keys"', '"$RT/ct"'):
+            assert d in wipe, (job, d)
+        decrypt = next(
+            v for k, v in steps.items() if k.startswith(job + "/") and "ecrypt" in k and "PENDING" in k
+        )
+        assert "trap 'rm -rf \"$KEY_DIR\"' EXIT" in decrypt
+        # M4: a decrypt step that is no longer the fail-closed stub must emit ::add-mask::.
+        stub = "decrypt_not_approved" in decrypt and "exit 1" in decrypt
+        assert stub or "::add-mask::" in decrypt
+    assert "CTO-rec M4" in text and "::add-mask::" in text
+    # M5: no deployment environment yet; the TODO says when it is added.
+    assert not re.search(r"^\s*environment:", code, flags=re.M)
+    assert "`environment: heldout-operator` is added to BOTH jobs in the same" in text
+    # N7: the published-log scan job.
+    log_scan = code.split("\n  log-scan:\n", 1)[1]
+    assert "needs: evaluate" in log_scan and "if: always()" in log_scan.split("steps:", 1)[0]
+    assert "actions: read" in log_scan and "contents: read" in log_scan
+    assert (
+        "actions/jobs/$JOB_ID/logs" in log_scan and "heldout scan" in log_scan and "--public-text" in log_scan
+    )
+    jobs_perms = re.findall(r"^    permissions:\n((?:      .+\n)+)", code + "\n", flags=re.M)
+    assert all("write" not in p for p in jobs_perms) and len(jobs_perms) == 2

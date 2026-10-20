@@ -1,4 +1,4 @@
-# REC-022 held-out eval runtime deps, hash-pinned for .github/workflows/heldout-eval.yml.
+# REC-022 held-out eval runtime deps, hash-pinned for .github/workflows/heldout-operator.yml.
 # Regenerate: uv pip compile <(printf "pydantic>=2.11,<3\ntyper>=0.13\njsonschema>=4.0.1\n") \
 #   --python-version 3.12 --python-platform x86_64-unknown-linux-gnu --generate-hashes \
 #   --exclude-newer 2026-10-20 --no-header -o requirements/heldout-eval.txt

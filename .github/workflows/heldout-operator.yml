@@ -9,19 +9,24 @@ name: heldout-operator
 # Order. Every step fails closed before any eval runs:
 #   guards (debug logging, non-main ref) -> pull the digest-pinned image (network still up)
 #   -> fetch the ciphertext [TODO] -> verify the ciphertext sha256 against the public manifest
-#   -> decrypt into $RUNNER_TEMP [TODO] -> inside `unshare --net`: preflight refusals, recompute
-#   the root sha256 and count (WO-06 loader), run the M1 container preflight with --pull never,
-#   run the golden executor in --network=none containers -> scan the captured console for ids
-#   -> print it.
+#   -> decrypt into $RUNNER_TEMP [TODO; ::add-mask:: right after] -> inside `unshare --net`
+#   (setpriv --no-new-privs, supplementary groups = docker only): preflight refusals, refuse
+#   paths in the checkout, WO-06 verify_heldout_tree on a copy staged in $RUNNER_TEMP/tmp, the
+#   M1 container preflight with --pull never, the golden executor in --network=none containers
+#   -> scan the captured console for ids -> print it -> wipe (if: always()).
+# Then job `log-scan` re-scans the published `evaluate` job log (proposal §4 item 12).
 # Logs show only counts, hashes, and fixed reasons. No artifacts, no caches, no step summary.
 #
 # TODO(REC-022): PENDING Harper-rec's proposal §7 items AND Rob's approval of each exact change.
 # Until then this workflow:
 #   - references NO secret and NO deployment environment (proposal items 8-10),
-#   - has stub steps that exit 1 for fetch, decrypt, and the audit-store sink,
-#   - has NO `log-scan` job (proposal §4.12: needs `actions: read` + decrypted names),
-#   - depends on the WO-06 manifest evals/heldout/heldout-repo-chore-v1.manifest.json and loader
-#     (not on main yet; the runner fails closed with loader_unavailable).
+#   - has stub steps that exit 1 for fetch, decrypt, and the audit-store sink (both jobs),
+#   - depends on the WO-06 manifest evals/heldout/heldout-repo-chore-v1.manifest.json and
+#     verify_heldout_tree (not on main yet; the runner fails closed with loader_unavailable).
+# TODO(REC-022) CTO-rec M5: `environment: heldout-operator` is added to BOTH jobs in the same
+# change that adds the secrets, and only after Rob creates that environment with main-only
+# deployment branches. Referencing it earlier would auto-create it without protection rules.
+# Until then the main-only check below is advisory and the job must stay non-functional.
 # Debug guard: the proposal also checks secrets.ACTIONS_*_DEBUG. This draft checks runner.debug,
 # RUNNER_DEBUG, and the vars.* forms only, so it references no secrets context yet.
 # TODO(REC-022): hash-pin pip and setuptools before the first real run (CTO-rec residual).
@@ -65,6 +70,7 @@ jobs:
       # workdir on a single-tenant, ephemeral hosted runner.
       RECERTIA_WORKDIR_WORLD_WRITE: "1"
       HELDOUT_MANIFEST: evals/heldout/heldout-repo-chore-v1.manifest.json
+    # TODO(REC-022) M5: environment heldout-operator goes here, with the secrets (see header).
     steps:
       - name: Refuse debug logging
         env:
@@ -124,16 +130,33 @@ jobs:
       - name: Decrypt into RUNNER_TEMP (PENDING approval; fails closed)
         env:
           SPLIT_ROOT: ${{ runner.temp }}/ho
+          KEY_DIR: ${{ runner.temp }}/keys
         run: |
-          # TODO(REC-022): proposal §3 item 9 (age identity). Decrypt to $SPLIT_ROOT only,
-          # outside $GITHUB_WORKSPACE. Not approved yet.
+          umask 077
+          # The key file never outlives this step, whatever happens below (CTO-rec M2).
+          trap 'rm -rf "$KEY_DIR"' EXIT
+          # TODO(REC-022): proposal §3 item 9 (age identity). Write the identity to $KEY_DIR only,
+          # decrypt to $SPLIT_ROOT only (outside $GITHUB_WORKSPACE). Not approved yet.
+          # TODO(REC-022) CTO-rec M4 / proposal §4 item 8: RIGHT AFTER decrypting and before any
+          # echo, emit `::add-mask::` (shell variables only, never ${{ }}) for every fixture dir
+          # name, every skill id, the first 40 chars of each request, and $SPLIT_ROOT. A test
+          # fails if this step stops being a stub without an add-mask line.
           echo "heldout: FAIL reason=decrypt_not_approved executed=0"
           exit 1
 
       # No network: a fresh network namespace (loopback only, down) via `sudo unshare --net`,
-      # dropped back to the runner user with setpriv (docker group kept by --init-groups). The
-      # docker CLI reaches the daemon over the filesystem unix socket, which a netns does not
-      # isolate. The runner refuses if any non-loopback interface exists (--require-offline).
+      # dropped back to the runner uid/gid with setpriv (CTO-rec M3):
+      #   --no-new-privs  sudo/setuid can't regain root, so no `sudo nsenter` back to the host
+      #                   netns.
+      #   --groups=$DOCKER_GID  replaces ALL supplementary groups with the docker group only.
+      #                   That is --clear-groups plus the one group the harness needs; setpriv
+      #                   makes --clear-groups and --groups mutually exclusive.
+      # Only the harness holds docker access: every fixture command runs in a --network=none
+      # container (tracked; a non-container run fails), and no fixture code runs on the host.
+      # The docker CLI reaches the daemon over the filesystem unix socket, which a netns does not
+      # isolate. env -i passes only what the runner needs, including TMPDIR (staging stays in
+      # $RUNNER_TEMP) and RUNNER_DEBUG (the in-module debug refusal stays live).
+      # The runner refuses if any non-loopback interface exists (--require-offline).
       # The console goes to a file and is printed only after the id scan passes.
       - name: Verify root and count, container preflight, evaluate (offline)
         env:
@@ -141,12 +164,22 @@ jobs:
           SPLIT_ROOT: ${{ runner.temp }}/ho
           AUDIT_STORE: ${{ runner.temp }}/audit
           CONSOLE: ${{ runner.temp }}/console.txt
+          HO_TMP: ${{ runner.temp }}/tmp
         run: |
           umask 077
+          mkdir -p "$HO_TMP"
           PY="$(command -v python)"
+          DOCKER_GID="$(getent group docker | cut -d: -f3)"
+          if [ -z "$DOCKER_GID" ]; then
+            echo "heldout: FAIL reason=docker_group_missing executed=0"
+            exit 1
+          fi
           set +e
-          sudo unshare --net -- setpriv --reuid="$(id -u)" --regid="$(id -g)" --init-groups \
-            env -i PATH="$PATH" HOME="$HOME" PYTHONPATH=src:. \
+          sudo unshare --net -- setpriv --reuid="$(id -u)" --regid="$(id -g)" \
+            --groups="$DOCKER_GID" --no-new-privs \
+            env -i PATH="$PATH" HOME="$HOME" PYTHONPATH=src:. TMPDIR="$HO_TMP" \
+            RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            RUNNER_DEBUG="${RUNNER_DEBUG:-}" \
             OPENAI_API_KEY= ANTHROPIC_API_KEY= RECERTIA_NO_NETWORK=1 \
             RECERTIA_EXECUTION_BACKEND=container RECERTIA_GOLDEN_BACKEND=container \
             RECERTIA_REQUIRE_IMAGE_DIGEST=1 RECERTIA_CONTAINER_IMAGE="$RECERTIA_CONTAINER_IMAGE" \
@@ -164,17 +197,120 @@ jobs:
           cat "$CONSOLE"
           exit "$rc"
 
-      - name: Persist to audit store and clean up (PENDING approval; fails closed)
+      - name: Persist to audit store (PENDING approval; fails closed)
         if: always()
         env:
-          CT_DIR: ${{ runner.temp }}/ct
-          SPLIT_ROOT: ${{ runner.temp }}/ho
           AUDIT_STORE: ${{ runner.temp }}/audit
-          CONSOLE: ${{ runner.temp }}/console.txt
         run: |
           # TODO(REC-022): proposal §5 / §7 items 5, 7, 10: encrypt the record to Rob and the
           # operator and append it to the private audit repo. Never upload $AUDIT_STORE as an
           # artifact or cache, and never write it to $GITHUB_STEP_SUMMARY.
-          rm -rf "$CT_DIR" "$SPLIT_ROOT" "$AUDIT_STORE" "$CONSOLE"
           echo "heldout: FAIL reason=audit_sink_not_approved"
           exit 1
+
+      # Always last, always runs: no ciphertext, plaintext, staged copy, key file, record or
+      # console survives the job (CTO-rec M2 / N5).
+      - name: Wipe held-out material
+        if: always()
+        env:
+          RT: ${{ runner.temp }}
+        run: |
+          rm -rf "$RT/ct" "$RT/ho" "$RT/tmp" "$RT/keys" "$RT/audit" "$RT/console.txt"
+          find "$RT" -maxdepth 2 -name '*.key' -type f -delete
+          echo "heldout: wiped"
+
+  # Proposal §4 item 12 / CTO-rec N7: re-scan what was actually PUBLISHED. Fetch the finished
+  # `evaluate` job's log with the job token (actions: read) and grep it for every deny term.
+  # A hit fails this job; Rob then deletes that run's logs (only Rob deletes).
+  log-scan:
+    needs: evaluate
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    # TODO(REC-022) M5: environment heldout-operator goes here too, with the secrets.
+    env:
+      HELDOUT_MANIFEST: evals/heldout/heldout-repo-chore-v1.manifest.json
+    steps:
+      - name: Refuse debug logging
+        env:
+          RUNNER_DEBUG_CTX: ${{ runner.debug }}
+          VARS_STEP_DEBUG: ${{ vars.ACTIONS_STEP_DEBUG }}
+          VARS_RUNNER_DEBUG: ${{ vars.ACTIONS_RUNNER_DEBUG }}
+        run: |
+          if [ "${RUNNER_DEBUG:-}" = "1" ] || [ "$RUNNER_DEBUG_CTX" = "1" ] \
+             || [ -n "$VARS_STEP_DEBUG$VARS_RUNNER_DEBUG" ]; then
+            echo "log-scan: FAIL reason=debug_logging_on"
+            exit 1
+          fi
+
+      - name: Refuse non-main ref
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "log-scan: FAIL reason=ref_not_main"
+            exit 1
+          fi
+
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      # actions/setup-python v5.6.0. No dependency cache (the input is left unset).
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12.10"
+
+      - name: Install pinned deps (hash-checked)
+        run: python -m pip install -q --no-deps --require-hashes -r requirements/heldout-eval.txt
+
+      - name: Fetch the published evaluate job log
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISHED: ${{ runner.temp }}/published.log
+        run: |
+          umask 077
+          JOB_ID="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" \
+            --jq '.jobs[] | select(.name == "evaluate") | .id')"
+          if ! [[ "$JOB_ID" =~ ^[0-9]+$ ]]; then
+            echo "log-scan: FAIL reason=job_not_found"
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$JOB_ID/logs" > "$PUBLISHED"
+          echo "log-scan: fetched bytes=$(wc -c < "$PUBLISHED")"
+
+      - name: Fetch and decrypt the split for the deny list (PENDING approval; fails closed)
+        env:
+          SPLIT_ROOT: ${{ runner.temp }}/ho
+          KEY_DIR: ${{ runner.temp }}/keys
+        run: |
+          umask 077
+          trap 'rm -rf "$KEY_DIR"' EXIT
+          # TODO(REC-022): same fetch, ciphertext check and decrypt as `evaluate` (proposal §3
+          # item 9), followed by the same ::add-mask:: lines (M4). Not approved yet.
+          echo "log-scan: FAIL reason=decrypt_not_approved"
+          exit 1
+
+      - name: Scan the published log
+        env:
+          PYTHONPATH: src:.
+          SPLIT_ROOT: ${{ runner.temp }}/ho
+          PUBLISHED: ${{ runner.temp }}/published.log
+        run: |
+          # TODO(REC-022): on a hit, alert Rob to delete this run's logs (proposal §4 item 12).
+          # Public text: this workflow file plus the env values GitHub echoes into the log.
+          PUBLIC="$RUNNER_TEMP/public.txt"
+          { cat .github/workflows/heldout-operator.yml; printf '%s\n' "$RUNNER_TEMP" "$SPLIT_ROOT"; } > "$PUBLIC"
+          python -m recertia.evals.heldout scan --split-root "$SPLIT_ROOT" --log "$PUBLISHED" \
+            --public-text "$PUBLIC"
+
+      - name: Wipe held-out material
+        if: always()
+        env:
+          RT: ${{ runner.temp }}
+        run: |
+          rm -rf "$RT/ct" "$RT/ho" "$RT/tmp" "$RT/keys" "$RT/published.log" "$RT/public.txt"
+          find "$RT" -maxdepth 2 -name '*.key' -type f -delete
+          echo "log-scan: wiped"

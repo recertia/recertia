@@ -6,10 +6,12 @@ The private held-out split never lives in this public repo. It runs only from
 
 Manifest (Harper-rec spec). The public manifest ``evals/heldout/<split_id>.manifest.json`` holds
 only ``schema_version, split_id, count, hash_rule ("sha256-sorted-relpath-v1"), root_sha256,
-ciphertext_sha256, created_at_pt``. Per-file and per-task hashes exist only in the encrypted
-private manifest. This module does NOT parse the manifest or hash the tree. It calls Build
-Bot-rec's WO-06 loader, ``load_heldout_manifest`` and ``compute_root_sha256`` from
-``LOADER_MODULE``. Until that loader merges, the run fails closed with ``loader_unavailable``.
+ciphertext_sha256, created_at_pt``. This module has NO manifest format of its own and does NOT
+hash the tree: the tree check is Build Bot-rec's WO-06 ``verify_heldout_tree(manifest_path,
+root)`` from ``LOADER_MODULE`` (CTO-rec M6). Until WO-06 merges, every run fails closed with
+``loader_unavailable``. The one field read here is ``ciphertext_sha256`` (step 1 runs before
+decrypt, so before the tree check can run); ``read_public_manifest`` refuses any key set other
+than the spec's seven.
 
 Order. Every step fails closed before any eval runs:
 
@@ -19,19 +21,23 @@ Order. Every step fails closed before any eval runs:
 1. Hash the ciphertext and compare it with ``ciphertext_sha256`` (``verify-ciphertext``, then
    again in ``run``).
 2. Decrypt into ``$RUNNER_TEMP``. This is the workflow's TODO step; the key is pending approval.
-3. Stage a copy of the decrypted tree (symlinks and special files are rejected), then
-   recompute ``root_sha256`` with the loader and the task count, and compare both.
+3. Stage a copy of the decrypted tree under ``$TMPDIR`` (``$RUNNER_TEMP/tmp`` in the job;
+   symlinks and special files are rejected), then call WO-06 ``verify_heldout_tree`` on the
+   staged copy, then cross-check the task count. The split root, staging dir and audit store
+   must all lie outside the checkout (cwd, repo root, ``$GITHUB_WORKSPACE``).
 4. Run the container preflight from M1 (``solver/container.py`` ``ensure_execution_ready`` and
    ``probe_container_runtime``) against the digest-pinned local image. Digest pins run with
    ``--pull never`` and ``--network=none``.
 5. Golden executor only (``use_skill_script=True``) on the staged copy. Constructing any
-   ``ModelClient`` exits 1, and so does any fixture whose commands used a backend other than
-   ``container``.
+   ``ModelClient`` (``__new__`` or ``__init__``, every subclass) or importing a provider module
+   exits 1, and so does any fixture whose commands used a backend other than ``container``.
 
 Output rule. The console gets only counts, hashes, and fixed reasons ("hash mismatch",
 "count mismatch"), never names or paths. While the eval runs, fd 1/2 and sys.stdout/stderr go
-to ``--audit-store``. Console lines are checked against a deny list built from the staged tree;
-a hit exits ``EXIT_LEAK``. The ``scan`` subcommand re-checks captured console files.
+to ``--audit-store``. Console lines are checked against a deny list built from the staged tree
+(dir and file names, relpaths, skill ids, the first 40 chars of each request, the split-root
+path); a hit exits ``EXIT_LEAK``. The ``scan`` subcommand re-checks captured console files and,
+in the ``log-scan`` job, the published job log, with the same list.
 """
 
 from __future__ import annotations
@@ -52,11 +58,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
-# Build Bot-rec's WO-06 loader (not on main yet). The expected names are taken from the WO-08
-# spec; the module path is a guess (see the PR body). Imported by name so that nothing here
-# reimplements it.
+# Build Bot-rec's WO-06 tree verifier (not on main yet). The name is CTO-rec's (M6); the module
+# path is a guess (see the PR body). Imported by name so that nothing here reimplements it.
 LOADER_MODULE = "recertia.evals.heldout_manifest"
-LOADER_FUNCS = ("load_heldout_manifest", "compute_root_sha256")
+LOADER_FUNC = "verify_heldout_tree"
 HASH_RULE = "sha256-sorted-relpath-v1"
 
 EXIT_OK = 0
@@ -69,6 +74,11 @@ EXIT_LEAK = 5
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _CHUNK = 1 << 20
 _PUBLIC_EVALS = Path("evals")
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+MANIFEST_KEYS = frozenset(
+    {"schema_version", "split_id", "count", "hash_rule", "root_sha256", "ciphertext_sha256", "created_at_pt"}
+)
+REQUEST_PREFIX_CHARS = 40
 
 # Executor: (staged fixture dir, task_class, audit run dir) -> passed.
 Executor = Callable[[Path, str, Path], bool]
@@ -86,36 +96,40 @@ class Refused(Exception):
 # --------------------------------------------------------------------------- loader (WO-06)
 
 
-def _loader() -> Any:
+def _verifier() -> Callable[[Path, Path], Any]:
     try:
         mod = importlib.import_module(LOADER_MODULE)
     except ImportError:
         raise Refused("loader_unavailable") from None
-    if not all(callable(getattr(mod, name, None)) for name in LOADER_FUNCS):
+    func = getattr(mod, LOADER_FUNC, None)
+    if not callable(func):
         raise Refused("loader_unavailable")
-    return mod
+    return func  # type: ignore[no-any-return]
 
 
-def _field(manifest: Any, name: str) -> Any:
-    if isinstance(manifest, Mapping):
-        return manifest.get(name)
-    return getattr(manifest, name, None)
+def read_public_manifest(path: Path) -> dict[str, Any]:
+    """The public manifest's fields, for step 1 only. Exactly the spec's seven keys.
 
+    Not a manifest format: WO-06 ``verify_heldout_tree`` re-reads and validates the same file
+    for the tree check. TODO(REC-022): use WO-06's public-manifest reader if it exports one.
+    """
 
-def load_manifest(path: Path) -> Any:
-    loader = _loader()
+    _verifier()  # no WO-06, no run: fail closed before touching the ciphertext
     try:
-        manifest = loader.load_heldout_manifest(path)
-    except Exception:  # noqa: BLE001 - the loader owns validation; any error fails closed
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         raise Refused("manifest invalid") from None
-    if _field(manifest, "hash_rule") != HASH_RULE:
+    if not isinstance(doc, dict) or set(doc) != MANIFEST_KEYS or doc.get("schema_version") != 1:
+        raise Refused("manifest invalid")
+    if doc.get("hash_rule") != HASH_RULE:
         raise Refused("manifest invalid")
     for name in ("root_sha256", "ciphertext_sha256"):
-        if not isinstance(_field(manifest, name), str) or not _HEX64.match(_field(manifest, name)):
+        if not isinstance(doc.get(name), str) or not _HEX64.match(doc[name]):
             raise Refused("manifest invalid")
-    if not isinstance(_field(manifest, "count"), int) or _field(manifest, "count") < 1:
+    count = doc.get("count")
+    if not isinstance(count, int) or isinstance(count, bool) or count < 1:
         raise Refused("manifest invalid")
-    return manifest
+    return doc
 
 
 # --------------------------------------------------------------------------- verification
@@ -129,14 +143,14 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_ciphertext(manifest: Any, ciphertext: Path) -> None:
+def verify_ciphertext(manifest: Mapping[str, Any], ciphertext: Path) -> None:
     """Step 1: the ciphertext file hash (a single opaque blob, not the tree rule)."""
 
     try:
         st = os.lstat(ciphertext)
     except OSError:
         raise Refused("hash mismatch stage=ciphertext") from None
-    if not stat.S_ISREG(st.st_mode) or _sha256_file(ciphertext) != _field(manifest, "ciphertext_sha256"):
+    if not stat.S_ISREG(st.st_mode) or _sha256_file(ciphertext) != manifest["ciphertext_sha256"]:
         raise Refused("hash mismatch stage=ciphertext")
 
 
@@ -173,53 +187,127 @@ def task_dirs(root: Path) -> list[Path]:
     return found
 
 
-def verify_root(manifest: Any, staged: Path) -> list[Path]:
-    """Step 3: the loader's root hash and the task count over the staged copy."""
+def _is_count_error(exc: BaseException) -> bool:
+    return getattr(exc, "kind", None) == "count" or "count" in type(exc).__name__.lower()
 
-    loader = _loader()
-    try:
-        root = loader.compute_root_sha256(staged)
-    except Exception:  # noqa: BLE001 - e.g. the loader rejects a special file
-        raise Refused("hash mismatch stage=root") from None
-    if root != _field(manifest, "root_sha256"):
-        raise Refused("hash mismatch stage=root")
+
+def verify_tree(manifest_path: Path, manifest: Mapping[str, Any], staged: Path) -> list[Path]:
+    """Step 3: WO-06 ``verify_heldout_tree`` over the staged copy, then the task count.
+
+    Any exception, or a ``False`` result, fails closed. Only the exception's type decides between
+    the two fixed reasons; its message (which may name files) is never printed.
+    """
+
+    verify = _verifier()
     tasks = task_dirs(staged)
-    if len(tasks) != _field(manifest, "count"):
-        raise Refused(f"count mismatch expected={_field(manifest, 'count')} got={len(tasks)}")
+    count_reason = f"count mismatch expected={manifest['count']} got={len(tasks)}"
+    try:
+        result = verify(manifest_path, staged)
+    except Exception as exc:  # noqa: BLE001 - WO-06 owns the rule; any error fails closed
+        raise Refused(count_reason if _is_count_error(exc) else "hash mismatch stage=root") from None
+    if result is False:
+        raise Refused("hash mismatch stage=root")
+    if len(tasks) != manifest["count"]:
+        raise Refused(count_reason)
     return tasks
 
 
 # --------------------------------------------------------------------------- guards
 
 
+_ABSENT = object()
+
+
 class ModelClientForbidden(RuntimeError):
     """A model client was constructed during a held-out run (WO-08 Amendment 1)."""
 
 
+PROVIDER_MODULES = ("recertia.solver.providers", "anthropic", "openai")
+
+
+def _all_subclasses(cls: type) -> list[type]:
+    found: list[type] = []
+    stack: list[type] = list(cls.__subclasses__())
+    while stack:
+        sub = stack.pop()
+        found.append(sub)
+        stack.extend(sub.__subclasses__())
+    return found
+
+
+class _ProviderImportBlocker:
+    """``sys.meta_path`` finder: importing a provider module during a held-out run is refused."""
+
+    def __init__(self, constructed: list[str]) -> None:
+        self.constructed = constructed
+
+    def find_spec(self, name: str, path: Any = None, target: Any = None) -> None:
+        del path, target
+        if any(name == mod or name.startswith(mod + ".") for mod in PROVIDER_MODULES):
+            self.constructed.append(f"import:{name.split('.')[0]}")
+            raise ModelClientForbidden("provider modules are forbidden in held-out runs")
+        return None
+
+
 @contextlib.contextmanager
 def forbid_model_clients(constructed: list[str]) -> Iterator[None]:
-    """Make every ``ModelClient`` constructor raise, and record each attempt.
+    """Refuse every ``ModelClient`` construction and every provider-module import; record each.
 
-    Every client subclasses ``recertia.solver.model.ModelClient`` and calls its ``__init__``.
-    The patch is on the class object, so lazy imports that run later (for example
-    ``nodes/plan.py``'s ``guide_stitch`` import) see it too. The record survives even if an engine
-    catches the error, so ``run`` still exits 1.
+    - ``__init__`` is replaced on ``ModelClient`` AND on every subclass that defines its own, so a
+      subclass that skips ``super().__init__`` is still refused (CTO-rec N3, P8-nosuper). A
+      subclass created during the run is caught by a temporary ``__init_subclass__``. (Patching
+      ``__new__`` is avoided: CPython keeps a stale ``tp_new`` slot after it is removed again.)
+    - A ``sys.meta_path`` finder refuses importing ``PROVIDER_MODULES`` (the guard is in place
+      at provider-module import). Provider modules already in ``sys.modules`` are hidden for the
+      duration, so a lazy ``from recertia.solver.providers import ...`` re-imports and is refused.
+    - The patches are on class objects and the import system, so lazy imports that run later
+      (``nodes/plan.py:108``'s ``guide_stitch``) see them. The record survives an engine that
+      catches the error, so ``run`` still exits 1.
     """
 
     from recertia.solver import model
 
-    original = model.ModelClient.__init__
+    base = model.ModelClient
 
-    def _refuse(self: Any, *args: Any, **kwargs: Any) -> None:
+    def _refuse_init(self: Any, *args: Any, **kwargs: Any) -> None:
         del args, kwargs
         constructed.append(type(self).__name__)
         raise ModelClientForbidden("model clients are forbidden in held-out runs")
 
-    model.ModelClient.__init__ = _refuse  # type: ignore[method-assign]
+    saved: list[tuple[type, str, Any]] = []
+
+    def _guard(cls: type) -> None:
+        if "__init__" in cls.__dict__ or cls is base:
+            saved.append((cls, "__init__", cls.__dict__.get("__init__", _ABSENT)))
+            setattr(cls, "__init__", _refuse_init)
+
+    def _on_subclass(cls: type, **kwargs: Any) -> None:
+        super(base, cls).__init_subclass__(**kwargs)  # type: ignore[misc]
+        _guard(cls)
+
+    for cls in [base, *_all_subclasses(base)]:
+        _guard(cls)
+    saved.append((base, "__init_subclass__", base.__dict__.get("__init_subclass__", _ABSENT)))
+    setattr(base, "__init_subclass__", classmethod(_on_subclass))
+    hidden = {
+        name: sys.modules.pop(name)
+        for name in list(sys.modules)
+        if any(name == mod or name.startswith(mod + ".") for mod in PROVIDER_MODULES)
+    }
+    blocker = _ProviderImportBlocker(constructed)
+    sys.meta_path.insert(0, blocker)
     try:
         yield
     finally:
-        model.ModelClient.__init__ = original  # type: ignore[method-assign]
+        with contextlib.suppress(ValueError):
+            sys.meta_path.remove(blocker)
+        for cls, name, value in reversed(saved):
+            if value is _ABSENT:
+                with contextlib.suppress(AttributeError):
+                    delattr(cls, name)
+            else:
+                setattr(cls, name, value)
+        sys.modules.update(hidden)
 
 
 @contextlib.contextmanager
@@ -281,6 +369,32 @@ def network_reachable(net_dev: Path = _NET_DEV) -> bool:
         return True
     names = {line.split(":", 1)[0].strip() for line in lines if ":" in line}
     return names != {"lo"}
+
+
+def checkout_roots(env: Mapping[str, str]) -> list[Path]:
+    """The checkout as seen by the job: cwd, this repo's root, and ``$GITHUB_WORKSPACE``."""
+
+    roots = [Path.cwd(), _REPO_ROOT]
+    if env.get("GITHUB_WORKSPACE"):
+        roots.append(Path(env["GITHUB_WORKSPACE"]))
+    return roots
+
+
+def location_refusal(env: Mapping[str, str], *, split_root: Path, audit_store: Path) -> str | None:
+    """CTO-rec M2: decrypted bytes, their staged copy and the audit store stay out of the checkout.
+
+    Staging goes under ``tempfile.gettempdir()`` (``$TMPDIR``). With ``$RUNNER_TEMP`` set, staging
+    and the split root must also be inside it, so the ``if: always()`` wipe covers them.
+    """
+
+    staging_parent = Path(tempfile.gettempdir())
+    for path in (split_root, staging_parent, audit_store):
+        if any(_inside(path, root) for root in checkout_roots(env)):
+            return "path_in_checkout"
+    runner_temp = env.get("RUNNER_TEMP")
+    if runner_temp and not all(_inside(p, Path(runner_temp)) for p in (split_root, staging_parent)):
+        return "path_outside_runner_temp"
+    return None
 
 
 def preflight(env: Mapping[str, str], *, require_offline: bool) -> str | None:
@@ -386,16 +500,32 @@ _DENY_PATTERNS = (
 )
 
 
-def deny_terms(root: Path) -> list[str]:
-    """Every dir and file name, relpath, and skill id under ``root``."""
+def _request_prefix(fixture: Path) -> str | None:
+    task = fixture / "task.json"
+    try:
+        spec = json.loads(task.read_text(encoding="utf-8")) if task.is_file() else None
+    except ValueError:
+        return None
+    if isinstance(spec, dict) and isinstance(spec.get("request"), str):
+        prefix = spec["request"].strip()[:REQUEST_PREFIX_CHARS].rstrip()
+        return prefix if len(prefix) >= 8 else None
+    return None
 
-    terms: set[str] = set()
+
+def deny_terms(root: Path, extra: Sequence[str] = ()) -> list[str]:
+    """Proposal §4 item 11: every dir and file name and relpath under ``root``, each skill id,
+    the first 40 chars of each request, plus ``extra`` (the split-root path)."""
+
+    terms: set[str] = set(extra)
     for path in root.rglob("*"):
         rel = path.relative_to(root)
         terms.add(rel.as_posix())
         terms.update(rel.parts)
     for task in task_dirs(root) if root.is_dir() else []:
         terms.add(_skill_id_for(task))
+        prefix = _request_prefix(task)
+        if prefix:
+            terms.add(prefix)
     return sorted((t for t in terms if t), key=len, reverse=True)
 
 
@@ -473,6 +603,10 @@ def run(
     if _PUBLIC_EVALS.exists() and _inside(split_root, _PUBLIC_EVALS):
         say("FAIL reason=split_root_in_repo executed=0")
         return EXIT_REFUSED
+    location = location_refusal(env, split_root=split_root, audit_store=audit_store)
+    if location is not None:
+        say(f"FAIL reason={location} executed=0")
+        return EXIT_REFUSED
 
     with contextlib.ExitStack() as stack:
         try:
@@ -484,10 +618,10 @@ def run(
         staging = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="heldout-")))
         record: dict[str, Any] = {"verify_only": verify_only}
         try:
-            manifest = load_manifest(manifest_path)  # loader (WO-06)
+            manifest = read_public_manifest(manifest_path)  # public fields only
             verify_ciphertext(manifest, ciphertext)  # step 1
             stage_tree(split_root, staging)  # step 2 output, staged
-            tasks = verify_root(manifest, staging)  # step 3
+            tasks = verify_tree(manifest_path, manifest, staging)  # step 3 (WO-06)
         except Refused as exc:
             record.update(status="verify_failed", reason=exc.reason)
             _write_json(run_dir / "record.json", record)
@@ -499,8 +633,8 @@ def run(
             say("FAIL reason=io_error executed=0")
             return EXIT_VERIFY_FAILED
 
-        deny = deny_terms(staging)
-        root_sha = _field(manifest, "root_sha256")
+        deny = deny_terms(staging, [str(split_root), str(staging)])
+        root_sha = manifest["root_sha256"]
         say(f"VERIFIED root_sha256={root_sha} count={len(tasks)}")
         record.update(root_sha256=root_sha, count=len(tasks))
         if verify_only:
@@ -536,8 +670,13 @@ def run(
                         error = type(exc).__name__
                     backends = sorted(set(used)) or ["none"]
                     results.append(
-                        {"index": index, "fixture": task.name, "passed": bool(passed) and error is None,
-                         "backend_used": backends, "error": error}
+                        {
+                            "index": index,
+                            "fixture": task.name,
+                            "passed": bool(passed) and error is None,
+                            "backend_used": backends,
+                            "error": error,
+                        }
                     )
         _write_json(run_dir / "results.json", results)
         if stage_failed:
@@ -567,13 +706,27 @@ def run(
         return EXIT_OK if verdict == "PASS" else EXIT_EVAL_FAILED
 
 
-def scan(*, split_root: Path, logs: Sequence[Path], out: TextIO) -> int:
-    """Post-run scan of captured console files against names under the decrypted tree."""
+def scan(*, split_root: Path, logs: Sequence[Path], out: TextIO, public: Sequence[Path] = ()) -> int:
+    """Post-run scan of captured console files, or of the published job log, for deny terms.
+
+    The terms are the same as the in-run list (names, relpaths, skill ids, request prefixes,
+    the split-root path). ``public`` files hold text that is already public (the workflow file,
+    and the step ``env:`` values GitHub echoes into every published log). A term found in that
+    text carries no private information, so it is dropped instead of failing every scan. Only
+    counts are printed.
+    """
 
     if not split_root.is_dir():
         print("log-scan: FAIL reason=split_root_missing", file=out)
         return EXIT_VERIFY_FAILED
-    terms = deny_terms(split_root)
+    terms = deny_terms(split_root, [str(split_root)])
+    try:
+        public_text = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in public)
+    except OSError:
+        print("log-scan: FAIL reason=public_text_missing", file=out)
+        return EXIT_VERIFY_FAILED
+    if public_text:
+        terms = [t for t in terms if t not in public_text]
     hits = 0
     for log in logs:
         try:
@@ -612,8 +765,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command == "scan":
         parser.add_argument("--split-root", type=Path, required=True)
         parser.add_argument("--log", type=Path, action="append", required=True)
+        parser.add_argument("--public-text", type=Path, action="append", default=[])
         args = _parse(parser, rest)
-        return EXIT_USAGE if args is None else scan(split_root=args.split_root, logs=args.log, out=sys.stdout)
+        if args is None:
+            return EXIT_USAGE
+        return scan(split_root=args.split_root, logs=args.log, out=sys.stdout, public=args.public_text)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--ciphertext", type=Path, required=True)
     if command == "verify-ciphertext":
@@ -621,7 +777,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args is None:
             return EXIT_USAGE
         try:
-            verify_ciphertext(load_manifest(args.manifest), args.ciphertext)
+            verify_ciphertext(read_public_manifest(args.manifest), args.ciphertext)
         except Refused as exc:
             print(f"heldout: FAIL {exc.reason} executed=0")
             return exc.code
