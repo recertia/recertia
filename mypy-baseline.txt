@@ -3,7 +3,6 @@
 # a rise fails, and a fix fails as stale until --write lowers it here.
 # A missing fingerprint means zero.
 
-1	scripts/generate_schemas.py	attr-defined	"type" has no attribute "model_json_schema"
 1	tests/boundary/test_import_boundary.py	assignment	Incompatible types in assignment (expression has type "tuple[str, ...]", variable has type "tuple[str, str]")
 1	tests/contracts/test_receipt.py	attr-defined	"<typing special form>" has no attribute "__args__"
 1	tests/contracts/test_route_completeness.py	arg-type	Argument 1 to "RunState" has incompatible type "**dict[str, object]"; expected "Budget"

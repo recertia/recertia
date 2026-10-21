@@ -17,6 +17,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from pydantic import BaseModel
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -88,7 +90,7 @@ MODELS: dict[str, type] = {
 }
 
 
-def render(model: type) -> str:
+def render(model: type[BaseModel]) -> str:
     schema = model.model_json_schema()
     schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
