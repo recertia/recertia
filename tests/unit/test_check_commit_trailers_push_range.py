@@ -633,17 +633,55 @@ def test_non_utf8_identity_is_classified_per_commit(repo: Repo) -> None:
     _assert_none_of(result, LEAK)
 
 
-def test_github_app_bot_noreply_form_fails(repo: Repo) -> None:
-    # REC-027: only <digits>+<login> and <login> pass; a [bot] suffix is not a login.
+def test_github_app_bot_noreply_form_passes(repo: Repo) -> None:
+    # REC-027: the strict App bot form <digits>+<login>[bot] passes.
     bot = "1+placeholder[bot]" + "@users.noreply." + "github.com"
     before = repo.commit()
     after = repo.commit(email=bot, trailers=(f"Co-authored-by: placeholder <{bot}>",))
     result = _push(repo, before, after)
-    assert result.returncode == 1, result
-    assert (
-        f"FAIL {after}: author=non-allowlisted, committer=non-allowlisted, Co-authored-by=non-allowlisted\n"
-        in (result.stderr)
+    assert result.returncode == 0, result
+    assert f"ok 1 commit(s) in {before}..{after}" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "local",
+    [
+        "placeholder[bot]",
+        "[bot]",
+        "1+[bot]",
+        "[bot]1+placeholder",
+        "1[bot]+placeholder",
+        "1+[bot]placeholder",
+        "1+place[bot]holder",
+        "1+placeholder[bot][bot]",
+        "1+placeholder[bot]x",
+        "1+placeholder[bots]",
+        "1+placeholder(bot)",
+        "1+-placeholder[bot]",
+    ],
+    ids=[
+        "no-digits",
+        "bot-only",
+        "digits-bot-only",
+        "bot-first",
+        "bot-in-id",
+        "bot-before-login",
+        "bot-mid-login",
+        "bot-twice",
+        "bot-not-last",
+        "bots",
+        "parens",
+        "leading-hyphen",
+    ],
+)
+def test_github_app_bot_suffix_outside_strict_form_fails(repo: Repo, local: str) -> None:
+    before = repo.commit()
+    after = repo.commit(
+        trailers=(f"Co-authored-by: placeholder <{local}" + "@users.noreply." + "github.com>",)
     )
+    result = _push(repo, before, after)
+    assert result.returncode == 1, result
+    assert f"FAIL {after}: Co-authored-by=non-allowlisted\n" in result.stderr
     _assert_none_of(result)
 
 

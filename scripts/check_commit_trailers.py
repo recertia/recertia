@@ -36,6 +36,8 @@ lowercases to ASCII) fails before case folding. After lowercasing, an
 address passes only if it is exactly one of:
 
 * the GitHub noreply form ``<digits>+<login>@users.noreply.github.com``;
+* the GitHub App bot form ``<digits>+<login>[bot]@users.noreply.github.com``
+  (``[bot]`` only directly after a login that has the ``<digits>+`` prefix);
 * the legacy GitHub noreply form ``<login>@users.noreply.github.com``;
 * the agent address in ``_ALLOWED_EXACT``;
 * GitHub's web-flow address, as committer only (merge button, squash
@@ -43,8 +45,9 @@ address passes only if it is exactly one of:
 
 ``<login>`` follows GitHub's username rule: 1-39 characters from
 ``[A-Za-z0-9-]``, not starting with a hyphen. Any other local part fails,
-for example a ``[bot]`` suffix, dots, underscores, a second ``+``, or an
-empty login.
+for example ``[bot]`` without the ``<digits>+`` prefix or anywhere but
+directly before the ``@``, dots, underscores, a second ``+``, or an empty
+login.
 
 Range SHAs (REC-027). ``BASE``, ``HEAD``, ``PUSH_AFTER`` and a non-zero
 ``PUSH_BEFORE`` must each be a 40-hex SHA, and ``BASE``, ``HEAD`` and
@@ -90,7 +93,11 @@ _ALLOWED_EXACT = frozenset(
 # GitHub noreply: optional "<digits>+", then a login (GitHub's username rule:
 # [A-Za-z0-9-], 1-39 chars, no leading hyphen). Matched after lowercasing.
 _LOGIN = r"[a-z0-9][a-z0-9-]{0,38}"
-_NOREPLY = re.compile(r"(?:[0-9]+\+)?" + _LOGIN + r"@users\.noreply\.github\.com", re.ASCII)
+# The App bot suffix "[bot]" is allowed only on the "<digits>+<login>" form.
+_NOREPLY = re.compile(
+    r"(?:[0-9]+\+" + _LOGIN + r"(?:\[bot\])?|" + _LOGIN + r")@users\.noreply\.github\.com",
+    re.ASCII,
+)
 _WEB_FLOW_COMMITTER = "noreply@" + "github.com"
 _IDENTITY_TRAILER = re.compile(r"^([A-Za-z0-9-]*-by)\s*:\s*(.*)$", re.IGNORECASE)
 _ANGLE_EMAIL = re.compile(r"<([^<>]*)>")
