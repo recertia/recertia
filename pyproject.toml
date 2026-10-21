@@ -45,7 +45,9 @@ dev = [
     # Nightly lowest-deps requires a >= floor. 0.17.1 is the version CI lint
     # pins; do not lower this floor to 0.6.
     "ruff>=0.17.1",
-    "mypy>=1.11",
+    # Exactly 2.4.0, the ci.yml pin and the mypy-baseline.txt header version. Written
+    # as a >= floor with an equal ceiling because nightly lowest-deps parses ">=".
+    "mypy>=2.4.0,<=2.4.0",
     "import-linter>=2.15",
     "fastapi>=0.115",
     "uvicorn>=0.30",
