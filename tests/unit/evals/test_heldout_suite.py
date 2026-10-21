@@ -6,8 +6,10 @@ Synthetic split only, built under ``tmp_path`` with neutral dir names (h001, h00
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -153,3 +155,204 @@ def test_task_class_gate_runs_opaque_dirs_unchanged(tmp_path: Path) -> None:
     report = run_task_class_gate(version, root, runs_root=tmp_path / "runs")
     assert [Path(r.golden_path).name for r in report.results] == ["h001", "h002"]
     assert [r.passed for r in report.results] == [True, False]
+
+
+# ----- M3: held-out run state stays out of checkouts and is removed after each run -----
+
+MARK_REQUEST = "MARKREQUEST7f3a"
+MARK_COMMAND = "MARKCMD91bd"
+MARK_WS_FILE = "MARKWSFILE55e1"
+MARKS = (MARK_REQUEST, MARK_COMMAND, MARK_WS_FILE)
+
+
+def _marked_split(tmp_path: Path) -> Path:
+    """h001 runs (request, criteria command, workspace file all marked); h002 is refused."""
+
+    root = tmp_path / "decrypted" / SPLIT_ID
+    _golden(
+        root / "repo-chore" / "h001",
+        command=f"test -f MUST_EXIST.txt || echo {MARK_COMMAND}",
+        workspace_file=f"{MARK_WS_FILE}.txt",
+        request=f"please do {MARK_REQUEST}",
+    )
+    h2 = _golden(
+        root / "repo-chore" / "h002",
+        command=f"true {MARK_COMMAND}",
+        workspace_file=f"{MARK_WS_FILE}-b.txt",
+        request=f"also {MARK_REQUEST}",
+    )
+    spec = json.loads((h2 / "task.json").read_text(encoding="utf-8"))
+    spec["criteria"] = [{"id": "x", "kind": "command"}]  # refused: no command, no proof
+    (h2 / "task.json").write_text(json.dumps(spec) + "\n", encoding="utf-8")
+    return root
+
+
+def _marker_hits(base: Path, *, skip: tuple[Path, ...]) -> list[str]:
+    hits: list[str] = []
+    for path in base.rglob("*"):
+        if any(path == s or s in path.parents for s in skip):
+            continue
+        rel = path.relative_to(base).as_posix()
+        for mark in MARKS:
+            if mark in rel:
+                hits.append(f"NAME {rel}")
+        if path.is_file():
+            data = path.read_bytes()
+            hits.extend(f"CONTENT {rel} {mark}" for mark in MARKS if mark.encode() in data)
+    return hits
+
+
+def test_heldout_content_never_persists_in_run_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Request text, criteria commands and workspace names stay out of runtime.db & co."""
+
+    from recertia.evals import golden
+
+    started: list[Path] = []
+    original = golden._start_orchestrator
+
+    def _spy(runs_root: Path, **kwargs: object) -> object:
+        started.append(runs_root)
+        return original(runs_root, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(golden, "_start_orchestrator", _spy)
+    root = _marked_split(tmp_path)
+    eval_db = tmp_path / "evals.db"
+    store = EvalStore(eval_db)
+    try:
+        report = _run(tmp_path, root, _manifest(tmp_path, root), eval_store=store,
+                      snapshot_id="heldout-test")
+    finally:
+        store.close()
+    results = report.results  # type: ignore[attr-defined]
+    assert [r.detail for r in results][1] == "held-out fixture criteria refused"
+    # The run really happened, under a per-fixture scratch dir that is now gone.
+    assert len(started) == 1
+    assert started[0].parent.name.startswith("heldout-scratch-")
+    assert started[0].parent.parent == tmp_path / "runs"
+    assert not started[0].exists()
+    runs = tmp_path / "runs"
+    assert not (runs / "golden-runs").exists()
+    assert not list(runs.rglob("golden-workspaces"))
+    assert not list(runs.glob("heldout-scratch-*"))
+    hits = _marker_hits(tmp_path, skip=(root,))
+    assert hits == [], hits
+    out = tmp_path / "report.json"
+    report.write(out)  # type: ignore[attr-defined]
+    payload = json.dumps(EvalService().suite_payload(report))
+    for text in (out.read_text(encoding="utf-8"), payload):
+        assert not any(mark in text for mark in MARKS)
+
+
+def test_heldout_scratch_is_removed_when_the_run_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from recertia.evals import golden
+
+    class _Boom:
+        def start(self, *_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("orchestrator failed")
+
+        def close(self) -> None:
+            pass
+
+    def _start(runs_root: Path, **_kwargs: object) -> _Boom:
+        (runs_root / "runtime.db").parent.mkdir(parents=True, exist_ok=True)
+        (runs_root / "runtime.db").write_text(MARK_REQUEST, encoding="utf-8")
+        return _Boom()
+
+    monkeypatch.setattr(golden, "_start_orchestrator", _start)
+    root = _marked_split(tmp_path)
+    with pytest.raises(RuntimeError, match="orchestrator failed"):
+        _run(tmp_path, root, _manifest(tmp_path, root))
+    assert _marker_hits(tmp_path / "runs", skip=()) == []
+    assert not list((tmp_path / "runs").glob("heldout-scratch-*"))
+
+
+def test_heldout_runs_root_inside_a_checkout_or_the_split_is_refused(tmp_path: Path) -> None:
+    root = _split(tmp_path)
+    manifest = _manifest(tmp_path, root)
+    checkout = tmp_path / "checkout"
+    (checkout / ".git").mkdir(parents=True)
+    repo = Path(__file__).resolve().parents[3]
+    assert (repo / ".git").exists()
+    cases = {
+        checkout / "runs": "outside any git checkout",
+        repo / ".recertia" / "heldout-runs-rec009-test": "outside any git checkout",
+        root / "runs": "must not overlap",
+        tmp_path / "decrypted": "must not overlap",
+    }
+    for runs_root, message in cases.items():
+        with pytest.raises(HeldoutManifestError, match=message) as exc:
+            run_heldout_suite(
+                manifest_path=manifest,
+                heldout_root=root,
+                task_class="repo-chore",
+                skills_root=_skills(tmp_path),
+                runs_root=runs_root,
+            )
+        assert str(tmp_path) not in str(exc.value) and str(repo) not in str(exc.value)
+        assert not runs_root.exists() or runs_root == tmp_path / "decrypted"
+    api_root = tmp_path / "api-root"
+    with pytest.raises(HeldoutManifestError, match="forbidden root"):
+        run_heldout_suite(
+            manifest_path=manifest,
+            heldout_root=root,
+            task_class="repo-chore",
+            skills_root=_skills(tmp_path),
+            runs_root=api_root / "runs" / "t1",
+            forbidden_roots=[api_root],
+        )
+    store = EvalStore(checkout / "evals.db")
+    try:
+        with pytest.raises(HeldoutManifestError, match="eval store must be outside"):
+            _run(tmp_path, root, manifest, eval_store=store)
+    finally:
+        store.close()
+    assert not (tmp_path / "runs").exists()
+
+
+def test_fixture_workspace_copy_is_never_left_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per fixture, independent of the held-out scratch dir: a criteria refusal never
+    copies the workspace, and a failure while copying removes the partial copy."""
+
+    from recertia.evals import golden
+
+    root = _marked_split(tmp_path)
+    _skills(tmp_path)
+    version = SkillStore(tmp_path / "skills").get_version(SKILL, 1)
+    runs = tmp_path / "per-fixture-runs"
+    kwargs: dict = {
+        "runs_root": runs,
+        "use_skill_script": True,
+        "snapshot_id": None,
+        "model_version": None,
+        "eval_store": None,
+        "heldout": True,
+    }
+    copies: list[str] = []
+    real_copy = shutil.copy2
+
+    def _spy_copy(src: str, dst: str, *args: Any, **kw: Any) -> Any:
+        copies.append(Path(dst).name)
+        return real_copy(src, dst, *args, **kw)
+
+    monkeypatch.setattr(golden.shutil, "copy2", _spy_copy)
+    refused = golden._run_golden_for_skill(version, root / "repo-chore" / "h002", **kwargs)
+    assert refused.detail == "held-out fixture criteria refused"
+    assert copies == []
+    assert _marker_hits(tmp_path, skip=(root,)) == []
+    assert not runs.exists() or not any((runs / "golden-workspaces").glob("*"))
+
+    def _failing_copy(src: object, dst: object, *args: object, **kw: object) -> object:
+        Path(str(dst)).write_bytes(Path(str(src)).read_bytes())
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(golden.shutil, "copy2", _failing_copy)
+    with pytest.raises(OSError, match="copy failed"):
+        golden._run_golden_for_skill(version, root / "repo-chore" / "h001", **kwargs)
+    assert _marker_hits(tmp_path, skip=(root,)) == []
+    assert not any((runs / "golden-workspaces").glob("*"))

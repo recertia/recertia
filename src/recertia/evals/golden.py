@@ -23,7 +23,7 @@ import json
 import os
 import shutil
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -175,9 +175,50 @@ def run_golden_for_skill(
 
     ``heldout=True`` masks at the source: ``golden_path`` is :data:`HELDOUT_PATH_MASK`,
     the run id and workdir name are random (no skill id, no dir name), and criteria
-    errors are not echoed. Only :func:`run_heldout_suite` sets it.
+    errors are not echoed. All run state (the orchestrator's ``runtime.db`` with the
+    request text and criteria commands, trajectories, the copied workspace) lives in a
+    scratch dir under ``runs_root`` that is removed on every path, so only the masked
+    result and the eval observation survive. Only :func:`run_heldout_suite` sets it.
     """
 
+    if not heldout:
+        return _run_golden_for_skill(
+            version,
+            golden_dir,
+            runs_root=runs_root,
+            use_skill_script=use_skill_script,
+            snapshot_id=snapshot_id,
+            model_version=model_version,
+            eval_store=eval_store,
+            heldout=False,
+        )
+    scratch = runs_root / f"heldout-scratch-{uuid.uuid4().hex[:12]}"
+    try:
+        return _run_golden_for_skill(
+            version,
+            golden_dir,
+            runs_root=scratch,
+            use_skill_script=use_skill_script,
+            snapshot_id=snapshot_id,
+            model_version=model_version,
+            eval_store=eval_store,
+            heldout=True,
+        )
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _run_golden_for_skill(
+    version: SkillVersion,
+    golden_dir: Path,
+    *,
+    runs_root: Path,
+    use_skill_script: bool,
+    snapshot_id: str | None,
+    model_version: str | None,
+    eval_store: EvalStore | None,
+    heldout: bool,
+) -> GoldenResult:
     reported_path = HELDOUT_PATH_MASK if heldout else str(golden_dir)
 
     task_spec: dict = {}
@@ -194,24 +235,7 @@ def run_golden_for_skill(
         expect = json.loads(expect_path.read_text(encoding="utf-8"))
     expected_terminal = expect.get("terminal", "solved")
 
-    workdir_name = (
-        f"heldout-{uuid.uuid4().hex[:12]}"
-        if heldout
-        else f"{version.skill_id}-v{version.version}-{uuid.uuid4().hex[:8]}"
-    )
-    workdir = runs_root / "golden-workspaces" / workdir_name
-    if workdir.exists():
-        shutil.rmtree(workdir)
-    workdir.mkdir(parents=True, exist_ok=True)
-    fixture = golden_dir / "workspace"
-    if fixture.exists():
-        for item in fixture.iterdir():
-            dest = workdir / item.name
-            if item.is_dir():
-                shutil.copytree(item, dest)
-            else:
-                shutil.copy2(item, dest)
-
+    # Criteria first: a refused fixture never has its workspace copied anywhere.
     try:
         if goal is not None and "criteria" not in task_spec:
             criteria = compile_goal(goal, source="caller")
@@ -228,6 +252,64 @@ def run_golden_for_skill(
             detail="held-out fixture criteria refused" if heldout else str(exc),
         )
     script = script_from_skill(version) if use_skill_script else task_spec.get("script", ["true"])
+
+    workdir_name = (
+        f"heldout-{uuid.uuid4().hex[:12]}"
+        if heldout
+        else f"{version.skill_id}-v{version.version}-{uuid.uuid4().hex[:8]}"
+    )
+    workdir = runs_root / "golden-workspaces" / workdir_name
+    try:
+        return _run_in_workdir(
+            version,
+            golden_dir,
+            workdir=workdir,
+            runs_root=runs_root,
+            task_spec=task_spec,
+            goal=goal,
+            criteria=criteria,
+            script=script,
+            expected_terminal=expected_terminal,
+            reported_path=reported_path,
+            snapshot_id=snapshot_id,
+            model_version=model_version,
+            eval_store=eval_store,
+            heldout=heldout,
+        )
+    finally:
+        # Every path, including a copy or orchestrator failure, removes the copy.
+        if workdir.exists():
+            shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _run_in_workdir(
+    version: SkillVersion,
+    golden_dir: Path,
+    *,
+    workdir: Path,
+    runs_root: Path,
+    task_spec: dict,
+    goal: Goal | None,
+    criteria: list[TaskCriterion],
+    script: Any,
+    expected_terminal: str,
+    reported_path: str,
+    snapshot_id: str | None,
+    model_version: str | None,
+    eval_store: EvalStore | None,
+    heldout: bool,
+) -> GoldenResult:
+    if workdir.exists():
+        shutil.rmtree(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    fixture = golden_dir / "workspace"
+    if fixture.exists():
+        for item in fixture.iterdir():
+            dest = workdir / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest)
+            else:
+                shutil.copy2(item, dest)
 
     run_id = (
         f"golden-heldout-{uuid.uuid4().hex[:12]}"
@@ -746,6 +828,40 @@ def _heldout_skill_id(fixture_dir: Path) -> str:
     return skill_id
 
 
+def _inside(child: Path, parent: Path) -> bool:
+    return child == parent or parent in child.parents
+
+
+def _under_git_checkout(path: Path) -> bool:
+    return any((candidate / ".git").exists() for candidate in (path, *path.parents))
+
+
+def _check_heldout_outputs(
+    runs_root: Path,
+    split_root: Path,
+    *,
+    eval_store: EvalStore | None,
+    forbidden_roots: Iterable[Path | str],
+) -> None:
+    """Held-out run state never lands in a checkout, the split or a forbidden root.
+
+    Same realpath and ``.git``-ancestor rule as ``verify_heldout_tree`` and the operator
+    audit store. Messages carry no path.
+    """
+
+    real_runs = Path(os.path.realpath(runs_root))
+    if _under_git_checkout(real_runs):
+        raise HeldoutManifestError("held-out runs root must be outside any git checkout")
+    if _inside(real_runs, split_root) or _inside(split_root, real_runs):
+        raise HeldoutManifestError("held-out runs root must not overlap the held-out split")
+    for forbidden in forbidden_roots:
+        if _inside(real_runs, Path(os.path.realpath(forbidden))):
+            raise HeldoutManifestError("held-out runs root is inside a forbidden root")
+    store_path = getattr(eval_store, "path", None)
+    if store_path is not None and _under_git_checkout(Path(os.path.realpath(store_path))):
+        raise HeldoutManifestError("held-out eval store must be outside any git checkout")
+
+
 def run_heldout_suite(
     *,
     manifest_path: Path,
@@ -757,12 +873,17 @@ def run_heldout_suite(
     snapshot_id: str | None = None,
     model_version: str | None = None,
     factory: object | None = None,
+    forbidden_roots: Iterable[Path | str] = (),
 ) -> GoldenReport:
     """Run a private held-out split (REC-009). Fails closed before anything runs.
 
     * ``verify_heldout_tree`` checks the decrypted root against the public manifest
       (hash and count) and refuses a root inside a git checkout. Nothing is discovered:
       both paths come from the caller.
+    * ``runs_root`` (and the eval store, if given) must be outside any git checkout,
+      must not overlap the split, and must not sit inside ``forbidden_roots`` (for
+      example an API root that holds tenant runs roots). Per-fixture run state is
+      created in a scratch dir there and removed after each fixture.
     * Fixture dirs (``<root>/<task_class>/h001`` …) may have any neutral name. The skill
       under test is ``task.json`` ``expected_skill_id``; a fixture without one refuses the
       whole run, so no skill is ever inferred from a held-out dir name.
@@ -771,8 +892,11 @@ def run_heldout_suite(
       fixture path, dir name, or skill-bearing run id.
     """
 
-    verify_heldout_tree(manifest_path, heldout_root)
     split_root = Path(os.path.realpath(heldout_root))
+    _check_heldout_outputs(
+        runs_root, split_root, eval_store=eval_store, forbidden_roots=forbidden_roots
+    )
+    verify_heldout_tree(manifest_path, heldout_root)
     plan = [(d, _heldout_skill_id(d)) for d in _heldout_fixture_dirs(split_root, task_class)]
     store = SkillStore(skills_root)
     loaded = [v for v, _st, _stats in store.iter_loaded() if v.task_class == task_class]
