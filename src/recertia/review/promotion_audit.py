@@ -12,7 +12,17 @@ It fails closed:
   and the detail never falls back to a proposer-readable place;
 * a root inside a git checkout, or inside any caller-supplied forbidden root (the
   API root, which holds every tenant ``runs_root``, or the promote ``runs_root``),
-  is refused.
+  is refused;
+* the root must be a directory owned by the effective user and is set to ``0700``
+  (also when it already existed); the database is created ``0600`` with ``O_NOFOLLOW``
+  before SQLite opens it, so there is no window with a wider mode. SQLite gives the
+  ``-wal``/``-shm`` sidecars the database file's mode; pre-existing sidecars are
+  checked and set to ``0600`` as well;
+* any ``OSError`` or ``sqlite3.Error`` while opening or writing raises
+  :class:`AuditSinkUnavailable` with a fixed message (no path).
+
+File modes do not separate seats that share one OS user. On a shared box treat the
+store as readable by every seat and never record real held-out detail there.
 
 Reading is an operator action (:meth:`OperatorAuditStore.read`). No proposer plane
 (``recertia.nodes``, ``recertia.distill``, ``recertia.solver``, the
@@ -23,6 +33,8 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
+import stat
 import uuid
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
@@ -40,8 +52,11 @@ __all__ = [
 AUDIT_FILENAME = "promotion_audit.sqlite"
 
 
+_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+
+
 class AuditSinkUnavailable(Exception):
-    """The operator audit root is unset or sits somewhere proposers can read."""
+    """The operator audit store is unset, misplaced, or cannot be opened or written."""
 
 
 _ENTRY_KEYS = ("skill_id", "version", "refusal_kind", "failing_fixtures", "results", "detail")
@@ -53,6 +68,50 @@ def _inside(child: Path, parent: Path) -> bool:
 
 def _git_checkout_above(path: Path) -> bool:
     return any((candidate / ".git").exists() for candidate in (path, *path.parents))
+
+
+def _require_owned(st: os.stat_result, what: str) -> None:
+    if st.st_uid != os.geteuid():
+        raise AuditSinkUnavailable(f"operator audit {what} is owned by another user")
+
+
+def _prepare_root(real: Path) -> None:
+    """Create or adopt the root: a directory owned by the effective user, mode 0700."""
+
+    try:
+        real.mkdir(mode=0o700, parents=True)
+    except FileExistsError:
+        pass
+    st = os.lstat(real)
+    if not stat.S_ISDIR(st.st_mode):
+        raise AuditSinkUnavailable("operator audit root is not a directory")
+    _require_owned(st, "root")
+    os.chmod(real, 0o700)
+
+
+def _prepare_db_file(path: Path) -> None:
+    """Create the database 0600 before SQLite sees it; adopt an existing one only if safe."""
+
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise AuditSinkUnavailable("operator audit database is not a regular file")
+        _require_owned(st, "database")
+        os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+    for suffix in _SIDECAR_SUFFIXES:
+        sidecar = path.with_name(path.name + suffix)
+        try:
+            st = os.lstat(sidecar)
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            raise AuditSinkUnavailable("operator audit database sidecar is not a regular file")
+        _require_owned(st, "database sidecar")
+        os.chmod(sidecar, 0o600)
 
 
 class OperatorAuditStore:
@@ -79,27 +138,35 @@ class OperatorAuditStore:
                 raise AuditSinkUnavailable(
                     "operator audit root must be outside the API root and tenant runs roots"
                 )
-        real.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.root = real
         self.path = real / AUDIT_FILENAME
-        conn = self._connect()
+        failed = False
         try:
-            with conn:
-                conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS promotion_audit (
-                        audit_ref TEXT PRIMARY KEY,
-                        recorded_at TEXT NOT NULL,
-                        skill_id TEXT NOT NULL,
-                        version INTEGER NOT NULL,
-                        refusal_kind TEXT NOT NULL,
-                        payload TEXT NOT NULL
+            _prepare_root(real)
+            _prepare_db_file(self.path)
+            conn = self._connect()
+            try:
+                with conn:
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS promotion_audit (
+                            audit_ref TEXT PRIMARY KEY,
+                            recorded_at TEXT NOT NULL,
+                            skill_id TEXT NOT NULL,
+                            version INTEGER NOT NULL,
+                            refusal_kind TEXT NOT NULL,
+                            payload TEXT NOT NULL
+                        )
+                        """
                     )
-                    """
-                )
-        finally:
-            conn.close()
-        os.chmod(self.path, 0o600)
+            finally:
+                conn.close()
+        except (OSError, sqlite3.Error):
+            failed = True
+        if failed:
+            # Raised outside the handler: the OS or SQLite error (which names the path)
+            # is neither chained nor kept as context.
+            raise AuditSinkUnavailable("operator audit store could not be opened")
 
     def _connect(self) -> Any:
         return open_db(self.path)
@@ -119,23 +186,29 @@ class OperatorAuditStore:
             "results": list(entry.get("results", [])),
             "detail": str(entry.get("detail", "")),
         }
-        conn = self._connect()
+        failed = False
         try:
-            with conn:
-                conn.execute(
-                    "INSERT INTO promotion_audit(audit_ref, recorded_at, skill_id, version, "
-                    "refusal_kind, payload) VALUES (?,?,?,?,?,?)",
-                    (
-                        audit_ref,
-                        datetime.now(timezone.utc).isoformat(),
-                        payload["skill_id"],
-                        payload["version"],
-                        payload["refusal_kind"],
-                        json.dumps(payload, default=str),
-                    ),
-                )
-        finally:
-            conn.close()
+            conn = self._connect()
+            try:
+                with conn:
+                    conn.execute(
+                        "INSERT INTO promotion_audit(audit_ref, recorded_at, skill_id, "
+                        "version, refusal_kind, payload) VALUES (?,?,?,?,?,?)",
+                        (
+                            audit_ref,
+                            datetime.now(timezone.utc).isoformat(),
+                            payload["skill_id"],
+                            payload["version"],
+                            payload["refusal_kind"],
+                            json.dumps(payload, default=str),
+                        ),
+                    )
+            finally:
+                conn.close()
+        except (OSError, sqlite3.Error):
+            failed = True
+        if failed:
+            raise AuditSinkUnavailable("operator audit store write failed")
         return audit_ref
 
     def read(self, audit_ref: str) -> dict[str, Any] | None:
