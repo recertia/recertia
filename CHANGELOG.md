@@ -21,7 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   promotion log and CLI stderr no longer name fixtures; `recertia skills promote
   --operator-detail` prints the audit record. Held-out splits get a strict hash-manifest
   loader (`recertia.evals.heldout_manifest.verify_heldout_tree`) and a schema under
-  `evals/heldout/`, with no data committed.
+  `evals/heldout/`, with no data committed. `recertia.evals.golden.run_heldout_suite`
+  verifies the split first, takes each fixture's skill from `task.json`
+  `expected_skill_id` (never from a dir name such as `h001`), and masks `golden_path`
+  and the skill-bearing run id at the source.
 
 ### Fixed
 

@@ -20,6 +20,7 @@ the legacy fallback.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 from collections.abc import Iterator
@@ -36,11 +37,16 @@ from contracts.goal import Goal, compile_goal
 from contracts.policy import ImprovementFlags, Policy
 from contracts.run import RunManifest, Task
 from contracts.skill import SkillVersion
+from recertia.evals.heldout_manifest import HeldoutManifestError, verify_heldout_tree
 from recertia.memory.procedural.apply import script_from_skill
 from recertia.memory.procedural.store import SkillStore
 
 if TYPE_CHECKING:
     from recertia.evals.store import EvalStore
+
+# REC-009: held-out results never carry the fixture path, the dir name or a run id that
+# embeds the skill id. This token replaces ``golden_path`` at the source.
+HELDOUT_PATH_MASK = "<heldout>"
 
 _orchestrator_factory: ContextVar[Any] = ContextVar(
     "recertia_golden_orchestrator_factory",
@@ -163,8 +169,16 @@ def run_golden_for_skill(
     snapshot_id: str | None = None,
     model_version: str | None = None,
     eval_store: EvalStore | None = None,
+    heldout: bool = False,
 ) -> GoldenResult:
-    """Execute one golden task against ``version``; return a :class:`GoldenResult`."""
+    """Execute one golden task against ``version``; return a :class:`GoldenResult`.
+
+    ``heldout=True`` masks at the source: ``golden_path`` is :data:`HELDOUT_PATH_MASK`,
+    the run id and workdir name are random (no skill id, no dir name), and criteria
+    errors are not echoed. Only :func:`run_heldout_suite` sets it.
+    """
+
+    reported_path = HELDOUT_PATH_MASK if heldout else str(golden_dir)
 
     task_spec: dict = {}
     if (golden_dir / "task.json").exists():
@@ -180,11 +194,12 @@ def run_golden_for_skill(
         expect = json.loads(expect_path.read_text(encoding="utf-8"))
     expected_terminal = expect.get("terminal", "solved")
 
-    workdir = (
-        runs_root
-        / "golden-workspaces"
-        / f"{version.skill_id}-v{version.version}-{uuid.uuid4().hex[:8]}"
+    workdir_name = (
+        f"heldout-{uuid.uuid4().hex[:12]}"
+        if heldout
+        else f"{version.skill_id}-v{version.version}-{uuid.uuid4().hex[:8]}"
     )
+    workdir = runs_root / "golden-workspaces" / workdir_name
     if workdir.exists():
         shutil.rmtree(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
@@ -206,15 +221,19 @@ def run_golden_for_skill(
         return GoldenResult(
             skill_id=version.skill_id,
             version=version.version,
-            golden_path=str(golden_dir),
+            golden_path=reported_path,
             passed=False,
             terminal=None,
             run_id="",
-            detail=str(exc),
+            detail="held-out fixture criteria refused" if heldout else str(exc),
         )
     script = script_from_skill(version) if use_skill_script else task_spec.get("script", ["true"])
 
-    run_id = f"golden-{version.skill_id}-v{version.version}-{uuid.uuid4().hex[:6]}"
+    run_id = (
+        f"golden-heldout-{uuid.uuid4().hex[:12]}"
+        if heldout
+        else f"golden-{version.skill_id}-v{version.version}-{uuid.uuid4().hex[:6]}"
+    )
     from contracts.run import RunManifest
 
     pinned = RunManifest(
@@ -259,7 +278,7 @@ def run_golden_for_skill(
     return GoldenResult(
         skill_id=version.skill_id,
         version=version.version,
-        golden_path=str(golden_dir),
+        golden_path=reported_path,
         passed=passed,
         terminal=state.terminal,
         run_id=run_id,
@@ -688,6 +707,105 @@ def _criteria_from_task(task_spec: dict, version: SkillVersion) -> list[TaskCrit
             "adapted task criteria failed sensitivity evidence verification"
         )
     return adapted
+
+
+def _heldout_fixture_dirs(split_root: Path, task_class: str) -> list[Path]:
+    class_root = split_root / task_class
+    if not class_root.is_dir():
+        raise HeldoutManifestError("held-out split has no fixtures for this task class")
+    found = [
+        child
+        for child in sorted(p for p in class_root.iterdir() if p.is_dir())
+        if not child.name.startswith("_")
+        and ((child / "task.json").exists() or (child / "goal.json").exists())
+    ]
+    if not found:
+        raise HeldoutManifestError("held-out split has no fixtures for this task class")
+    return found
+
+
+def _heldout_skill_id(fixture_dir: Path) -> str:
+    """``expected_skill_id`` from ``task.json``. Never the directory name."""
+
+    task_path = fixture_dir / "task.json"
+    if not task_path.is_file():
+        raise HeldoutManifestError(
+            "held-out fixture has no task.json expected_skill_id; "
+            "refusing to infer a skill from the directory name"
+        )
+    try:
+        spec = json.loads(task_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        raise HeldoutManifestError("held-out fixture task.json is unreadable") from None
+    skill_id = spec.get("expected_skill_id") if isinstance(spec, dict) else None
+    if not isinstance(skill_id, str) or not skill_id.strip():
+        raise HeldoutManifestError(
+            "held-out fixture has no task.json expected_skill_id; "
+            "refusing to infer a skill from the directory name"
+        )
+    return skill_id
+
+
+def run_heldout_suite(
+    *,
+    manifest_path: Path,
+    heldout_root: Path,
+    task_class: str,
+    skills_root: Path,
+    runs_root: Path,
+    eval_store: EvalStore | None = None,
+    snapshot_id: str | None = None,
+    model_version: str | None = None,
+    factory: object | None = None,
+) -> GoldenReport:
+    """Run a private held-out split (REC-009). Fails closed before anything runs.
+
+    * ``verify_heldout_tree`` checks the decrypted root against the public manifest
+      (hash and count) and refuses a root inside a git checkout. Nothing is discovered:
+      both paths come from the caller.
+    * Fixture dirs (``<root>/<task_class>/h001`` …) may have any neutral name. The skill
+      under test is ``task.json`` ``expected_skill_id``; a fixture without one refuses the
+      whole run, so no skill is ever inferred from a held-out dir name.
+    * Every result is masked at the source (see ``run_golden_for_skill(heldout=True)``),
+      so ``GoldenReport.write``, ``EvalService.suite_payload`` and the eval store carry no
+      fixture path, dir name, or skill-bearing run id.
+    """
+
+    verify_heldout_tree(manifest_path, heldout_root)
+    split_root = Path(os.path.realpath(heldout_root))
+    plan = [(d, _heldout_skill_id(d)) for d in _heldout_fixture_dirs(split_root, task_class)]
+    store = SkillStore(skills_root)
+    loaded = [v for v, _st, _stats in store.iter_loaded() if v.task_class == task_class]
+    report = GoldenReport()
+    with _using_factory(factory):
+        for fixture_dir, skill_id in plan:
+            matches = [v for v in loaded if v.skill_id == skill_id]
+            if not matches:
+                report.results.append(
+                    GoldenResult(
+                        skill_id=skill_id,
+                        version=0,
+                        golden_path=HELDOUT_PATH_MASK,
+                        passed=False,
+                        terminal=None,
+                        run_id="",
+                        detail="no skill version available for held-out fixture",
+                    )
+                )
+                continue
+            version = max(matches, key=lambda v: v.version)
+            report.results.append(
+                run_golden_for_skill(
+                    version,
+                    fixture_dir,
+                    runs_root=runs_root,
+                    snapshot_id=snapshot_id,
+                    model_version=model_version,
+                    eval_store=eval_store,
+                    heldout=True,
+                )
+            )
+    return report
 
 
 def run_eval_suite(
