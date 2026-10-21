@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -325,12 +326,27 @@ def test_independent_steps_run_concurrently_conflicting_serialise(tmp_path: Path
 
     workspaces = WorkspaceManager(tmp_path / "snaps")
     registry = default_registry()
-    # Slow shell so overlap is observable.
     original = registry.handler("shell")
+    # REC-028: measure the behaviour, not wall clock. Each independent step
+    # waits at a two-party barrier, so they can only both succeed if they run
+    # at the same time (serial execution breaks the barrier after its timeout).
+    # The conflicting steps record their intervals, and those must not overlap.
+    # The old ``elapsed < 0.09`` check timed the whole apply (snapshots, shell
+    # spawns, transcript) and flaked under parallel CPU load.
+    meet = threading.Barrier(2, timeout=10)
+    intervals: dict[str, tuple[float, float]] = {}
+    guard = threading.Lock()
 
     def slow_shell(inputs: dict, workdir: Path):
+        command = str(inputs["command"])
+        start = time.monotonic()
+        if "shared.txt" not in command:
+            meet.wait()
         time.sleep(0.05)
-        return original(inputs, workdir)
+        out = original(inputs, workdir)
+        with guard:
+            intervals[command] = (start, time.monotonic())
+        return out
 
     registry._handlers["shell"] = slow_shell  # type: ignore[attr-defined]
     tools = _approved_runtime(registry)
@@ -378,7 +394,6 @@ def test_independent_steps_run_concurrently_conflicting_serialise(tmp_path: Path
     workdir = tmp_path / "work"
     workdir.mkdir()
     writer = TranscriptWriter(TranscriptStore(tmp_path / "t"), "r", 1)
-    started = time.monotonic()
     result = applicator.apply(
         independent,
         params={},
@@ -387,12 +402,13 @@ def test_independent_steps_run_concurrently_conflicting_serialise(tmp_path: Path
         attempt_no=1,
         transcript=writer,
     )
-    elapsed = time.monotonic() - started
-    assert result.ok
+    assert result.ok, "independent steps did not run concurrently (barrier broken)"
+    assert not meet.broken
     assert len(result.waves) == 1
     assert set(result.waves[0].wave.step_ids) == {"a", "b"}
-    # Concurrent: wall clock should be closer to one sleep than two.
-    assert elapsed < 0.09, f"expected concurrent overlap, elapsed={elapsed:.3f}"
+    a_start, a_end = intervals["echo a > A.txt"]
+    b_start, b_end = intervals["echo b > B.txt"]
+    assert a_start < b_end and b_start < a_end, "independent steps did not overlap"
 
     workdir2 = tmp_path / "work2"
     workdir2.mkdir()
@@ -409,6 +425,9 @@ def test_independent_steps_run_concurrently_conflicting_serialise(tmp_path: Path
     assert len(result2.waves) == 2, "conflicting write claims must be in separate waves"
     assert result2.waves[0].wave.step_ids == ["w1"]
     assert result2.waves[1].wave.step_ids == ["w2"]
+    _, w1_end = intervals["echo 1 > shared.txt"]
+    w2_start, _ = intervals["echo 2 > shared.txt"]
+    assert w1_end <= w2_start, "conflicting write claims overlapped"
 
 
 def test_failed_wave_restores_whole_not_half(tmp_path: Path) -> None:
