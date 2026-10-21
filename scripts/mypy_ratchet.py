@@ -152,10 +152,30 @@ def mypy_env() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
 
 
-def run_mypy(root: Path = REPO_ROOT, targets: list[str] | None = None) -> Counter[Fingerprint]:
-    cmd = [sys.executable, "-m", "mypy", "--no-error-summary", *(targets or TARGETS)]
+def mypy_command(targets: list[str] | None = None) -> list[str]:
+    """The mypy command line, run without a cache.
+
+    Messages are part of the fingerprint, and mypy 2.4.0 renders some of them
+    differently when a module comes from a cache that another invocation wrote
+    (CI's plain ``mypy contracts/ src/recertia/`` step runs just before this).
+    A cold run gives the same text every time.
+    """
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "mypy",
+        "--no-error-summary",
+        f"--cache-dir={os.devnull}",
+        *(targets or TARGETS),
+    ]
     for module in strict_modules:
         cmd.extend(["--strict", module])  # pragma: no cover — list starts empty
+    return cmd
+
+
+def run_mypy(root: Path = REPO_ROOT, targets: list[str] | None = None) -> Counter[Fingerprint]:
+    cmd = mypy_command(targets)
     proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, env=mypy_env())
     # mypy exits 1 when it finds errors. That is an input to the ratchet, not a crash.
     if proc.returncode not in {0, 1}:

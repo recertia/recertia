@@ -16,6 +16,7 @@ from scripts.mypy_ratchet import (
     TARGETS,
     Fingerprint,
     compare_counts,
+    mypy_command,
     mypy_env,
     parse_mypy_output,
     read_baseline,
@@ -117,6 +118,12 @@ def test_mypy_subprocess_env_drops_pythonpath(monkeypatch: pytest.MonkeyPatch) -
     env = mypy_env()
     assert "PYTHONPATH" not in env
     assert env["PATH"] == os.environ["PATH"]
+
+
+def test_mypy_runs_without_a_cache() -> None:
+    cmd = mypy_command()
+    assert f"--cache-dir={os.devnull}" in cmd
+    assert cmd[-len(TARGETS) :] == TARGETS
 
 
 # End to end: run the real script (and real mypy) against a temporary module.
