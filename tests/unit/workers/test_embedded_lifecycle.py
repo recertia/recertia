@@ -213,3 +213,61 @@ def test_teardown_joins_idle_async_pool_threads() -> None:
     assert pool_threads
     stop_test_workers(timeout=5)
     assert not any(t.is_alive() for t in pool_threads)
+
+
+class _NullEvents:
+    def append(self, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+
+
+def test_shutdown_all_is_bounded_when_a_run_hangs() -> None:
+    """F1: a hung run makes ``shutdown_all`` return False at its deadline, not block."""
+
+    from recertia.workers.run_worker import AsyncRunWorker
+
+    worker = AsyncRunWorker(events=None, max_workers=1)  # type: ignore[arg-type]
+    release = threading.Event()
+    entered = threading.Event()
+
+    def hung() -> None:
+        entered.set()
+        release.wait(60)
+
+    worker._pool.submit(hung)
+    assert entered.wait(5)
+    queued = worker._pool.submit(lambda: None)  # cancelled, never started
+    pool_threads = [t for t in threading.enumerate() if t.name.startswith("recertia-run")]
+    deadline = 0.5
+    try:
+        started = time.monotonic()
+        assert AsyncRunWorker.shutdown_all(timeout=deadline) is False
+        elapsed = time.monotonic() - started
+        assert deadline * 0.9 <= elapsed < deadline + 2.0
+        assert queued.cancelled()
+    finally:
+        release.set()
+    for t in pool_threads:
+        t.join(5)
+    assert not any(t.is_alive() for t in pool_threads)
+    assert AsyncRunWorker.shutdown_all(timeout=1) is True
+
+
+def test_shutdown_prunes_the_registry_and_the_worker_is_reusable() -> None:
+    """F2: shut-down workers leave ``_instances``; a reused worker gets a new pool."""
+
+    from recertia.workers.run_worker import AsyncRunWorker
+
+    workers = [AsyncRunWorker(events=_NullEvents()) for _ in range(20)]  # type: ignore[arg-type]
+    assert all(w in AsyncRunWorker._instances for w in workers)
+    assert AsyncRunWorker.shutdown_all(timeout=5) is True
+    assert not any(w in AsyncRunWorker._instances for w in workers)
+    workers[0].shutdown()  # idempotent, still unregistered
+    assert workers[0] not in AsyncRunWorker._instances
+
+    reused = workers[0]
+    reused._run = lambda req: "succeeded"  # type: ignore[method-assign]
+    reused.submit(SimpleNamespace(tenant_id="t1", run_id="r1"))  # type: ignore[arg-type]
+    assert reused._futures[("t1", "r1")].result(5) == "succeeded"
+    assert reused in AsyncRunWorker._instances
+    assert AsyncRunWorker.shutdown_all(timeout=5) is True
+    assert not any(w in AsyncRunWorker._instances for w in workers)

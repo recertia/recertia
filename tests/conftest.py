@@ -26,7 +26,10 @@ os.environ.setdefault("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
 
 import ipaddress  # noqa: E402
 import socket  # noqa: E402
+from collections.abc import Generator  # noqa: E402
 from typing import Any  # noqa: E402
+
+import pytest  # noqa: E402
 
 _LOOPBACK_NAMES = {"localhost", "localhost.localdomain", "ip6-localhost", ""}
 _REAL: dict[str, Any] = {
@@ -113,39 +116,64 @@ def pytest_runtest_setup(item: Any) -> None:
     default_breaker().reset()
 
 
-def pytest_runtest_teardown(item: Any, nextitem: Any) -> None:
-    """Stop every worker thread a test started (REC-029, N4, S1, S2).
+# Teardown deadline for embedded queue workers and async pool threads. A module
+# attribute so the pytester wiring test (F4) can lower it in a child session.
+TEARDOWN_TIMEOUT_S = 5.0
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: Any, nextitem: Any) -> Generator[None, None, None]:
+    """Stop every worker thread a test started (REC-029 N4, S1, S2; REC-031 F1, F3).
 
     Apps built with ``create_app`` start a ``recertia-queue`` daemon thread on
     the first create or resume and nothing stopped it, so threads piled up
-    across the suite. This runs before fixture finalizers, so no queue is
-    closed under a live worker thread. A worker restarts on its next
-    ``ensure_started`` (create, resume or ``flush``); a test that waits on the
-    queue across a test boundary without one of those would stall.
+    across the suite. Workers are stopped *before* the ``yield``, i.e. before
+    fixture finalizers, so no queue is closed under a live worker thread. A
+    worker restarts on its next ``ensure_started`` (create, resume or
+    ``flush``); a test that waits on the queue across a test boundary without
+    one of those would stall.
+
+    A failure is raised only *after* the ``yield`` (F3): pytest's own teardown
+    (fixture finalizers, monkeypatch undo) has run, so the next test does not
+    get a collateral "previous item was not torn down properly" error.
     """
 
     del item, nextitem
-    stop_test_workers()
+    failure = stop_test_workers_report(timeout=TEARDOWN_TIMEOUT_S)
+    result = yield
+    if failure is not None:
+        pytest.fail(failure, pytrace=False)
+    return result
 
 
-def stop_test_workers(timeout: float = 5.0) -> None:
-    """Stop embedded queue workers and join idle async pool threads.
+def stop_test_workers_report(timeout: float = 5.0) -> str | None:
+    """Stop embedded queue workers and join async pool threads, bounded.
 
-    Fails the test when a queue worker is still alive after ``timeout``: it
-    would leak into later tests (S2). Async pools are shut down either way so
-    no ``recertia-run`` thread survives into a later fork (S1).
+    Returns a failure message, or None when everything stopped. A queue worker
+    still alive after ``timeout`` would leak into later tests (S2). Async pools
+    are shut down either way and their threads joined against one deadline of
+    ``timeout`` (S1, F1), so a hung run fails the test instead of hanging the
+    session.
     """
-
-    import pytest
 
     from recertia.workers.embedded import EmbeddedQueueWorker
     from recertia.workers.run_worker import AsyncRunWorker
 
-    stopped = EmbeddedQueueWorker.stop_all(timeout=timeout)
-    AsyncRunWorker.shutdown_all()
-    if not stopped:
-        pytest.fail(
-            f"an embedded queue worker did not stop within {timeout:g}s in teardown;"
-            " it would leak into later tests",
-            pytrace=False,
-        )
+    queue_stopped = EmbeddedQueueWorker.stop_all(timeout=timeout)
+    pools_stopped = AsyncRunWorker.shutdown_all(timeout=timeout)
+    problems = []
+    if not queue_stopped:
+        problems.append(f"an embedded queue worker did not stop within {timeout:g}s in teardown")
+    if not pools_stopped:
+        problems.append(f"an async run pool thread did not exit within {timeout:g}s in teardown")
+    if not problems:
+        return None
+    return "; ".join(problems) + "; it would leak into later tests"
+
+
+def stop_test_workers(timeout: float = 5.0) -> None:
+    """``stop_test_workers_report`` that fails the current test on a leak."""
+
+    failure = stop_test_workers_report(timeout=timeout)
+    if failure is not None:
+        pytest.fail(failure, pytrace=False)

@@ -7,6 +7,7 @@ refuses an unsafe ``multi_node`` configuration before any run is claimed.
 from __future__ import annotations
 
 import threading
+import time
 import weakref
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -138,12 +139,17 @@ class AsyncRunWorker:
         self.events = events
         self.on_complete = on_complete
         self.on_failed = on_failed
-        self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="recertia-run")
+        self._max_workers = max_workers
+        self._pool = self._new_pool()
+        self._pool_open = True
         self._cancel: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
         self._futures: dict[tuple[str, str], Future[Any]] = {}
         self._queue: Any = None
         AsyncRunWorker._instances.add(self)
+
+    def _new_pool(self) -> ThreadPoolExecutor:
+        return ThreadPoolExecutor(max_workers=self._max_workers, thread_name_prefix="recertia-run")
 
     def attach_queue(self, queue: Any) -> None:
         """Forward cancel onto the durable queue. The pool remains the shim."""
@@ -151,20 +157,43 @@ class AsyncRunWorker:
         self._queue = queue
 
     def shutdown(self, wait: bool = False) -> None:
-        """Cancel queued pool work and stop the pool. ``wait`` joins its threads."""
+        """Cancel queued pool work and stop the pool. ``wait`` joins its threads.
 
-        self._pool.shutdown(wait=wait, cancel_futures=True)
-
-    @classmethod
-    def shutdown_all(cls) -> None:
-        """``shutdown(wait=True)`` every live instance (test teardown).
-
-        Joins idle ``recertia-run`` pool threads so a later fork does not run in
-        a multi-threaded process.
+        The worker leaves ``_instances`` (F2). A later ``submit`` starts a new
+        pool and registers the worker again.
         """
 
+        self._close_pool().shutdown(wait=wait, cancel_futures=True)
+
+    def _close_pool(self) -> ThreadPoolExecutor:
+        """Mark the pool closed and unregister. Returns the pool to shut down."""
+
+        with self._lock:
+            self._pool_open = False
+            AsyncRunWorker._instances.discard(self)
+            return self._pool
+
+    @classmethod
+    def shutdown_all(cls, timeout: float = 5.0) -> bool:
+        """Shut down every live instance and join its pool threads (test teardown).
+
+        Bounded (F1): each pool is shut down with ``wait=False`` and
+        ``cancel_futures=True``, then all pool threads are joined against one
+        overall deadline of ``timeout`` seconds. Returns False when a
+        ``recertia-run`` thread is still alive at the deadline (a hung run), so
+        the caller can fail instead of hanging. Idle threads are joined, so a
+        later fork does not run in a multi-threaded process.
+        """
+
+        deadline = time.monotonic() + timeout
+        threads: list[threading.Thread] = []
         for worker in list(cls._instances):
-            worker.shutdown(wait=True)
+            pool = worker._close_pool()
+            pool.shutdown(wait=False, cancel_futures=True)
+            threads.extend(pool._threads)
+        for thread in threads:
+            thread.join(max(0.0, deadline - time.monotonic()))
+        return not any(thread.is_alive() for thread in threads)
 
     def request_cancel(self, tenant_id: str, run_id: str) -> None:
         with self._lock:
@@ -179,8 +208,12 @@ class AsyncRunWorker:
 
     def submit(self, req: AsyncRunRequest) -> None:
         self.events.append(req.tenant_id, req.run_id, "run.queued", {"mode": "async"})
-        fut = self._pool.submit(self._run, req)
         with self._lock:
+            if not self._pool_open:  # reused after shutdown/shutdown_all (F2)
+                self._pool = self._new_pool()
+                self._pool_open = True
+                AsyncRunWorker._instances.add(self)
+            fut = self._pool.submit(self._run, req)
             self._futures[(req.tenant_id, req.run_id)] = fut
 
     def _fail(self, req: AsyncRunRequest, *, cancelled: bool = False) -> None:
