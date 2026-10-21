@@ -7,12 +7,12 @@ refuses an unsafe ``multi_node`` configuration before any run is claimed.
 from __future__ import annotations
 
 import threading
-import time
 import weakref
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic as _monotonic
 from typing import Any, Callable, ClassVar
 
 from contracts.budget import Budget
@@ -182,17 +182,19 @@ class AsyncRunWorker:
         overall deadline of ``timeout`` seconds. Returns False when a
         ``recertia-run`` thread is still alive at the deadline (a hung run), so
         the caller can fail instead of hanging. Idle threads are joined, so a
-        later fork does not run in a multi-threaded process.
+        later fork does not run in a multi-threaded process. ``monotonic`` is
+        bound at import: teardown runs while a test's monkeypatch of
+        ``time.monotonic`` is still active.
         """
 
-        deadline = time.monotonic() + timeout
+        deadline = _monotonic() + timeout
         threads: list[threading.Thread] = []
         for worker in list(cls._instances):
             pool = worker._close_pool()
             pool.shutdown(wait=False, cancel_futures=True)
             threads.extend(pool._threads)
         for thread in threads:
-            thread.join(max(0.0, deadline - time.monotonic()))
+            thread.join(max(0.0, deadline - _monotonic()))
         return not any(thread.is_alive() for thread in threads)
 
     def request_cancel(self, tenant_id: str, run_id: str) -> None:

@@ -271,3 +271,18 @@ def test_shutdown_prunes_the_registry_and_the_worker_is_reusable() -> None:
     assert reused in AsyncRunWorker._instances
     assert AsyncRunWorker.shutdown_all(timeout=5) is True
     assert not any(w in AsyncRunWorker._instances for w in workers)
+
+
+def test_shutdown_all_ignores_a_patched_time_monotonic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Teardown runs before monkeypatch undo; a test's fake clock must not break it."""
+
+    from recertia.workers.run_worker import AsyncRunWorker
+
+    worker = AsyncRunWorker(events=None)  # type: ignore[arg-type]
+    worker._pool.submit(lambda: None).result(5)
+
+    def exhausted_clock() -> float:
+        raise StopIteration
+
+    monkeypatch.setattr(time, "monotonic", exhausted_clock)
+    assert AsyncRunWorker.shutdown_all(timeout=5) is True
