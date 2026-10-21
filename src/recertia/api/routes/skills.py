@@ -136,6 +136,11 @@ def register_skills_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> Any:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         _require_library_write(request, principal, scope="promote", min_role="reviewer")
+        store = SkillStore(ctx.tenant_skills_root(tenant_id))
+        version_dir = store.version_dir(skill_id, version)
+        if not all((version_dir / name).is_file() for name in ("version.json", "status.json")):
+            # A fixed message: FileNotFoundError text would echo the tenant skills path.
+            raise HTTPException(status_code=404, detail="skill version not found")
         user = _optional_console_user(request)
         job = ctx.job_runs.create(
             "promote",
@@ -145,7 +150,6 @@ def register_skills_routes(app: FastAPI, rs: RouteState) -> None:
         )
         job.status = "running"
         ctx.job_runs.save(job)
-        store = SkillStore(ctx.tenant_skills_root(tenant_id))
         runs_root = ctx.tenant_runs_root(tenant_id)
         log_dir = runs_root / "promotion_logs"
         # REC-009: refusal detail goes to the operator-only sink, never to the job record,

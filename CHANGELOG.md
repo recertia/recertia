@@ -9,22 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Gap A fixture-id leak (REC-009, local prep; spec text pending CTO-rec and Rob)** —
-  a golden-gate refusal is now decision-only for proposers. `PromotionError` carries
-  `refusal_kind` (`golden_gate` | `predecessor_non_regression` | `gate_error`),
-  `failing_count` and an opaque `audit_ref`; the `failing_fixtures` attribute is gone.
-  Fixture ids, golden paths and result rows go to an operator-only SQLite store under
-  `RECERTIA_OPERATOR_AUDIT_ROOT` (`recertia.review.promotion_audit`), which fails closed:
-  unset means the detail is dropped, and a root inside a git checkout, the API root or a
-  tenant `runs_root` is refused. The promote HTTP body, the promote job record
-  (`GET /v1/jobs`, `GET /v1/jobs/{id}`; older records are redacted on read), the refusal
-  promotion log and CLI stderr no longer name fixtures; `recertia skills promote
+- **Gap A fixture-id leak (REC-009)** — a golden-gate refusal is now decision-only for
+  proposers. `PromotionError` carries `refusal_kind` (`golden_gate` |
+  `predecessor_non_regression` | `gate_error` | `audit_unavailable`), `failing_count` and an
+  opaque `audit_ref`. Fixture ids, golden paths, result rows and raw error text go to an
+  operator-only SQLite store under `RECERTIA_OPERATOR_AUDIT_ROOT`
+  (`recertia.review.promotion_audit`), which fails closed: promotion is refused before the
+  golden gate runs when the store is unset, sits inside a git checkout, the API root or a
+  tenant `runs_root`, or cannot be opened, and a write failure after the gate also refuses.
+  The root is set to `0700`, the database is created `0600`, and a root owned by another user
+  is refused. The promote HTTP body, the promote job record (`GET /v1/jobs`,
+  `GET /v1/jobs/{id}`; older records are redacted on read), the refusal promotion log and CLI
+  stderr no longer name fixtures, paths or exception text; `recertia skills promote
   --operator-detail` prints the audit record. Held-out splits get a strict hash-manifest
   loader (`recertia.evals.heldout_manifest.verify_heldout_tree`) and a schema under
   `evals/heldout/`, with no data committed. `recertia.evals.golden.run_heldout_suite`
-  verifies the split first, takes each fixture's skill from `task.json`
-  `expected_skill_id` (never from a dir name such as `h001`), and masks `golden_path`
-  and the skill-bearing run id at the source.
+  verifies the split first, refuses a runs root inside a git checkout or overlapping the
+  split, takes each fixture's skill from `task.json` `expected_skill_id` (never from a dir
+  name such as `h001`), masks `golden_path` and the skill-bearing run id at the source, and
+  removes each fixture's run state (runtime db, trajectories, copied workspace) afterwards.
+  `recertia eval run` refuses a `--golden-root`/`--golden-dir` outside a git checkout.
+
+### Changed (breaking)
+
+- **Promotion API, CLI and library (REC-009)** —
+  - `PromotionError.failing_fixtures` is removed; use `refusal_kind`, `failing_count`
+    and `audit_ref`. `promote_to_approved` requires `audit=` (an operator audit sink);
+    `None` refuses with `refusal_kind="audit_unavailable"`. Gate `ValueError`/`OSError`
+    now raise `PromotionError(refusal_kind="gate_error")` with a generic message.
+  - `POST /v1/skills/{id}/versions/{n}/promote`: the `failing_fixtures` response field is
+    removed and `decision`, `refusal_kind`, `failing_count` and `audit_ref` are added; the
+    refusal `error` text changed. An unavailable audit store is 503 (before the gate), an
+    unknown skill or version is 404 `skill version not found`, and an unexpected error is
+    400 `promotion failed: internal error; operator detail: audit_ref=…` instead of the raw
+    exception text. Promote job `meta` gains the same decision fields.
+  - `recertia skills promote` needs `--audit-root` or `RECERTIA_OPERATOR_AUDIT_ROOT` (exit 1
+    before the gate otherwise), drops the `failing_fixtures=` stderr line and gains
+    `--operator-detail`. `scripts/install_seed_library.py --promote` needs `--audit-root`.
+  - `recertia eval run` exits 2 for a `--golden-root`/`--golden-dir` outside a git checkout.
 
 ### Fixed
 

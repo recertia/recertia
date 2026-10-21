@@ -94,6 +94,26 @@ recertia skills lint
 Approved seeds must carry hash-bound sensitivity proofs (`evidence_hash`). CI runs
 `recertia skills lint` on every change that touches `skills/`.
 
+## Promotion audit store
+
+Promotion needs an operator-only audit store (REC-009). Set `RECERTIA_OPERATOR_AUDIT_ROOT`
+(or pass `recertia skills promote --audit-root DIR`, or
+`scripts/install_seed_library.py --promote --audit-root DIR`) to a private directory outside
+any git checkout, the API root, every tenant runs root, the promotion log dir and the skills
+root. Without a usable store the promotion is refused before the golden gate runs (API 503,
+CLI exit 1).
+
+The store records every failing fixture id, golden path and detail for a refusal; callers see
+only the decision, the refusal kind, a failing-fixture count and an opaque `audit_ref`. An
+operator prints a refusal's record with `recertia skills promote … --operator-detail`. The root
+is set to `0700` and the database is created `0600`; a root owned by another user is refused.
+File modes do not separate seats that share one OS user, so on a shared box treat the store as
+readable by every seat and never record real held-out detail there.
+
+`recertia eval run --golden-root/--golden-dir` refuses any path outside a git checkout. A
+decrypted held-out split runs only through `recertia.evals.golden.run_heldout_suite`, with
+its runs root outside any checkout.
+
 ## Console auth
 
 Default is **off** (API keys only). Browser sessions are not issued unless you

@@ -435,6 +435,29 @@ def test_promote_route_internal_error_text_never_reaches_proposers(
     assert FIXTURE in record["detail"] and str(fixture_dir) in record["detail"]
 
 
+def test_promote_route_returns_404_for_a_missing_skill_or_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Q3/S3: unknown skill or version -> 404 with a fixed message, no path, no job."""
+
+    client, app = _app(tmp_path, monkeypatch)
+    ctx = app.state.recertia
+    SkillStore(ctx.tenant_skills_root("t1")).write_candidate(
+        _skill(1, command="true", criterion_run="true")
+    )
+    gate = _SpyGate()
+    monkeypatch.setattr(ctx.promotion_service, "_gate", gate)
+    headers = _key(app, {"runs", "promote"})
+    for path in (f"/v1/skills/{SKILL}/versions/7/promote", "/v1/skills/no-such-skill/versions/1/promote"):
+        resp = client.post(path, headers=headers)
+        assert resp.status_code == 404, resp.text
+        assert error_text(resp) == "skill version not found"
+        _assert_no_leak(resp.text, tmp_path)
+    assert gate.calls == 0
+    jobs = client.get("/v1/jobs", headers=_key(app, {"runs"})).json()["items"]
+    assert not [item for item in jobs if item.get("job") == "promote"]
+
+
 AUDIT_CASES = ("unset", "inside_api_root", "inside_runs_root", "open_error")
 
 

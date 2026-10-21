@@ -1277,6 +1277,26 @@ recertia skills lint
 Approved seeds must carry hash-bound sensitivity proofs (`evidence_hash`). CI runs
 `recertia skills lint` on every change that touches `skills/`.
 
+## Promotion audit store
+
+Promotion needs an operator-only audit store (REC-009). Set `RECERTIA_OPERATOR_AUDIT_ROOT`
+(or pass `recertia skills promote --audit-root DIR`, or
+`scripts/install_seed_library.py --promote --audit-root DIR`) to a private directory outside
+any git checkout, the API root, every tenant runs root, the promotion log dir and the skills
+root. Without a usable store the promotion is refused before the golden gate runs (API 503,
+CLI exit 1).
+
+The store records every failing fixture id, golden path and detail for a refusal; callers see
+only the decision, the refusal kind, a failing-fixture count and an opaque `audit_ref`. An
+operator prints a refusal's record with `recertia skills promote … --operator-detail`. The root
+is set to `0700` and the database is created `0600`; a root owned by another user is refused.
+File modes do not separate seats that share one OS user, so on a shared box treat the store as
+readable by every seat and never record real held-out detail there.
+
+`recertia eval run --golden-root/--golden-dir` refuses any path outside a git checkout. A
+decrypted held-out split runs only through `recertia.evals.golden.run_heldout_suite`, with
+its runs root outside any checkout.
+
 ## Console auth
 
 Default is **off** (API keys only). Browser sessions are not issued unless you
@@ -3069,7 +3089,7 @@ Versioned under `/v1`. JSON only. Auth: `X-API-Key` with scoped keys (`runs`, `b
 | `GET` | `/v1/skills` | List/filter by `task_class`, `lifecycle` |
 | `GET` | `/v1/skills/{skill_id}/versions/{version}` | Full skill version + `identity` split (console C0) |
 | `POST` | `/v1/skills/search` | Retrieval debug: scores |
-| `POST` | `/v1/skills/{skill_id}/versions/{version}/promote` | Enqueue golden-gated promote (console C1) |
+| `POST` | `/v1/skills/{skill_id}/versions/{version}/promote` | Enqueue golden-gated promote (console C1); decision-only refusal, see *Promote responses* |
 | `GET` | `/v1/proposals` · `POST` `/v1/proposals/{id}/decision` | Improvement-plane proposals |
 | `GET` | `/v1/reviews` · `POST` `/v1/reviews/{decision_id}` | Alias of pending proposals until distill-review volume splits |
 | `GET` | `/v1/jobs` · `POST` `/v1/jobs/{job}/run` | Improvement-plane job status and manual trigger (§20). HEX/compress remain gated (RW-6). |
@@ -3084,6 +3104,19 @@ Versioned under `/v1`. JSON only. Auth: `X-API-Key` with scoped keys (`runs`, `b
 | `POST` | `/v1/goals/*` · `/v1/programs/*` · `/v1/templates` | Goal packs / programs (GP0–GP2) |
 
 `POST /v1/runs` is **not** enqueue-only in sync mode: it drives the graph to a terminal (or error) before responding. Async mode returns 202 and streams via SSE.
+
+**Promote responses (REC-009).** `POST /v1/skills/{skill_id}/versions/{version}/promote`
+returns `{job_run_id, status: "succeeded", lifecycle, active}` on success. A golden-gate
+refusal returns 200 with `status: "failed"`, a decision-only `error`, `decision: "refused"`,
+`refusal_kind` (`golden_gate` | `predecessor_non_regression` | `gate_error`), `failing_count`
+and an opaque `audit_ref` (`pa-` plus a random id); there is no `failing_fixtures` field. The
+promotion is refused **before the gate runs** with 503 and `refusal_kind: "audit_unavailable"`
+when the operator audit store (`RECERTIA_OPERATOR_AUDIT_ROOT`) is unset, sits inside the API
+root, a tenant runs root or a git checkout, or fails to open; a store write that fails after
+the gate is also a 503. An unknown skill or version is 404 `skill version not found`. An
+unexpected error is 400 `promotion failed: internal error; operator detail: audit_ref=…`. The
+promote job (`GET /v1/jobs`, `GET /v1/jobs/{id}`) carries the same decision fields and is
+always finished as `failed` or `succeeded`.
 
 Console-oriented behaviour is specified normatively in [`product-console.md`](specifications/product-console.md). **product-console.md wins on conflicts** for C0–C4.
 
@@ -3111,6 +3144,8 @@ recertia skills lint [--skills-root skills]
 recertia skills search "dependency bump" --explain
 recertia skills promote <skill_id> --version N --golden-dir PATH
 # or: --golden-root PATH [--require-task-class-gate]
+# REC-009: [--audit-root DIR] (default RECERTIA_OPERATOR_AUDIT_ROOT; required, else exit 1
+# before the gate) [--operator-detail] (operator only: print the refusal's audit record)
 recertia ledger verify [--runs-root .recertia]
 recertia lift --task-class repo-chore
 recertia keys issue|revoke|list
@@ -3121,7 +3156,7 @@ recertia jobs run mine --hint "docs/runbook.md" --submit
 recertia jobs run hex|compress   # no-op unless enablement predicates pass
 recertia metrics --task-class repo-chore
 recertia probes run --probes evals/probes/repo-chore.json
-recertia eval run --task-class repo-chore
+recertia eval run --task-class repo-chore   # --golden-root/--golden-dir must be inside a git checkout
 recertia policy
 recertia policy propose retrieval.min_score=0.60 --eval-compare "note"
 recertia memory query "dependency bump"
