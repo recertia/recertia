@@ -1,4 +1,4 @@
-"""The mypy ratchet fails when a mypy error fingerprint's count rises."""
+"""The mypy ratchet fails when a fingerprint count rises, and on stale baseline entries."""
 
 from __future__ import annotations
 
@@ -38,6 +38,18 @@ def test_ratchet_fails_when_a_fingerprint_count_increases() -> None:
 def test_ratchet_fails_on_a_new_fingerprint() -> None:
     failures = compare_counts(Counter({ASSIGN: 1}), Counter())
     assert failures == [f"new mypy error (1x): tests/unit/test_a.py [assignment] {ASSIGN.message}"]
+
+
+def test_ratchet_fails_as_stale_when_a_count_drops() -> None:
+    failures = compare_counts(Counter({ASSIGN: 1}), Counter({ASSIGN: 3}))
+    assert failures == [
+        f"3 -> 1 (fixed, baseline not lowered): tests/unit/test_a.py [assignment] {ASSIGN.message}",
+        "baseline is stale: 2 fixed, run python3 scripts/mypy_ratchet.py --write and commit",
+    ]
+
+
+def test_ratchet_holds_on_an_exact_match() -> None:
+    assert compare_counts(Counter({ASSIGN: 2}), Counter({ASSIGN: 2})) == []
 
 
 def test_parse_mypy_output_keys_by_path_code_and_message_without_line_numbers() -> None:
@@ -146,3 +158,20 @@ def test_e2e_line_move_passes(tmp_path: Path) -> None:
     result = _ratchet(tmp_path)
     assert result.returncode == 0, result.stderr
     assert "mypy ratchet ok (1 errors, 1 fingerprints" in result.stdout
+
+
+def test_e2e_fix_without_lowering_the_baseline_fails_as_stale(tmp_path: Path) -> None:
+    module = _seed(tmp_path)
+    module.write_text(BASE_MODULE.replace('x: int = "a"', "x: int = 1"), encoding="utf-8")
+    result = _ratchet(tmp_path)
+    assert result.returncode == 1
+    assert "baseline is stale: 1 fixed, run python3 scripts/mypy_ratchet.py --write" in result.stderr
+
+
+def test_e2e_fix_plus_write_passes(tmp_path: Path) -> None:
+    module = _seed(tmp_path)
+    module.write_text(BASE_MODULE.replace('x: int = "a"', "x: int = 1"), encoding="utf-8")
+    assert _ratchet(tmp_path, "--write").returncode == 0
+    result = _ratchet(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "mypy ratchet ok (0 errors, 0 fingerprints" in result.stdout
