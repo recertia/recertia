@@ -65,6 +65,9 @@ jobs:
       RECERTIA_EXECUTION_BACKEND: container
       RECERTIA_GOLDEN_BACKEND: container
       RECERTIA_REQUIRE_IMAGE_DIGEST: "1"
+      # Docker only (CTO-rec N-E): podman is also on the image, but rootless podman needs setuid
+      # newuidmap, which --no-new-privs blocks. heldout.py refuses any other runtime.
+      RECERTIA_CONTAINER_RUNTIME: docker
       RECERTIA_CONTAINER_IMAGE: python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
       # As in ci.yml container smoke: the sandbox user (65534) needs to write the bind-mounted
       # workdir on a single-tenant, ephemeral hosted runner.
@@ -185,6 +188,7 @@ jobs:
             OPENAI_API_KEY= ANTHROPIC_API_KEY= RECERTIA_NO_NETWORK=1 \
             RECERTIA_EXECUTION_BACKEND=container RECERTIA_GOLDEN_BACKEND=container \
             RECERTIA_REQUIRE_IMAGE_DIGEST=1 RECERTIA_CONTAINER_IMAGE="$RECERTIA_CONTAINER_IMAGE" \
+            RECERTIA_CONTAINER_RUNTIME=docker \
             RECERTIA_WORKDIR_WORLD_WRITE=1 \
             "$PY" -m recertia.evals.heldout \
               --manifest "$HELDOUT_MANIFEST" \
@@ -211,7 +215,8 @@ jobs:
           exit 1
 
       # Always last, always runs: no ciphertext, plaintext, staged copy, key file, record or
-      # console survives the job (CTO-rec M2 / N5).
+      # console survives the job (CTO-rec M2 / N5), and the docker-socket uid ACL is revoked
+      # (CTO-rec N-D).
       - name: Wipe held-out material
         if: always()
         env:
@@ -219,6 +224,10 @@ jobs:
         run: |
           rm -rf "$RT/ct" "$RT/ho" "$RT/tmp" "$RT/keys" "$RT/audit" "$RT/console.txt"
           find "$RT" -maxdepth 2 -name '*.key' -type f -delete
+          SOCK=/var/run/docker.sock
+          if [ -S "$SOCK" ] && command -v setfacl > /dev/null; then
+            sudo setfacl -x "u:$(id -u)" "$SOCK" 2> /dev/null || echo "heldout: acl_not_present"
+          fi
           echo "heldout: wiped"
 
   # Proposal §4 item 12 / CTO-rec N7: re-scan what was actually PUBLISHED. Fetch the finished

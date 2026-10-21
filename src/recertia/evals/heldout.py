@@ -9,11 +9,13 @@ only ``schema_version, split_id, count, hash_rule ("sha256-sorted-relpath-v1"), 
 ciphertext_sha256, created_at`` (``created_at`` is RFC 3339 with an offset). This module has NO
 manifest format of its own and does NOT hash the tree. The tree check is Build Bot-rec's WO-06
 ``verify_heldout_tree(manifest_path, root) -> HeldoutManifest`` (CTO-rec M6; interface confirmed
-by Build Bot-rec), imported exactly as
-``from recertia.evals.heldout_manifest import verify_heldout_tree, HeldoutManifestError``.
-It is the ONLY WO-06 call: nothing here loads the manifest or computes the root hash separately.
-A ``HeldoutManifestError`` is a fail-closed exit that logs only its hash/count message. Until
-WO-06 merges, every run fails closed with ``loader_unavailable``. The one field used here before
+by Build Bot-rec), imported by ONE from-import of ``verify_heldout_tree``,
+``HeldoutManifestError`` and ``HeldoutManifest`` (the result type, for CTO-rec MF-B's isinstance
+check). ``verify_heldout_tree`` is the ONLY WO-06 call: nothing here loads the manifest or
+computes the root hash separately. A ``HeldoutManifestError`` is a fail-closed exit (2) that logs
+only its hash/count message, keys from ``LOADER_REASON_KEYS`` only (MF-A). Anything raised while
+importing the loader, or a missing name, fails closed with ``loader_unavailable`` (exit 2); until
+WO-06 merges, every run does. The one field used here before
 the tree check is ``ciphertext_sha256`` (step 1 runs before decrypt); ``read_public_manifest``
 refuses any key set other than the spec's seven.
 
@@ -64,6 +66,7 @@ from typing import Any, TextIO
 # Build Bot-rec's WO-06 tree verifier (not on main yet). Interface confirmed by Build Bot-rec:
 #   verify_heldout_tree(manifest_path: Path, root: Path) -> HeldoutManifest
 #   raises HeldoutManifestError on any refusal or mismatch; messages carry hashes and counts only.
+# The tree counts as verified ONLY if the result is a HeldoutManifest instance (CTO-rec MF-B).
 LOADER_MODULE = "recertia.evals.heldout_manifest"
 HASH_RULE = "sha256-sorted-relpath-v1"
 
@@ -85,14 +88,19 @@ REQUEST_PREFIX_CHARS = 40
 # RFC 3339 date-time with a numeric offset or Z.
 _RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
 # A HeldoutManifestError message is logged only if every token is a fixed word or a
-# key=<count | sha256 hex | stage> pair. Anything else (a name, a path, free text) is replaced
-# by a fixed phrase, so an id can never reach the log through the loader's message.
+# key=value pair whose key is in LOADER_REASON_KEYS (CTO-rec MF-A). Any other token (a name, a
+# path, free text, an unknown key) replaces the WHOLE message with LOADER_REDACTED, so an id can
+# never reach the public log through the loader's message. Values: a count, a stage word, or a
+# sha256 equal to the manifest's root/ciphertext hash; any other sha256 (it could confirm a
+# guessed per-file hash) is printed as "redacted".
 _LOADER_WORDS = frozenset(
     "hash mismatch count manifest invalid refused root ciphertext tree file files missing extra "
     "unknown unlisted keys key symlink special schema version rule split unsupported".split()
 )
-_LOADER_KEY = re.compile(r"^[a-z][a-z_]{0,31}$")
-_LOADER_VALUE = re.compile(r"^(\d{1,12}|[0-9a-f]{64}|root|ciphertext|tree|manifest)$")
+LOADER_REASON_KEYS = frozenset({"expected", "got", "stage", "count", "files", "missing", "extra", "keys"})
+LOADER_REDACTED = "manifest_error redacted"
+_LOADER_STAGES = frozenset({"root", "ciphertext", "tree", "manifest"})
+_LOADER_COUNT = re.compile(r"^\d{1,12}$")
 _LOADER_MESSAGE_MAX = 400
 
 # Executor: (staged fixture dir, task_class, audit run dir) -> passed.
@@ -111,37 +119,55 @@ class Refused(Exception):
 # --------------------------------------------------------------------------- loader (WO-06)
 
 
-def _loader() -> tuple[Callable[[Path, Path], Any], type[Exception]]:
-    """WO-06's verifier and error type. Missing module or names: fail closed."""
+def _loader() -> tuple[Callable[[Path, Path], Any], type[Exception], type]:
+    """WO-06's verifier, error type and result type. Any import failure: fail closed, exit 2."""
 
     try:
         from recertia.evals.heldout_manifest import (  # type: ignore[import-not-found,unused-ignore]
+            HeldoutManifest,
             HeldoutManifestError,
             verify_heldout_tree,
         )
-    except ImportError:
+    except Exception:  # noqa: BLE001 - ImportError or anything raised at import (CTO-rec N-F)
         raise Refused("loader_unavailable") from None
-    if not callable(verify_heldout_tree) or not (
-        isinstance(HeldoutManifestError, type) and issubclass(HeldoutManifestError, Exception)
+    if (
+        not callable(verify_heldout_tree)
+        or not (isinstance(HeldoutManifestError, type) and issubclass(HeldoutManifestError, Exception))
+        or not isinstance(HeldoutManifest, type)
     ):
         raise Refused("loader_unavailable")
-    return verify_heldout_tree, HeldoutManifestError
+    return verify_heldout_tree, HeldoutManifestError, HeldoutManifest
 
 
-def loader_reason(exc: BaseException) -> str:
-    """The HeldoutManifestError message if it is hash/count-only, else a fixed phrase."""
+def loader_reason(exc: BaseException, manifest: Mapping[str, Any] | None = None) -> str:
+    """The HeldoutManifestError message if it is hash/count-only (MF-A), else LOADER_REDACTED."""
 
+    public_hashes = {
+        manifest.get(name) for name in ("root_sha256", "ciphertext_sha256") if manifest is not None
+    } - {None}
     tokens = str(exc).split()
     if not tokens or len(" ".join(tokens)) > _LOADER_MESSAGE_MAX:
-        return "hash mismatch stage=root"
+        return LOADER_REDACTED
+    out = []
     for token in tokens:
         key, sep, value = token.partition("=")
-        if sep:
-            if not (_LOADER_KEY.match(key) and _LOADER_VALUE.match(value)):
-                return "hash mismatch stage=root"
-        elif token not in _LOADER_WORDS:
-            return "hash mismatch stage=root"
-    return " ".join(tokens)
+        if not sep:
+            if token not in _LOADER_WORDS:
+                return LOADER_REDACTED
+            out.append(token)
+        elif key not in LOADER_REASON_KEYS:
+            return LOADER_REDACTED
+        elif key == "stage":
+            if value not in _LOADER_STAGES:
+                return LOADER_REDACTED
+            out.append(token)
+        elif _LOADER_COUNT.match(value):
+            out.append(token)
+        elif _HEX64.match(value):
+            out.append(token if value in public_hashes else f"{key}=redacted")
+        else:
+            return LOADER_REDACTED
+    return " ".join(out)
 
 
 def read_public_manifest(path: Path) -> dict[str, Any]:
@@ -235,18 +261,20 @@ def verify_tree(manifest_path: Path, manifest: Mapping[str, Any], staged: Path) 
     """Step 3: WO-06 ``verify_heldout_tree`` over the staged copy (the only WO-06 call).
 
     ``HeldoutManifestError`` fails closed and logs only its hash/count message (``loader_reason``).
-    Any other exception, or no ``HeldoutManifest`` back, fails closed with a fixed phrase. The task
+    Any other exception, or a result that is not a ``HeldoutManifest`` instance, fails closed with
+    a fixed phrase. The task
     count is then cross-checked against the dirs the executor will run.
     """
 
-    verify_heldout_tree, heldout_manifest_error = _loader()
+    verify_heldout_tree, heldout_manifest_error, heldout_manifest = _loader()
     try:
         result = verify_heldout_tree(manifest_path, staged)
     except heldout_manifest_error as exc:
-        raise Refused(loader_reason(exc)) from None
+        raise Refused(loader_reason(exc, manifest)) from None
     except Exception:  # noqa: BLE001 - outside the WO-06 contract: still fail closed
         raise Refused("verifier_error") from None
-    if result is None or result is False:
+    # MF-B: only a real HeldoutManifest counts as verified (not 0, "", {"ok": False}, None, ...).
+    if not isinstance(result, heldout_manifest):
         raise Refused("verifier_error")
     tasks = task_dirs(staged)
     if len(tasks) != manifest["count"]:
@@ -450,6 +478,8 @@ def preflight(env: Mapping[str, str], *, require_offline: bool) -> str | None:
         return "backend_not_container"
     if any(env.get(name, "").strip().lower() in _TRUTHY for name in _LOCAL_EXEC_VARS):
         return "backend_not_container"
+    if env.get("RECERTIA_CONTAINER_RUNTIME", "docker").strip().lower() != "docker":
+        return "runtime_not_docker"
     if require_offline and network_reachable():
         return "network_reachable"
     return None
@@ -479,6 +509,9 @@ def container_preflight() -> None:
         raise SandboxError("held-out runs require the container backend")
     if "@sha256:" not in default_container_image():
         raise SandboxError("held-out runs require a digest-pinned image")
+    # CTO-rec N-E: docker only. Rootless podman needs setuid newuidmap, which --no-new-privs blocks.
+    if settings.container_runtime != "docker":
+        raise SandboxError("held-out runs require RECERTIA_CONTAINER_RUNTIME=docker")
     if ensure_execution_ready() != "container":
         raise SandboxError("execution backend is not container")
     probe_container_runtime(timeout_s=60)

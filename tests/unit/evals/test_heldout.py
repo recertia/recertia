@@ -82,7 +82,7 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         try:
             got = _double_root(Path(root))
         except ValueError:
-            raise HeldoutManifestError("hash mismatch stage=root special_files=1") from None
+            raise HeldoutManifestError("hash mismatch stage=root special") from None
         if got != doc["root_sha256"]:
             raise HeldoutManifestError(f"hash mismatch stage=root expected={doc['root_sha256']} got={got}")
         tasks = [p for p in Path(root).glob("*/*") if (p / "task.json").is_file()]
@@ -250,6 +250,25 @@ def test_loader_without_the_error_type_fails_closed(tmp_path: Path, capsys, monk
     _expect_fail(tmp_path, capsys, manifest, ct, split, [], "loader_unavailable", 2, [])
 
 
+def test_loader_without_the_result_type_fails_closed(tmp_path: Path, capsys, monkeypatch, calls) -> None:
+    monkeypatch.delattr(sys.modules[heldout.LOADER_MODULE], "HeldoutManifest")
+    manifest, ct, split = _build(tmp_path)
+    _expect_fail(tmp_path, capsys, manifest, ct, split, [], "loader_unavailable", 2, [])
+
+
+class _RaisingModule(types.ModuleType):
+    def __getattr__(self, name: str) -> object:
+        raise RuntimeError("zz-secret-fixture-alpha broken at import")
+
+
+def test_non_import_error_at_loader_import_exits_2(tmp_path: Path, capsys, monkeypatch) -> None:
+    """CTO-rec N-F: anything raised while importing the loader is loader_unavailable, exit 2."""
+
+    monkeypatch.setitem(sys.modules, heldout.LOADER_MODULE, _RaisingModule(heldout.LOADER_MODULE))
+    manifest, ct, split = _build(tmp_path)
+    _expect_fail(tmp_path, capsys, manifest, ct, split, [], "loader_unavailable", 2, [])
+
+
 def test_heldout_manifest_error_logs_its_hash_message(tmp_path: Path, capsys, calls) -> None:
     manifest, ct, split = _build(tmp_path)
     expected = json.loads(manifest.read_text())["root_sha256"]
@@ -258,8 +277,75 @@ def test_heldout_manifest_error_logs_its_hash_message(tmp_path: Path, capsys, ca
     assert _run(tmp_path, manifest, ct, split, spy) == heldout.EXIT_VERIFY_FAILED
     out = capsys.readouterr()
     _assert_no_leak(out.out + out.err)
-    assert f"FAIL hash mismatch stage=root expected={expected} got=" in out.out
+    # The manifest's public root hash is printed; the tampered tree's hash is not (N-A).
+    assert f"FAIL hash mismatch stage=root expected={expected} got=redacted executed=0" in out.out
     assert "execute" not in calls and "container_preflight" not in calls
+
+
+def test_loader_reason_keys_are_a_fixed_frozenset() -> None:
+    assert isinstance(heldout.LOADER_REASON_KEYS, frozenset)
+    assert heldout.LOADER_REASON_KEYS == {
+        "expected",
+        "got",
+        "stage",
+        "count",
+        "files",
+        "missing",
+        "extra",
+        "keys",
+    }
+
+
+@pytest.mark.parametrize(
+    ("message", "want"),
+    [
+        ("count mismatch expected=2 got=3", "count mismatch expected=2 got=3"),
+        ("hash mismatch stage=ciphertext", "hash mismatch stage=ciphertext"),
+        (
+            "hash mismatch stage=root files=3 missing=1 extra=0",
+            "hash mismatch stage=root files=3 missing=1 extra=0",
+        ),
+        (f"hash mismatch expected={'b' * 64}", "hash mismatch expected=b" + "b" * 63),
+        (f"hash mismatch got={'c' * 64}", "hash mismatch got=redacted"),
+        ("count mismatch secret_fixture_alpha=1", "manifest_error redacted"),
+        ("hash mismatch unknown_key=0", "manifest_error redacted"),
+        ("hash mismatch stage=zz-secret-fixture-alpha", "manifest_error redacted"),
+        ("hash mismatch stage=root expected=add-editorconfig", "manifest_error redacted"),
+    ],
+    ids=[
+        "count",
+        "stage",
+        "file-counts",
+        "public-hash",
+        "other-hash",
+        "unknown-key-id",
+        "unknown-key",
+        "bad-stage",
+        "bad-value",
+    ],
+)
+def test_loader_reason_allow_set(message: str, want: str) -> None:
+    """MF-A: keys only from LOADER_REASON_KEYS; any other key redacts the whole message."""
+
+    manifest = {"root_sha256": "b" * 64, "ciphertext_sha256": "d" * 64}
+    assert heldout.loader_reason(HeldoutManifestError(message), manifest) == want
+
+
+def test_unknown_key_in_loader_message_is_redacted_end_to_end(
+    tmp_path: Path, capsys, monkeypatch, calls
+) -> None:
+    mod = sys.modules[heldout.LOADER_MODULE]
+
+    def refuse(manifest_path: Path, root: Path) -> HeldoutManifest:
+        raise HeldoutManifestError("count mismatch zz_secret_fixture_alpha=1 expected=2")
+
+    monkeypatch.setattr(mod, "verify_heldout_tree", refuse)
+    manifest, ct, split = _build(tmp_path)
+    assert _run(tmp_path, manifest, ct, split, _Spy([])) == heldout.EXIT_VERIFY_FAILED
+    out = capsys.readouterr()
+    _assert_no_leak(out.out + out.err)
+    assert "heldout: FAIL manifest_error redacted executed=0" in out.out
+    assert "secret_fixture" not in out.out + out.err
 
 
 @pytest.mark.parametrize(
@@ -270,10 +356,11 @@ def test_heldout_manifest_error_logs_its_hash_message(tmp_path: Path, capsys, ca
         "Hash Mismatch: root",
         "hash mismatch stage=root editorconfig",
         "count mismatch skill=add-gitignore-entry",
+        "count mismatch secret_fixture_alpha=1",
         "x" * 400,
         "",
     ],
-    ids=["path", "id", "free-text", "bare-word", "id-value", "too-long", "empty"],
+    ids=["path", "id", "free-text", "bare-word", "id-value", "unknown-key", "too-long", "empty"],
 )
 def test_heldout_manifest_error_with_names_logs_a_fixed_phrase(
     tmp_path: Path, capsys, monkeypatch, calls, message: str
@@ -289,11 +376,44 @@ def test_heldout_manifest_error_with_names_logs_a_fixed_phrase(
     assert _run(tmp_path, manifest, ct, split, spy) == heldout.EXIT_VERIFY_FAILED
     out = capsys.readouterr()
     _assert_no_leak(out.out + out.err)
-    assert "heldout: FAIL hash mismatch stage=root executed=0" in out.out
+    assert "heldout: FAIL manifest_error redacted executed=0" in out.out
     assert not message or message not in out.out + out.err
 
 
-@pytest.mark.parametrize("result", ["raise", None, False], ids=["other-exception", "none", "false"])
+class _NotAManifest:
+    split_id = "heldout-test-v1"
+    count = 2
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        "raise",
+        0,
+        {"ok": False},
+        None,
+        {"split_id": "heldout-test-v1", "count": 2},
+        _NotAManifest(),
+        False,
+        "",
+        "ok",
+        True,
+        1,
+    ],
+    ids=[
+        "other-exception",
+        "zero",
+        "ok-false",
+        "none",
+        "dict",
+        "wrong-class",
+        "false",
+        "empty-str",
+        "str",
+        "true",
+        "one",
+    ],
+)
 def test_verifier_outside_the_contract_fails_closed(
     tmp_path: Path, capsys, monkeypatch, calls, result: object
 ) -> None:
@@ -347,16 +467,40 @@ def test_only_verify_heldout_tree_is_used_from_wo06() -> None:
     tree = ast.parse(src.read_text(encoding="utf-8"))
     froms = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == heldout.LOADER_MODULE]
     assert len(froms) == 1
-    assert sorted(a.name for a in froms[0].names) == ["HeldoutManifestError", "verify_heldout_tree"]
+    assert sorted(a.name for a in froms[0].names) == [
+        "HeldoutManifest",
+        "HeldoutManifestError",
+        "verify_heldout_tree",
+    ]
     assert all(a.asname is None for a in froms[0].names)
+    dynamic_names = {"__import__", "importlib", "exec", "eval", "compile", "__builtins__", "globals", "vars"}
+    dynamic_attrs = {"__import__", "import_module", "find_spec", "__loader__", "__builtins__"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             assert all(not a.name.startswith(heldout.LOADER_MODULE) for a in node.names)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            assert node.func.attr not in ("import_module", "__import__"), "no dynamic loader import"
+            assert all(a.name.split(".")[0] != "importlib" for a in node.names), "no importlib"
+        if isinstance(node, ast.ImportFrom):
+            assert (node.module or "").split(".")[0] != "importlib", "no importlib"
         if isinstance(node, ast.Name | ast.Attribute):
             name = node.id if isinstance(node, ast.Name) else node.attr
             assert name not in forbidden, name
+            dynamic = dynamic_names if isinstance(node, ast.Name) else dynamic_attrs
+            assert name not in dynamic, f"no dynamic import: {name}"
+        # The loader module is reached ONLY through the from-import: its name is never read
+        # (no sys.modules[LOADER_MODULE], no getattr on it), and no string names it.
+        if isinstance(node, ast.Name) and node.id == "LOADER_MODULE":
+            assert isinstance(node.ctx, ast.Store), "LOADER_MODULE is only assigned in heldout.py"
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if "heldout_manifest" in node.value:
+                assert node.value == heldout.LOADER_MODULE
+        if isinstance(node, ast.Subscript):
+            assert ast.unparse(node.value) != "sys.modules", "no sys.modules[...] lookups"
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == "sys.modules.get":
+            raise AssertionError("no sys.modules.get(...)")
+    module_strings = [
+        n for n in ast.walk(tree) if isinstance(n, ast.Constant) and n.value == heldout.LOADER_MODULE
+    ]
+    assert len(module_strings) == 1  # the LOADER_MODULE assignment
     calls_to_loader = [
         n
         for n in ast.walk(tree)
@@ -373,6 +517,44 @@ def test_only_verify_heldout_tree_is_used_from_wo06() -> None:
         for name in forbidden:
             assert name not in text, (rel, name)
         assert "created_at_" + "pt" not in text, rel
+
+
+class _RecordingModule(types.ModuleType):
+    """A loader double that records every attribute read (catches getattr/__import__/importlib)."""
+
+    def __init__(self, name: str, inner: types.ModuleType, seen: list[str]) -> None:
+        super().__init__(name)
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_seen", seen)
+
+    def __getattribute__(self, name: str) -> object:
+        if not name.startswith("_"):
+            object.__getattribute__(self, "_seen").append(name)
+        if name.startswith("__") or name in ("_inner", "_seen"):
+            return object.__getattribute__(self, name)
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+
+def test_only_three_wo06_names_are_read_at_runtime(
+    tmp_path: Path, capsys, monkeypatch, calls, fake_docker
+) -> None:
+    """Runtime proof for N-B: a full good run reads only the three from-import names, however
+    the access is spelled. Forbidden names on the double fail the run if anything calls them."""
+
+    seen: list[str] = []
+    inner = sys.modules[heldout.LOADER_MODULE]
+
+    def _forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("separate WO-06 call")
+
+    for name in ("load_heldout" + "_manifest", "compute_root" + "_sha256"):
+        setattr(inner, name, _forbidden)
+    monkeypatch.setitem(
+        sys.modules, heldout.LOADER_MODULE, _RecordingModule(heldout.LOADER_MODULE, inner, seen)
+    )
+    manifest, ct, split = _build(tmp_path)
+    assert _run(tmp_path, manifest, ct, split, _Spy(calls)) == heldout.EXIT_OK
+    assert seen and set(seen) <= {"verify_heldout_tree", "HeldoutManifestError", "HeldoutManifest"}, seen
 
 
 def test_unknown_manifest_key_fails_closed(tmp_path: Path, capsys, calls) -> None:
@@ -643,6 +825,7 @@ def test_container_preflight_failure_fails_closed(tmp_path: Path, capsys, calls)
 
 
 def _container_settings(monkeypatch: pytest.MonkeyPatch, image: str) -> None:
+    monkeypatch.setenv("RECERTIA_CONTAINER_RUNTIME", "docker")
     monkeypatch.setenv("RECERTIA_EXECUTION_BACKEND", "container")
     monkeypatch.setenv("RECERTIA_GOLDEN_BACKEND", "container")
     monkeypatch.setenv("RECERTIA_CONTAINER_IMAGE", image)
@@ -687,6 +870,32 @@ def test_real_container_preflight_refuses_tag_only_image_and_no_runtime(monkeypa
     monkeypatch.setenv("RECERTIA_GOLDEN_BACKEND", "local")
     with pytest.raises(SandboxError, match="container backend"):
         heldout.container_preflight()
+
+
+@pytest.mark.parametrize("runtime", ["podman", None], ids=["podman", "unset"])
+def test_container_preflight_requires_docker_runtime(monkeypatch, runtime: str | None) -> None:  # noqa: ANN001
+    """CTO-rec N-E: the runtime is pinned to docker; podman or an unpinned runtime is refused."""
+
+    from recertia.solver import container
+    from recertia.solver.sandbox import SandboxError
+
+    _container_settings(monkeypatch, DIGEST_IMAGE)
+    if runtime is None:
+        monkeypatch.delenv("RECERTIA_CONTAINER_RUNTIME")
+    else:
+        monkeypatch.setenv("RECERTIA_CONTAINER_RUNTIME", runtime)
+    monkeypatch.setattr(container, "container_runtime", lambda: runtime or "podman")
+    with pytest.raises(SandboxError, match="RUNTIME=docker"):
+        heldout.container_preflight()
+
+
+def test_preflight_refuses_a_non_docker_runtime_env(tmp_path: Path, capsys, calls) -> None:
+    manifest, ct, split = _build(tmp_path)
+    spy = _Spy(calls)
+    env = {**CLEAN_ENV, "RECERTIA_CONTAINER_RUNTIME": "podman"}
+    assert _run(tmp_path, manifest, ct, split, spy, env=env) == heldout.EXIT_REFUSED
+    assert calls == []
+    assert "FAIL reason=runtime_not_docker executed=0" in capsys.readouterr().out
 
 
 def test_digest_image_runs_with_pull_never_and_no_network(monkeypatch, tmp_path: Path) -> None:  # noqa: ANN001
@@ -1034,6 +1243,10 @@ def test_workflow_cto_must_fixes_m2_to_m5_and_log_scan_job() -> None:
     acl = 'sudo setfacl -m "u:$(id -u):rw" "$SOCK"'
     assert acl in evaluate and evaluate.index(acl) < evaluate.index("sudo unshare --net")
     assert "docker_socket_or_setfacl_missing" in evaluate
+    # N-E: runtime pinned to docker for the job and through env -i.
+    assert "RECERTIA_CONTAINER_RUNTIME: docker" in code and "RECERTIA_CONTAINER_RUNTIME=docker" in evaluate
+    # N-D: the always() wipe revokes the socket ACL.
+    assert 'sudo setfacl -x "u:$(id -u)" "$SOCK"' in steps["evaluate/Wipe held-out material"]
     # M2 / N4: staging under RUNNER_TEMP; the in-module guards see the workspace and debug flag.
     for passed in (
         'TMPDIR="$HO_TMP"',
