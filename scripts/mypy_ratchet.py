@@ -25,6 +25,7 @@ script against temporary modules. CI uses the defaults.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -115,11 +116,22 @@ def compare_counts(actual: Counter[Fingerprint], baseline: Counter[Fingerprint])
     return failures
 
 
+def mypy_env() -> dict[str, str]:
+    """The caller's environment without PYTHONPATH.
+
+    CI sets no PYTHONPATH. A local PYTHONPATH that holds the repo root makes mypy
+    treat ``scripts`` (reached from tests/) as an installed package and hide its
+    errors, so local runs and ``--write`` would disagree with CI.
+    """
+
+    return {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+
+
 def run_mypy(root: Path = REPO_ROOT, targets: list[str] | None = None) -> Counter[Fingerprint]:
     cmd = [sys.executable, "-m", "mypy", "--no-error-summary", *(targets or TARGETS)]
     for module in strict_modules:
         cmd.extend(["--strict", module])  # pragma: no cover — list starts empty
-    proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, env=mypy_env())
     # mypy exits 1 when it finds errors. That is an input to the ratchet, not a crash.
     if proc.returncode not in {0, 1}:
         sys.stderr.write(proc.stderr or proc.stdout)

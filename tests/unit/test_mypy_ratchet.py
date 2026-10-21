@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tomllib
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
 from scripts.mypy_ratchet import (
     REPO_ROOT,
     TARGETS,
     Fingerprint,
     compare_counts,
+    mypy_env,
     parse_mypy_output,
     read_baseline,
     render_baseline,
@@ -79,6 +83,13 @@ def test_ci_pins_mypy_and_keeps_the_plain_gating_step() -> None:
     assert "pip install mypy==2.4.0" in ci
     assert "run: mypy contracts/ src/recertia/\n" in ci
     assert "run: python3 scripts/mypy_ratchet.py\n" in ci
+
+
+def test_mypy_subprocess_env_drops_pythonpath(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT))
+    env = mypy_env()
+    assert "PYTHONPATH" not in env
+    assert env["PATH"] == os.environ["PATH"]
 
 
 # End to end: run the real script (and real mypy) against a temporary module.
