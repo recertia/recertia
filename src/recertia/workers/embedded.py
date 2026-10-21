@@ -44,6 +44,19 @@ class EmbeddedQueueWorker:
             )
             self._thread.start()
 
+    def stop(self, timeout: float = 5.0) -> None:
+        """Stop polling and wait for the thread to exit.
+
+        An in-flight item is finished first. ``ensure_started`` starts a new
+        thread later if work is enqueued again.
+        """
+
+        with self._guard:
+            thread = self._thread
+            self._stop.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout)
+
     def flush(self, timeout: float = 30.0) -> None:
         """Block until queued and in-flight items have a terminal status."""
 

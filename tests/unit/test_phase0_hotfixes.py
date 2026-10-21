@@ -8,6 +8,7 @@ import multiprocessing
 import os
 import subprocess
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -439,11 +440,17 @@ def test_resume_admits_quota(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         },
     )
     assert created.status_code == 200, created.text
+    # REC-026: the app's embedded queue worker keeps polling after the create
+    # returns. Stop it, or it can claim "hold-slot" before the manual claim
+    # below (CI flake: ``assert claimed`` -> ``assert []``).
+    app.state.recertia.embedded.stop()
     queue = app.state.recertia.queue
     queue.set_max_in_flight("t1", 1)
     from recertia.workers.queue import QueueItem
 
     queue.enqueue(QueueItem(tenant_id="t1", run_id="hold-slot", kind="run", payload={}))
+    # Wider than one 50 ms poll: without the stop above this fails every time.
+    time.sleep(0.2)
     claimed = queue.claim("cap-holder")
     assert claimed
     blocked = client.post("/v1/runs/resume-q/resume", headers=headers)
