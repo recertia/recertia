@@ -20,7 +20,8 @@ from recertia.evals.golden import (
 from recertia.evals.heldout_manifest import HeldoutManifestError, compute_root_sha256
 from recertia.evals.store import EvalStore
 from recertia.memory.procedural.store import SkillStore
-from tests.unit.review.test_promotion_leak import _golden, _skill
+from tests.support.promotion_fixtures import leak_golden as _golden
+from tests.support.promotion_fixtures import leak_skill as _skill
 
 SKILL = "leak-probe"
 SPLIT_ID = "heldout-synthetic-chore-v1"
