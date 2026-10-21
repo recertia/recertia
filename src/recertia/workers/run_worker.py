@@ -7,11 +7,12 @@ refuses an unsafe ``multi_node`` configuration before any run is claimed.
 from __future__ import annotations
 
 import threading
+import weakref
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 from contracts.budget import Budget
 from contracts.common import Arm
@@ -124,6 +125,8 @@ def load_async_request(payload: dict[str, Any]) -> AsyncRunRequest:
 
 
 class AsyncRunWorker:
+    _instances: ClassVar[weakref.WeakSet[AsyncRunWorker]] = weakref.WeakSet()
+
     def __init__(
         self,
         *,
@@ -140,14 +143,28 @@ class AsyncRunWorker:
         self._lock = threading.Lock()
         self._futures: dict[tuple[str, str], Future[Any]] = {}
         self._queue: Any = None
+        AsyncRunWorker._instances.add(self)
 
     def attach_queue(self, queue: Any) -> None:
         """Forward cancel onto the durable queue. The pool remains the shim."""
 
         self._queue = queue
 
-    def shutdown(self) -> None:
-        self._pool.shutdown(wait=False, cancel_futures=True)
+    def shutdown(self, wait: bool = False) -> None:
+        """Cancel queued pool work and stop the pool. ``wait`` joins its threads."""
+
+        self._pool.shutdown(wait=wait, cancel_futures=True)
+
+    @classmethod
+    def shutdown_all(cls) -> None:
+        """``shutdown(wait=True)`` every live instance (test teardown).
+
+        Joins idle ``recertia-run`` pool threads so a later fork does not run in
+        a multi-threaded process.
+        """
+
+        for worker in list(cls._instances):
+            worker.shutdown(wait=True)
 
     def request_cancel(self, tenant_id: str, run_id: str) -> None:
         with self._lock:
@@ -243,9 +260,7 @@ class AsyncRunWorker:
 
             try:
                 if req.action == "resume":
-                    state = bundle.orchestrator.resume(
-                        req.run_id, workdir=req.workdir, script=req.script
-                    )
+                    state = bundle.orchestrator.resume(req.run_id, workdir=req.workdir, script=req.script)
                 else:
                     try:
                         state = bundle.orchestrator.start(
@@ -259,9 +274,7 @@ class AsyncRunWorker:
                             manifest=bundle.run_manifest(),
                         )
                     except RunIdExistsError:
-                        state = bundle.orchestrator.resume(
-                            req.run_id, workdir=req.workdir, script=req.script
-                        )
+                        state = bundle.orchestrator.resume(req.run_id, workdir=req.workdir, script=req.script)
             except RunCancelled:
                 raise
             self.events.append(

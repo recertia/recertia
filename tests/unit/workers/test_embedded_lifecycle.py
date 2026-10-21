@@ -184,3 +184,32 @@ def test_stop_all_stops_every_live_instance(tmp_path: Path) -> None:
             w._stop.set()
         for q in queues:
             q.close()
+
+
+def test_teardown_fails_when_a_queue_worker_does_not_stop(rig: Any) -> None:
+    """S2: the suite teardown fails the test instead of leaking the thread."""
+
+    from tests.conftest import stop_test_workers
+
+    _enqueue(rig.queue, "gate")
+    rig.embedded.ensure_started()
+    assert rig.worker.entered.wait(5)
+    with pytest.raises(pytest.fail.Exception, match="did not stop"):
+        stop_test_workers(timeout=0.05)
+    rig.worker.release.set()
+    stop_test_workers(timeout=5)  # passes once the in-flight item ends
+    assert _new_queue_threads(rig.before) == []
+
+
+def test_teardown_joins_idle_async_pool_threads() -> None:
+    """S1: idle ``recertia-run`` pool threads are joined, not left for a later fork."""
+
+    from recertia.workers.run_worker import AsyncRunWorker
+    from tests.conftest import stop_test_workers
+
+    worker = AsyncRunWorker(events=None)  # type: ignore[arg-type]
+    worker._pool.submit(lambda: None).result(5)
+    pool_threads = [t for t in threading.enumerate() if t.name.startswith("recertia-run")]
+    assert pool_threads
+    stop_test_workers(timeout=5)
+    assert not any(t.is_alive() for t in pool_threads)

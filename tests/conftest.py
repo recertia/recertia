@@ -114,15 +114,38 @@ def pytest_runtest_setup(item: Any) -> None:
 
 
 def pytest_runtest_teardown(item: Any, nextitem: Any) -> None:
-    """Stop every embedded queue worker a test started (REC-029, N4).
+    """Stop every worker thread a test started (REC-029, N4, S1, S2).
 
     Apps built with ``create_app`` start a ``recertia-queue`` daemon thread on
     the first create or resume and nothing stopped it, so threads piled up
     across the suite. This runs before fixture finalizers, so no queue is
-    closed under a live worker thread.
+    closed under a live worker thread. A worker restarts on its next
+    ``ensure_started`` (create, resume or ``flush``); a test that waits on the
+    queue across a test boundary without one of those would stall.
     """
 
     del item, nextitem
-    from recertia.workers.embedded import EmbeddedQueueWorker
+    stop_test_workers()
 
-    EmbeddedQueueWorker.stop_all(timeout=5.0)
+
+def stop_test_workers(timeout: float = 5.0) -> None:
+    """Stop embedded queue workers and join idle async pool threads.
+
+    Fails the test when a queue worker is still alive after ``timeout``: it
+    would leak into later tests (S2). Async pools are shut down either way so
+    no ``recertia-run`` thread survives into a later fork (S1).
+    """
+
+    import pytest
+
+    from recertia.workers.embedded import EmbeddedQueueWorker
+    from recertia.workers.run_worker import AsyncRunWorker
+
+    stopped = EmbeddedQueueWorker.stop_all(timeout=timeout)
+    AsyncRunWorker.shutdown_all()
+    if not stopped:
+        pytest.fail(
+            f"an embedded queue worker did not stop within {timeout:g}s in teardown;"
+            " it would leak into later tests",
+            pytrace=False,
+        )
