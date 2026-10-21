@@ -142,6 +142,8 @@ def test_skills_promote_via_cli(tmp_path: Path) -> None:
             str(tmp_path / "runs"),
             "--log-dir",
             str(tmp_path / "logs"),
+            "--audit-root",
+            str(tmp_path / "operator-audit"),
         ],
     )
     assert result.exit_code == 0, result.output

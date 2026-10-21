@@ -26,6 +26,7 @@ from recertia.memory.episodic import EpisodicStore
 from recertia.memory.procedural.promote import PromotionError, promote_to_approved
 from recertia.memory.procedural.store import SkillStore
 from recertia.memory.semantic import FactStore
+from recertia.review.promotion_audit import OperatorAuditStore
 
 
 def test_synthetic_lift_and_null_are_classified() -> None:
@@ -154,6 +155,7 @@ def test_intentionally_bad_skill_blocked_by_regression_gate(tmp_path: Path) -> N
             golden_dir=golden,
             runs_root=tmp_path / "runs",
             log_dir=tmp_path / "logs",
+            audit=OperatorAuditStore(tmp_path / "operator-audit"),
         )
     # REC-009: decision-only refusal; fixture ids go to the operator audit sink.
     assert exc.value.refusal_kind == "golden_gate"

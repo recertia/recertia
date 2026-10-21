@@ -113,12 +113,16 @@ def test_pc1_list_runs_tenant_isolation(tmp_path: Path) -> None:
     assert spoof.status_code == 403
 
 
-def test_pc2_promote_does_not_skip_golden_gate(tmp_path: Path) -> None:
+def test_pc2_promote_does_not_skip_golden_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from datetime import datetime, timezone
 
     from contracts.criteria import SensitivityProof, SkillCertificationCriterion
     from contracts.skill import Hygiene, Provenance, SkillVersion, Step
 
+    # REC-009: promotion needs the operator audit store, outside the API root.
+    monkeypatch.setenv("RECERTIA_OPERATOR_AUDIT_ROOT", str(tmp_path / "operator-audit"))
     skills = tmp_path / "skills"
     client, app = _client(tmp_path, skills_root=skills)
     headers = _issue(app)

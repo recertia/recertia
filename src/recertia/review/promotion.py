@@ -42,6 +42,7 @@ class PromotionWriter:
 REFUSAL_GOLDEN_GATE = "golden_gate"
 REFUSAL_PREDECESSOR = "predecessor_non_regression"
 REFUSAL_GATE_ERROR = "gate_error"
+REFUSAL_AUDIT_UNAVAILABLE = "audit_unavailable"
 
 
 class PromotionAuditSink(Protocol):
@@ -55,7 +56,8 @@ class PromotionError(Exception):
 
     Proposer-facing and decision-only (REC-009): a gate refusal carries the refusal kind,
     the number of failing fixtures and an opaque ``audit_ref``. Fixture ids, golden paths,
-    log paths, inputs and criteria go only to the operator audit sink.
+    log paths, inputs and criteria go only to the operator audit sink. With no usable sink
+    the refusal kind is ``audit_unavailable`` and the gate does not run.
     """
 
     def __init__(
@@ -91,6 +93,7 @@ def promote_to_approved(
     golden_root: Path | None = None,
     runs_root: Path,
     log_dir: Path,
+    audit: PromotionAuditSink | None,
     model_validated_on: str = "m1-seed",
     tool_fingerprint: dict[str, str] | None = None,
     repo_root: Path | None = None,
@@ -98,7 +101,6 @@ def promote_to_approved(
     factory: object | None = None,
     executor: object | None = None,
     gate: GateRunner | None = None,
-    audit: PromotionAuditSink | None = None,
 ) -> SkillStatus:
     """Run golden regression; on pass, write ``lifecycle=approved`` and the log ref.
 
@@ -109,10 +111,13 @@ def promote_to_approved(
     (contribution evidence); human-authored and mined versions go active on approval.
 
     A gate refusal raises a decision-only :class:`PromotionError`. Its full detail goes to
-    ``audit`` (operator-only). With no ``audit`` sink the detail is dropped, never written
-    anywhere a proposer can read; the log in ``log_dir`` then holds the decision only.
+    ``audit`` (operator-only); the log in ``log_dir`` holds the decision only. ``audit`` is
+    required and fails closed: ``None`` refuses before anything runs, and a sink that
+    cannot record the refusal turns it into an ``audit_unavailable`` refusal.
     """
 
+    if audit is None:
+        raise _audit_unavailable(skill_id, version, "the golden gate did not run")
     ver = store.get_version(skill_id, version)
     status = store.get_status(skill_id, version)
     stats = store.get_stats(skill_id, version)
@@ -405,26 +410,38 @@ def _run_regression(
     )
 
 
-def _record_refusal(audit: PromotionAuditSink | None, entry: dict[str, Any]) -> str | None:
-    if audit is None:
-        return None
-    return audit.record(entry)
+def _audit_unavailable(skill_id: str, version: int, what: str) -> PromotionError:
+    return PromotionError(
+        f"promotion refused for {skill_id}@v{version}: operator audit store unavailable; {what}",
+        refusal_kind=REFUSAL_AUDIT_UNAVAILABLE,
+    )
+
+
+def _record_refusal(audit: PromotionAuditSink, entry: dict[str, Any]) -> str:
+    """Record the refusal or refuse as ``audit_unavailable``; the sink error never travels."""
+
+    audit_ref: str | None = None
+    try:
+        audit_ref = audit.record(entry)
+    except Exception:  # noqa: BLE001 - any sink failure fails closed
+        audit_ref = None
+    if not audit_ref:
+        raise _audit_unavailable(
+            str(entry["skill_id"]), int(entry["version"]), "the refusal detail was not recorded"
+        )
+    return audit_ref
 
 
 def _refusal_message(
-    label: str, skill_id: str, version: int, failing_count: int | None, audit_ref: str | None
+    label: str, skill_id: str, version: int, failing_count: int | None, audit_ref: str
 ) -> str:
     message = f"promotion refused: {label} failed for {skill_id}@v{version}"
     if failing_count is not None:
         message += f": {failing_count} failing fixture(s)"
-    if audit_ref is not None:
-        return f"{message}; operator detail: audit_ref={audit_ref}"
-    return f"{message}; operator detail not recorded (operator audit root unset)"
+    return f"{message}; operator detail: audit_ref={audit_ref}"
 
 
-def _write_refusal_log(
-    log_path: Path, refusal_kind: str, failing_count: int, audit_ref: str | None
-) -> None:
+def _write_refusal_log(log_path: Path, refusal_kind: str, failing_count: int, audit_ref: str) -> None:
     """Decision-only log: no results, fixture ids, golden paths or run ids."""
 
     payload = {

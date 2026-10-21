@@ -23,7 +23,8 @@ from recertia.settings import KNOWN_ENV_KEYS, load_settings
 def test_unset_root_fails_closed(root: str | None) -> None:
     with pytest.raises(AuditSinkUnavailable, match="unset"):
         OperatorAuditStore(root)
-    assert open_operator_audit(root) is None
+    with pytest.raises(AuditSinkUnavailable, match="unset"):  # no None fallback (M1)
+        open_operator_audit(root)
 
 
 def test_root_inside_a_forbidden_root_or_checkout_is_refused(tmp_path: Path) -> None:

@@ -234,13 +234,11 @@ def open_operator_audit(
     root: Path | str | None,
     *,
     forbidden_roots: Iterable[Path | str] = (),
-) -> OperatorAuditStore | None:
-    """Open the sink, or return ``None`` when it is unset or refused.
+) -> OperatorAuditStore:
+    """Open the sink or raise :class:`AuditSinkUnavailable`. There is no fallback.
 
-    ``None`` means refusal detail is dropped, never written somewhere else.
+    Promotion callers (the API route, ``recertia skills promote``) open the sink before
+    the golden gate runs and refuse the promotion when this raises.
     """
 
-    try:
-        return OperatorAuditStore(root, forbidden_roots=forbidden_roots)
-    except AuditSinkUnavailable:
-        return None
+    return OperatorAuditStore(root, forbidden_roots=forbidden_roots)

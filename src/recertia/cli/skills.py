@@ -148,7 +148,8 @@ def skills_promote(
     """Promote a skill to approved after the golden regression gate (specs §8).
 
     A refusal prints the decision only. Fixture ids and paths go to the operator
-    audit store; ``--operator-detail`` prints that record.
+    audit store; ``--operator-detail`` prints that record. Without a usable audit
+    store the promotion is refused before the gate runs.
     """
 
     from recertia.app.authz import PolicyDecisionPoint
@@ -157,7 +158,7 @@ def skills_promote(
     from recertia.memory.procedural.promote import PromotionError
     from recertia.memory.procedural.store import SkillStore
     from recertia.ports.identity import Principal
-    from recertia.review.promotion_audit import open_operator_audit
+    from recertia.review.promotion_audit import AuditSinkUnavailable, open_operator_audit
 
     if golden_dir is None and golden_root is None:
         typer.echo("provide --golden-dir and/or --golden-root", err=True)
@@ -179,7 +180,18 @@ def skills_promote(
         root_setting: Path | str | None = settings.operator_audit_root
     else:
         root_setting = audit_root
-    audit = open_operator_audit(root_setting, forbidden_roots=[runs_root])
+    try:
+        audit = open_operator_audit(
+            root_setting, forbidden_roots=[runs_root, log_dir, skills_root]
+        )
+    except AuditSinkUnavailable:
+        typer.echo(
+            "PROMOTION REFUSED: operator audit store unavailable; the golden gate did not "
+            "run. Set RECERTIA_OPERATOR_AUDIT_ROOT or --audit-root to a private directory "
+            "outside any git checkout, the runs root, the log dir and the skills root.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
     service = PromotionService(pdp=PolicyDecisionPoint.load(surface="cli"))
     try:
         status = service.promote(
@@ -203,12 +215,9 @@ def skills_promote(
     except PromotionError as exc:
         typer.echo(f"PROMOTION FAILED: {exc}", err=True)
         if operator_detail:
-            record = audit.read(exc.audit_ref) if audit is not None and exc.audit_ref else None
+            record = audit.read(exc.audit_ref) if exc.audit_ref else None
             if record is None:
-                typer.echo(
-                    "operator detail unavailable: operator audit root unset or refused",
-                    err=True,
-                )
+                typer.echo("operator detail unavailable: no audit record for this refusal", err=True)
             else:
                 typer.echo(json.dumps(record, indent=2, default=str), err=True)
         raise typer.Exit(code=1) from None

@@ -34,6 +34,7 @@ from recertia.memory.scope import (
 from recertia.memory.semantic import FactStore
 from recertia.nodes.context import NodeContext
 from recertia.nodes.join import LAYER_THRESHOLD, join
+from recertia.review.promotion_audit import OperatorAuditStore
 from recertia.solver.container import run_with_backend
 from recertia.store.backend import open_backend, postgres_dialect_mentions_pgvector
 from recertia.store.blobs import FilesystemBlobStore
@@ -278,6 +279,7 @@ def test_practice_curriculum_and_miner_then_golden_promote(tmp_path: Path) -> No
         runs_root=tmp_path / "runs",
         log_dir=tmp_path / "logs",
         require_task_class_gate=False,
+        audit=OperatorAuditStore(tmp_path / "operator-audit"),
     )
     assert status.lifecycle == "approved"
     assert status.active is True

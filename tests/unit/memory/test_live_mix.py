@@ -26,6 +26,7 @@ from recertia.memory.procedural.seeds import seed_approved_for_tests
 from recertia.memory.procedural.store import SkillStore
 from recertia.review.autonomy_config import DEFAULT_AUTONOMY
 from recertia.review.field_failures import recertify_field_failures
+from recertia.review.promotion_audit import OperatorAuditStore
 
 _NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -197,6 +198,7 @@ def test_promote_self_distilled_is_approved_but_not_active(tmp_path: Path) -> No
         golden_dir=golden,
         runs_root=tmp_path / "runs",
         log_dir=tmp_path / "logs",
+        audit=OperatorAuditStore(tmp_path / "operator-audit"),
     )
     assert status.lifecycle == "approved"
     assert status.active is False
@@ -224,6 +226,7 @@ def test_predecessor_non_regression_refuses_successor_that_drops_old_fixture(
         golden_dir=fixture_a,
         runs_root=tmp_path / "runs",
         log_dir=logs,
+        audit=OperatorAuditStore(tmp_path / "operator-audit"),
     )
     assert first.lifecycle == "approved"
     assert first.active is True
@@ -247,6 +250,7 @@ def test_predecessor_non_regression_refuses_successor_that_drops_old_fixture(
             golden_dir=fixture_b,
             runs_root=tmp_path / "runs2",
             log_dir=logs,
+            audit=OperatorAuditStore(tmp_path / "operator-audit"),
         )
     # REC-009: decision-only refusal; fixture ids go to the operator audit sink.
     assert exc.value.refusal_kind == "predecessor_non_regression"

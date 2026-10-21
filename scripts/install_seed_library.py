@@ -3,13 +3,15 @@
 
 Usage:
   python3 scripts/install_seed_library.py --skills-root skills --golden-root evals/golden
-  python3 scripts/install_seed_library.py --promote --runs-root /tmp/recertia-seed
+  python3 scripts/install_seed_library.py --promote --runs-root /tmp/recertia-seed \
+      --audit-root /var/lib/recertia-operator/audit
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -149,7 +151,21 @@ def install_versions(store: SkillStore, *, rewrite: bool = False) -> list[str]:
     return installed
 
 
-def promote_all(store: SkillStore, golden_root: Path, runs_root: Path, log_dir: Path) -> None:
+def promote_all(
+    store: SkillStore, golden_root: Path, runs_root: Path, log_dir: Path, audit_root: str
+) -> None:
+    from recertia.review.promotion_audit import AuditSinkUnavailable, open_operator_audit
+
+    try:
+        # REC-009: refusal detail goes to the operator audit store; without one, refuse.
+        audit = open_operator_audit(audit_root, forbidden_roots=[runs_root, log_dir])
+    except AuditSinkUnavailable:
+        print(
+            "FAILED: operator audit store unavailable; set --audit-root or "
+            "RECERTIA_OPERATOR_AUDIT_ROOT to a private directory outside the checkout",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
     for version in SEED_SKILLS:
         golden = golden_root / "repo-chore" / version.skill_id
         try:
@@ -162,6 +178,7 @@ def promote_all(store: SkillStore, golden_root: Path, runs_root: Path, log_dir: 
                 log_dir=log_dir,
                 tool_fingerprint={"python": "3.12", "pytest": "8.3.4"},
                 repo_root=ROOT,
+                audit=audit,
             )
             print(f"approved {version.skill_id}@v{version.version} active={status.active} "
                   f"golden_ref={status.certification.golden_set_ref}")
@@ -192,6 +209,11 @@ def main() -> None:
     )
     parser.add_argument("--runs-root", type=Path, default=ROOT / ".recertia" / "seed-runs")
     parser.add_argument("--log-dir", type=Path, default=ROOT / "evals" / "golden" / "_promotion_logs")
+    parser.add_argument(
+        "--audit-root",
+        default=os.environ.get("RECERTIA_OPERATOR_AUDIT_ROOT", ""),
+        help="Operator-only audit root for refusal detail (required with --promote).",
+    )
     args = parser.parse_args()
 
     write_goldens(args.golden_root)
@@ -200,7 +222,7 @@ def main() -> None:
     print(f"installed {len(installed)} seed skill versions under {args.skills_root}")
 
     if args.promote:
-        promote_all(store, args.golden_root, args.runs_root, args.log_dir)
+        promote_all(store, args.golden_root, args.runs_root, args.log_dir, args.audit_root)
 
     snap = rebuild_index(store, args.index)
     print(f"index snapshot={snap} at {args.index}")
