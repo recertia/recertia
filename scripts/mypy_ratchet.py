@@ -5,6 +5,10 @@ A module missing from the baseline is treated as zero. A new module with a
 count above zero fails. Lowering a count requires updating the baseline in
 the same commit (``python3 scripts/mypy_ratchet.py --write``).
 
+``tests`` is a ratchet target only. It is not in ``[tool.mypy] files`` in
+pyproject.toml, so the plain ``mypy`` CI step does not check it; its existing
+errors are seeded in the same baseline and new ones fail here.
+
 ``strict_modules`` is the per-module promotion list. It is empty until a
 later change opts a zero-baseline module into ``mypy --strict``.
 """
@@ -20,7 +24,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = REPO_ROOT / "mypy-baseline.txt"
-TARGETS = ["contracts", "src/recertia"]
+TARGETS = ["contracts", "src/recertia", "tests"]
 
 # Modules already at zero that a later PR promotes to --strict.
 strict_modules: list[str] = []
