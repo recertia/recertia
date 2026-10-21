@@ -51,7 +51,7 @@ from contracts.workspace import RegisteredWorkspace  # noqa: E402
 # Canonical JSON Schema $id prefix (must match the public GitHub org/repo).
 SCHEMA_ID_BASE = "https://github.com/recertia/recertia/schema"
 
-MODELS: dict[str, type] = {
+MODELS: dict[str, type[BaseModel]] = {
     "skill_version.schema.json": SkillVersion,
     "skill_status.schema.json": SkillStatus,
     "skill_stats.schema.json": SkillStats,
