@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **REL-3 probe_b / probe_a2 hang (REC-017)** — `tests/probes/rel3_probe.py` now
+  uses the multiprocessing `spawn` context, so a probe child never inherits
+  threads or locks from the pytest process (a fork while a `recertia-queue`
+  poller held a SQLite mutex left the child blocked in `sqlite3.connect`). The
+  racer barrier waits at most 30s and every child join at most 60s; on a hang
+  `_join_or_fail` dumps the parent's stacks (faulthandler), sends SIGUSR1 so
+  each child dumps its own, kills the children and fails. A suite-wide
+  `pytest-timeout` backstop (`timeout = 60`, `timeout_method = "signal"`) fails
+  any test whose setup, call and teardown together run longer than 60s, and
+  prints every thread's stack when more than one Python thread is alive. CI's
+  `ci` job is capped at 10 minutes and `container-smoke` at 5. Probe `record()`
+  assertions are unchanged. The remaining fork-with-threads warnings on CI come
+  from grimp's native rayon pool, started by the `tests/boundary` graph build
+  on a cold `.grimp_cache`; they are not addressed here.
+
 ### Added
 
 - **REC-011 C1 part 1 run resolution** — `EvalStore.append_run` records

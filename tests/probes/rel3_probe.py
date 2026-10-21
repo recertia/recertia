@@ -2,6 +2,7 @@
 open_run_persistence / import_legacy code. Each scenario prints PASS or FAIL(BUG)."""
 from __future__ import annotations
 import multiprocessing as mp, os, sqlite3, sys, tempfile, threading, time, traceback
+import faulthandler, signal
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +22,62 @@ except ImportError:  # pre-#89 heads
 RESULTS: list[tuple[str, bool, str]] = []
 def record(name, ok, detail):
     RESULTS.append((name, ok, detail)); print(f"[{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
+
+_BARRIER_TIMEOUT_S = 30
+_JOIN_TIMEOUT_S = 60
+
+def _spawn():
+    return mp.get_context("spawn")
+
+def _enable_fault_dumps():
+    faulthandler.enable(all_threads=True)
+    try:
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
+    except (AttributeError, RuntimeError, OSError, ValueError):
+        pass
+
+def _process_status(proc):
+    return f"name={proc.name!r} pid={proc.pid} alive={proc.is_alive()} exitcode={proc.exitcode}"
+
+def _dump_hung_children(procs):
+    faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+    for proc in procs:
+        if proc.is_alive() and proc.pid:
+            try:
+                os.kill(proc.pid, signal.SIGUSR1)
+            except OSError:
+                pass
+    time.sleep(0.2)
+
+def _kill_children(procs):
+    for proc in procs:
+        if proc.is_alive():
+            proc.terminate()
+    for proc in procs:
+        proc.join(timeout=2)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(timeout=2)
+
+def _join_or_fail(label, procs, timeout=_JOIN_TIMEOUT_S):
+    deadline = time.monotonic() + timeout
+    for proc in procs:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        proc.join(timeout=remaining)
+    hung = [proc for proc in procs if proc.is_alive()]
+    if not hung:
+        return
+    _dump_hung_children(procs)
+    statuses = [_process_status(proc) for proc in procs]
+    hung_names = [proc.name for proc in hung]
+    _kill_children(procs)
+    exits = [proc.exitcode for proc in procs]
+    raise RuntimeError(
+        f"{label} hung waiting for children; hung={hung_names}; "
+        f"exitcodes={exits}; status={statuses}"
+    )
 
 def subprocess_exclusive(path):
     """Hold exclusive flock in a child process until ``.release()``.
@@ -86,6 +143,7 @@ def mk_lease(root, run="r1"):
 
 def holder_then_crash(root, journal, run):
     """Child: acquire lease like the engine, perform op once (effect lands), then crash (no release)."""
+    _enable_fault_dumps()
     l = mk_lease(Path(root), run); tok = l.acquire()
     led = OperationLedger(Path(root) / "runtime.db")
     def eff():
@@ -97,7 +155,7 @@ def holder_then_crash(root, journal, run):
 # --- A: crash then resume must not re-run an applied op --------------------------------
 def scen_crash_resume():
     root = Path(tempfile.mkdtemp()); j = root / "journal"
-    p = mp.Process(target=holder_then_crash, args=(str(root), str(j), "r1")); p.start(); p.join()
+    ctx = _spawn(); p = ctx.Process(target=holder_then_crash, args=(str(root), str(j), "r1"), name="rel3-holder-r1"); p.start(); _join_or_fail("scen_crash_resume", [p])
     l = mk_lease(root); tok = l.acquire()
     led = OperationLedger(root / "runtime.db")
     def eff():
@@ -111,7 +169,7 @@ def scen_crash_resume():
 # --- A2: steal(inc2) does work, releases cleanly, then resume gets inc1 again -------------
 def scen_incarnation_reset():
     root = Path(tempfile.mkdtemp()); j = root / "journal"
-    p = mp.Process(target=holder_then_crash, args=(str(root), str(j), "r2")); p.start(); p.join()
+    ctx = _spawn(); p = ctx.Process(target=holder_then_crash, args=(str(root), str(j), "r2"), name="rel3-holder-r2"); p.start(); _join_or_fail("scen_incarnation_reset", [p])
     l = mk_lease(root, "r2"); l.acquire(); inc_after_crash = l.incarnation; l.release()
     l3 = mk_lease(root, "r2"); l3.acquire(); inc_next = l3.incarnation; l3.release()
     record("A2 incarnation never goes backwards", inc_next >= inc_after_crash,
@@ -119,7 +177,8 @@ def scen_incarnation_reset():
 
 # --- B: N concurrent runners race on one run ---------------------------------------------
 def racer(root, journal, run, barrier):
-    l = mk_lease(Path(root), run); barrier.wait()
+    _enable_fault_dumps()
+    l = mk_lease(Path(root), run); barrier.wait(timeout=_BARRIER_TIMEOUT_S)
     try: tok = l.acquire()
     except RunBusy:
         with open(journal + ".busy", "a") as f: f.write("busy\n"); return
@@ -135,8 +194,8 @@ def racer(root, journal, run, barrier):
 
 def scen_race():
     root = Path(tempfile.mkdtemp()); j = root / "journal"; n = 8
-    b = mp.Barrier(n); ps = [mp.Process(target=racer, args=(str(root), str(j), "r3", b)) for _ in range(n)]
-    [p.start() for p in ps]; [p.join() for p in ps]
+    ctx = _spawn(); b = ctx.Barrier(n); ps = [ctx.Process(target=racer, args=(str(root), str(j), "r3", b), name=f"rel3-racer-{i}") for i in range(n)]
+    [p.start() for p in ps]; _join_or_fail("scen_race", ps)
     ev = sorted((float(t), k) for k, t in (l.split() for l in effects(Path(str(j) + ".hold"))))
     depth = mx = 0
     for _, k in ev: depth += 1 if k == "in" else -1; mx = max(mx, depth)
@@ -147,6 +206,7 @@ def scen_race():
 
 # --- C: lock file unlinked while held -> second process also acquires (split brain) ------
 def b_holder(root, q, go):
+    _enable_fault_dumps()
     b = mk_lease(Path(root), "r4")
     try: q.put(("acq", b.acquire()))
     except RunBusy: q.put(("busy", None)); return
@@ -156,7 +216,7 @@ def scen_unlinked_lock():
     root = Path(tempfile.mkdtemp())
     a = mk_lease(root, "r4"); ta = a.acquire()
     os.unlink(root / "locks" / "r4.lock")          # e.g. locks/ cleanup while a run is live
-    ctx = mp.get_context("spawn"); q = ctx.Queue(); go = ctx.Event(); p = ctx.Process(target=b_holder, args=(str(root), q, go)); p.start()
+    ctx = mp.get_context("spawn"); q = ctx.Queue(); go = ctx.Event(); p = ctx.Process(target=b_holder, args=(str(root), q, go), name="rel3-b_holder"); p.start()
     kind, tb = q.get(timeout=10)
     record("C lock-file unlink must not allow a 2nd holder", kind == "busy", f"holder A tok={ta} (alive); other process: {kind} tok={tb}")
     if kind == "acq":
@@ -173,7 +233,7 @@ def scen_unlinked_lock():
         record("D stale token: checkpoint write rejected", ck == "rejected", f"CheckpointStore.save stale tok {ta} (current {tb}): {ck}")
         record("D2 stale token: operations write rejected", not ok_ops, f"OperationLedger.run_once stale tok {ta}: {'ACCEPTED' if ok_ops else 'rejected'}")
         record("D3 stale token: hash-chain ledger append rejected", lg != "ACCEPTED", f"HashChainLedger.append by stale holder (no token parameter at all): {lg}")
-    go.set(); p.join(); a.release()
+    go.set(); _join_or_fail("scen_unlinked_lock", [p]); a.release()
 
 # --- E: fencing TOCTOU (steal lands between check and write) ------------------------------
 def scen_toctou():
@@ -268,7 +328,10 @@ def scen_import_idempotent():
     record("K migrate=off after import still sees state (rollback)", latest == 5, f"latest_seq('legacy') under migrate=off: {latest}")
 
 if __name__ == "__main__":
-    mp.set_start_method("fork")
+    try:
+        mp.set_start_method("spawn")
+    except RuntimeError:
+        pass
     for fn in [scen_crash_resume, scen_incarnation_reset, scen_race, scen_unlinked_lock, scen_toctou,
                scen_token_reuse, scen_fail_open, scen_ops_rebuild_crash, scen_import_split_brain, scen_import_idempotent]:
         try: fn()
