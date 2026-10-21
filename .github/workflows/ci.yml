@@ -119,6 +119,8 @@ jobs:
   commit-emails:
     name: commit emails (PR or push range)
     runs-on: ubuntu-latest
+    # Recent runs: 3-6 s (47 jobs, REC-036). Default would be 360 min.
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -148,6 +150,8 @@ jobs:
   package-smoke:
     name: wheel / sdist smoke
     runs-on: ubuntu-latest
+    # Recent runs: 14-25 s (47 jobs, REC-036). Default would be 360 min.
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
