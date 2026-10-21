@@ -26,6 +26,9 @@ os.environ.setdefault("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
 
 import ipaddress  # noqa: E402
 import socket  # noqa: E402
+import sys  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
 from collections.abc import Generator  # noqa: E402
 from typing import Any  # noqa: E402
 
@@ -92,6 +95,8 @@ def _guarded_create_connection(address: Any, *args: Any, **kwargs: Any) -> socke
 
 
 def pytest_configure(config: Any) -> None:
+    global _open_sessions
+    _open_sessions += 1
     if not network_guard_enabled():
         return
     setattr(socket.socket, "connect", _guarded_connect)
@@ -100,11 +105,80 @@ def pytest_configure(config: Any) -> None:
     setattr(socket, "create_connection", _guarded_create_connection)
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config: Any) -> None:
+    global _open_sessions
     setattr(socket.socket, "connect", _REAL["connect"])
     setattr(socket.socket, "connect_ex", _REAL["connect_ex"])
     setattr(socket, "getaddrinfo", _REAL["getaddrinfo"])
     setattr(socket, "create_connection", _REAL["create_connection"])
+    _open_sessions -= 1
+    if _open_sessions == 0:  # the outermost session only, never a nested in-process one
+        session_exit_guard(config)
+
+
+# --- Session exit guard (REC-036) -----------------------------------------------------
+# A run that never ends keeps its ``recertia-run`` pool thread alive after the session.
+# concurrent.futures joins every pool thread at interpreter exit (daemon or not), so the
+# process would hang after printing its summary until CI kills the job. The teardown
+# hook already reports the leak as an ERROR; this guard makes the process exit too.
+
+# Grace for worker threads still alive at session end. A module attribute so the
+# pytester exit-guard test can lower it in a child session.
+EXIT_GRACE_S = 5.0
+WORKER_THREAD_PREFIXES = ("recertia-run", "recertia-queue")
+_EXIT_STATUS = pytest.StashKey[int]()
+_open_sessions = 0
+
+
+def pytest_sessionfinish(session: Any, exitstatus: Any) -> None:
+    session.config.stash[_EXIT_STATUS] = int(exitstatus)
+
+
+def lingering_worker_threads() -> list[threading.Thread]:
+    return [
+        t
+        for t in threading.enumerate()
+        if t is not threading.current_thread() and t.is_alive() and t.name.startswith(WORKER_THREAD_PREFIXES)
+    ]
+
+
+def session_exit_guard(config: Any) -> None:
+    """``os._exit`` after the report if worker threads would block interpreter exit.
+
+    Runs at the end of ``pytest_unconfigure`` (trylast), after the terminal
+    summary. A clean session has no lingering worker thread and returns at
+    once. Otherwise registered pools are shut down and queue workers stopped
+    (so idle pool threads end), every lingering thread is joined against one
+    ``EXIT_GRACE_S`` deadline, and if any is still alive the guard names them on
+    stderr and calls ``os._exit`` with the session status, or 1 if that was 0.
+    Worst case is about 2 x ``EXIT_GRACE_S`` (``stop_test_workers_report``).
+    """
+
+    if not lingering_worker_threads():
+        return
+    deadline = time.monotonic() + EXIT_GRACE_S
+    try:
+        stop_test_workers_report(timeout=EXIT_GRACE_S)
+    except Exception:  # the join below still decides
+        pass
+    for thread in lingering_worker_threads():
+        thread.join(max(0.0, deadline - time.monotonic()))
+    stuck = lingering_worker_threads()
+    if not stuck:
+        return
+    status = config.stash.get(_EXIT_STATUS, 1) or 1
+    capman = config.pluginmanager.getplugin("capturemanager")
+    if capman is not None:
+        capman.stop_global_capturing()  # flush and release capture; os._exit skips its cleanup
+    names = sorted(t.name for t in stuck)
+    sys.stdout.flush()
+    sys.stderr.write(
+        f"recertia exit guard: {len(stuck)} worker thread(s) still alive {EXIT_GRACE_S:g}s after the"
+        f" session ended: {names}; os._exit({status}) so interpreter exit cannot hang on them\n"
+    )
+    sys.stderr.flush()
+    os._exit(status)
 
 
 def pytest_runtest_setup(item: Any) -> None:
