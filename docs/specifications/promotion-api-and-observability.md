@@ -21,7 +21,12 @@ only to `candidate`; it MUST NOT write `approved`.
 
 Regression gate: before any promotion to `approved`, the golden set for the skill's
 `task_class` MUST run green against the candidate via `promote_to_approved`. A regression
-blocks promotion and is reported with the failing task ids. When the candidate supersedes an
+blocks promotion. The caller sees a decision-only refusal: the decision, the refusal kind, a
+count of failing fixtures, the caller-supplied skill id and version, and an opaque random
+audit reference. It MUST NOT carry fixture ids or names, paths, inputs, criteria or expected
+outputs. Every failing fixture id, with path and detail, goes only to the operator audit
+store (`RECERTIA_OPERATOR_AUDIT_ROOT`); with no usable store the gate MUST NOT run and
+promotion is refused. When the candidate supersedes an
 approved predecessor, the gate MUST also re-run every golden fixture that predecessor passed
 (predecessor non-regression). Failing a predecessor fixture is a refusal even if the
 candidate still solves its own fixture.

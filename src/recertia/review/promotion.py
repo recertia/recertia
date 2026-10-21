@@ -1,8 +1,15 @@
 """Promote a skill to ``approved`` only after its golden regression gate passes (specs §8).
 
 The regression runner's log is the evidence — recorded on ``SkillStatus.certification`` —
-not a note in a PR description. M4: the gate may run the full task-class harness and must
-name every failing fixture id on refusal.
+not a note in a PR description. M4: the gate may run the full task-class harness.
+
+A golden-gate refusal (golden gate, predecessor non-regression, or gate error) MUST record
+every failing fixture id, with path and detail, in an operator/T3-only audit sink that
+proposers cannot read. With no usable sink the gate MUST NOT run and promotion is refused.
+The proposer-visible error MUST be decision-only: the decision, the refusal kind, a count
+of failing fixtures, the caller-supplied skill id and version, and an opaque random audit
+reference. It MUST NOT carry fixture ids or names, paths, inputs, criteria or expected
+outputs.
 
 Successor versions additionally run every golden fixture the predecessor passed. A candidate
 that still "solves" its own fixture but fails a predecessor fixture is a non-regression
