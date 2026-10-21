@@ -32,6 +32,11 @@ alone.
 
 GitHub's web-flow address is accepted as committer only (merge button,
 squash merges, and "Update branch"), never as author or in a trailer.
+
+Output is redacted because CI logs are public: a failing value is reported
+only as ``<sha>: <role>=non-allowlisted`` (or ``<role>=<empty>``), never the
+address, its parts, or a name. git's own stderr is captured and discarded,
+and unexpected errors print only their type.
 """
 
 from __future__ import annotations
@@ -67,7 +72,7 @@ _ZERO_SHA = "0" * 40
 
 
 def _git(*args: str) -> str:
-    return subprocess.check_output(["git", *args], text=True).strip()
+    return subprocess.check_output(["git", *args], text=True, stderr=subprocess.PIPE).strip()
 
 
 def _is_commit(rev: str) -> bool:
@@ -139,6 +144,7 @@ def _emails_for(commit: str) -> list[tuple[str, str]]:
             commit,
         ],
         text=True,
+        stderr=subprocess.PIPE,
     )
     lines = blob.splitlines()
     rows: list[tuple[str, str]] = [
@@ -155,7 +161,12 @@ def _emails_for(commit: str) -> list[tuple[str, str]]:
     return rows
 
 
-def main() -> int:
+def _redacted(kind: str, email: str) -> str:
+    """Role and verdict only; the value itself is never printed."""
+    return f"{kind}={'<empty>' if not email.strip() else 'non-allowlisted'}"
+
+
+def _main() -> int:
     try:
         head, revs, label, push = _range()
     except RangeError as exc:
@@ -166,6 +177,7 @@ def main() -> int:
     shas = subprocess.check_output(
         ["git", "rev-list", "--reverse", *revs],
         text=True,
+        stderr=subprocess.PIPE,
     ).split()
     if push and not shas:
         shas = [_git("rev-parse", f"{head}^{{commit}}")]
@@ -173,7 +185,7 @@ def main() -> int:
     failed: list[str] = []
     for sha in shas:
         bad = [
-            f"{kind}={email.strip() or '<empty>'}"
+            _redacted(kind, email)
             for kind, email in _emails_for(sha)
             if not _allowed(email, kind)
         ]
@@ -188,6 +200,21 @@ def main() -> int:
         return 1
     print(f"ok {len(shas)} commit(s) in {label}")
     return 0
+
+
+def main() -> int:
+    # Nothing from git output or exception text is echoed: either could carry
+    # an address or a name into a public log. Exit code 1 as for an uncaught
+    # exception before.
+    try:
+        return _main()
+    except subprocess.CalledProcessError as exc:
+        verb = exc.cmd[1] if isinstance(exc.cmd, list) and len(exc.cmd) > 1 else "git"
+        print(f"FAIL git {verb} exited {exc.returncode} (git output suppressed)", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"FAIL internal error: {type(exc).__name__} (details suppressed)", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
