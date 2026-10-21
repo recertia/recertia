@@ -81,17 +81,24 @@ def finished_run():
 
 
 def _run_child(
-    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, test_source: str
+    pytester: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+    test_source: str,
+    *,
+    plugins_first: tuple[str, ...] = (),
 ) -> tuple[pytest.RunResult, float]:
-    paths = [str(REPO_ROOT / "src"), str(REPO_ROOT)]
+    """Run ``test_source`` in a child pytest; ``plugins_first`` are registered before tests.conftest."""
+
+    paths = [str(REPO_ROOT / "src"), str(REPO_ROOT), str(pytester.path)]
     if os.environ.get("PYTHONPATH"):
         paths.append(os.environ["PYTHONPATH"])
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(paths))
     pytester.makeconftest(CHILD_CONFTEST)
     pytester.makepyfile(test_child=test_source)
+    first = [arg for name in plugins_first for arg in ("-p", name)]
     started = time.monotonic()
     result = pytester.runpytest_subprocess(
-        "-p", "tests.conftest", "-p", "no:cacheprovider", "-v", timeout=CHILD_TIMEOUT_S
+        *first, "-p", "tests.conftest", "-p", "no:cacheprovider", "-v", timeout=CHILD_TIMEOUT_S
     )
     return result, time.monotonic() - started
 
@@ -293,3 +300,259 @@ def test_leaves_a_stuck_worker():
     assert _os_exit_status(pytester) == "1"
     assert wall < STUCK_S
     result.stderr.fnmatch_lines(["*recertia exit guard*recertia-queue-stuck*"])
+
+
+# --- Unconfigure order and exit status (REC-036 N1, N4) --------------------------------
+
+HUNG_SOURCE = """
+def test_leaves_a_run_that_never_ends(hung_run):
+    pass
+"""
+
+
+def test_plugins_registered_earlier_unconfigure_before_the_guard_exits(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``trylast`` on the guard's unconfigure lets earlier plugins finish first (N1).
+
+    Hooks run in reverse registration order, so without ``trylast`` the guard
+    (registered after ``early_marker``) would ``os._exit`` before
+    ``early_marker``'s unconfigure ran, as it would before a log-file close.
+    """
+
+    pytester.makepyfile(
+        early_marker="""
+        from pathlib import Path
+
+
+        def pytest_unconfigure(config):
+            (Path(str(config.rootpath)) / "early_unconfigure.txt").write_text("ran")
+        """
+    )
+    result, wall = _run_child(pytester, monkeypatch, HUNG_SOURCE, plugins_first=("early_marker",))
+
+    assert result.ret == 1
+    assert _os_exit_status(pytester) == "1"
+    assert wall < EXIT_LIMIT_S
+    assert (pytester.path / "early_unconfigure.txt").read_text() == "ran"
+
+
+def test_nonzero_session_status_is_kept_by_the_guard(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session status other than 0 is passed to ``os._exit`` as is, not forced to 1 (N4)."""
+
+    result, wall = _run_child(
+        pytester,
+        monkeypatch,
+        HUNG_SOURCE
+        + """
+
+def test_then_exit_with_status_3():
+    import pytest
+
+    pytest.exit("stop", returncode=3)
+""",
+    )
+
+    assert result.ret == 3
+    assert _os_exit_status(pytester) == "3"
+    assert wall < EXIT_LIMIT_S
+    result.stderr.fnmatch_lines(["*recertia exit guard*os._exit(3)*"])
+
+
+def test_guard_fires_with_the_network_guard_opted_out(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``RECERTIA_NO_NETWORK=0`` (CI unset) skips the network guard, never the exit guard (D-N1).
+
+    ``_outermost_config`` must be set before the opt-out return in
+    ``pytest_configure``. The stuck thread ends after ``STUCK_S``, so a missing
+    guard shows up as rc 0 instead of a hang.
+    """
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("RECERTIA_NO_NETWORK", "0")
+    result, wall = _run_child(
+        pytester,
+        monkeypatch,
+        f"""
+import socket
+import threading
+
+import tests.conftest as suite_conftest
+
+
+def test_network_guard_is_off_and_leaves_a_stuck_worker():
+    assert not suite_conftest.network_guard_enabled()
+    assert socket.getaddrinfo is suite_conftest._REAL["getaddrinfo"]
+    threading.Thread(target=threading.Event().wait, args=({STUCK_S!r},), name="recertia-queue-stuck").start()
+""",
+    )
+
+    result.assert_outcomes(passed=1)
+    assert result.ret == 1
+    assert _os_exit_status(pytester) == "1"
+    assert wall < STUCK_S
+    result.stderr.fnmatch_lines(["*recertia exit guard*recertia-queue-stuck*"])
+
+
+# --- Network guard across nested in-process sessions (REC-042) -------------------------
+# Every unconfigure used to restore the real socket functions, so an inner in-process
+# session with tests.conftest switched the network guard off for every later test of
+# the outer session. Only the outermost session may restore them. Nothing here reaches
+# the network: the real socket functions are replaced by tripwires while a test runs,
+# and the target is TEST-NET-1 (RFC 5737), which is never routable.
+
+NETGUARD_SOURCE = """
+import socket
+
+import pytest
+
+import tests.conftest as suite_conftest
+from tests.conftest import NetworkBlockedError
+
+pytest_plugins = ["pytester"]
+
+TARGET = ("192.0.2.1", 9)
+GUARDED = {
+    "connect": suite_conftest._guarded_connect,
+    "connect_ex": suite_conftest._guarded_connect_ex,
+    "getaddrinfo": suite_conftest._guarded_getaddrinfo,
+    "create_connection": suite_conftest._guarded_create_connection,
+}
+REAL = dict(suite_conftest._REAL)  # the real functions, before any inner session
+FAILING_CONFTEST = "def pytest_configure(config):\\n    raise RuntimeError('inner configure failed')\\n"
+
+
+class RealSocketReached(AssertionError):
+    pass
+
+
+@pytest.fixture()
+def tripwire(monkeypatch):
+    def trip(*args, **kwargs):
+        raise RealSocketReached(f"a real socket function was reached: {args!r}")
+
+    for name in list(suite_conftest._REAL):
+        monkeypatch.setitem(suite_conftest._REAL, name, trip)
+
+
+def current():
+    return {
+        "connect": socket.socket.connect,
+        "connect_ex": socket.socket.connect_ex,
+        "getaddrinfo": socket.getaddrinfo,
+        "create_connection": socket.create_connection,
+    }
+
+
+def assert_guard_blocks():
+    assert current() == GUARDED  # the same guarded functions: installed once, not wrapped
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        with pytest.raises(NetworkBlockedError):
+            sock.connect(TARGET)
+        with pytest.raises(NetworkBlockedError):
+            sock.connect_ex(TARGET)
+    with pytest.raises(NetworkBlockedError):
+        socket.getaddrinfo(TARGET[0], TARGET[1])
+    with pytest.raises(NetworkBlockedError):
+        socket.create_connection(TARGET, timeout=0.1)
+
+
+def run_inner_sessions(pytester):
+    pytester.makepyfile(test_inner="def test_inner():\\n    pass\\n")
+    assert pytester.runpytest_inprocess("-p", "tests.conftest", "-p", "no:cacheprovider").ret == 0
+    pytester.makeconftest(FAILING_CONFTEST)
+    try:
+        result = pytester.runpytest_inprocess("-p", "tests.conftest", "-p", "no:cacheprovider")
+    except RuntimeError as exc:
+        assert "inner configure failed" in str(exc)
+    else:
+        assert result.ret != 0
+"""
+
+
+def _run_netguard_child(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, test_source: str
+) -> pytest.RunResult:
+    monkeypatch.setenv("RECERTIA_NO_NETWORK", "1")
+    result, wall = _run_child(pytester, monkeypatch, NETGUARD_SOURCE + test_source)
+    assert wall < EXIT_LIMIT_S
+    return result
+
+
+def test_inner_in_process_session_keeps_the_outer_network_guard(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a normal and a configure-failing inner session, the outer guard still blocks."""
+
+    result = _run_netguard_child(
+        pytester,
+        monkeypatch,
+        """
+
+def test_guard_blocks_before_any_inner_session(tripwire):
+    assert_guard_blocks()
+
+
+def test_inner_sessions(pytester, tripwire):
+    run_inner_sessions(pytester)
+
+
+def test_guard_still_blocks_after_the_inner_sessions(tripwire):
+    assert_guard_blocks()
+
+
+def test_real_functions_are_not_guarded_ones():
+    assert suite_conftest._REAL == REAL
+    assert not set(map(id, REAL.values())) & set(map(id, GUARDED.values()))
+""",
+    )
+
+    result.assert_outcomes(passed=4)
+    assert result.ret == 0
+
+
+def test_socket_restore_and_exit_guard_run_for_the_outermost_config_only(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inner sessions neither restore the sockets nor run the guard; the outermost does both, in order."""
+
+    result = _run_netguard_child(
+        pytester,
+        monkeypatch,
+        """
+from pathlib import Path
+
+LOG = Path(__file__).parent / "guard_calls.txt"
+OUTER = []
+_real_guard = suite_conftest.session_exit_guard
+
+
+def recording_guard(config):
+    with LOG.open("a") as fh:
+        fh.write(f"guard outer={config is OUTER[0]} restored={current() == REAL}\\n")
+    _real_guard(config)
+
+
+suite_conftest.session_exit_guard = recording_guard
+
+
+def test_outer_config(request):
+    OUTER.append(request.config)
+    assert suite_conftest._outermost_config is request.config
+
+
+def test_inner_sessions_restore_nothing(pytester, request):
+    run_inner_sessions(pytester)
+    assert not LOG.exists()  # no inner session ran the guard
+    assert current() == GUARDED  # nor restored the real socket functions
+    assert suite_conftest._REAL == REAL  # nor re-captured guarded ones as "real"
+    assert suite_conftest._outermost_config is request.config
+""",
+    )
+
+    result.assert_outcomes(passed=2)
+    assert result.ret == 0
+    assert (pytester.path / "guard_calls.txt").read_text() == "guard outer=True restored=True\n"

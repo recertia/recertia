@@ -109,15 +109,18 @@ def pytest_configure(config: Any) -> None:
 @pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config: Any) -> None:
     global _outermost_config
-    setattr(socket.socket, "connect", _REAL["connect"])
-    setattr(socket.socket, "connect_ex", _REAL["connect_ex"])
-    setattr(socket, "getaddrinfo", _REAL["getaddrinfo"])
-    setattr(socket, "create_connection", _REAL["create_connection"])
     # The outermost session only, never a nested in-process one. Keyed on the config
     # object, not a counter: pytest unconfigures a config whose pytest_configure
     # failed before ours ran, so a counter could drift (REC-036 S1).
     if config is _outermost_config:
         _outermost_config = None
+        # Restore the real socket functions here only: a nested in-process session
+        # (pytester with -p tests.conftest) must not switch off the outer session's
+        # network guard. Its configure re-sets the same functions, so none is double-wrapped.
+        setattr(socket.socket, "connect", _REAL["connect"])
+        setattr(socket.socket, "connect_ex", _REAL["connect_ex"])
+        setattr(socket, "getaddrinfo", _REAL["getaddrinfo"])
+        setattr(socket, "create_connection", _REAL["create_connection"])
         session_exit_guard(config)
 
 
