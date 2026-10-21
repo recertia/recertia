@@ -28,6 +28,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEADLINE_S = 1.0  # TEARDOWN_TIMEOUT_S in the child session
 MARGIN_S = 3.0
 CHILD_TIMEOUT_S = 45.0  # a hang shows up as Pytester.TimeoutExpired, before the 60s pytest-timeout
+TEST_BUDGET_S = 2.0  # pytest-timeout in the D2 child session
+STOP_HANG_S = 10.0  # a worker stop that outlives that budget
 
 CHILD_CONFTEST = f"""
 import json
@@ -92,14 +94,14 @@ def finalizer_sees_no_workers():
 """
 
 
-def _run_child(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> pytest.RunResult:
+def _run_child(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, *args: str) -> pytest.RunResult:
     paths = [str(REPO_ROOT / "src"), str(REPO_ROOT)]
     if os.environ.get("PYTHONPATH"):
         paths.append(os.environ["PYTHONPATH"])
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(paths))
     pytester.makeconftest(CHILD_CONFTEST)
     return pytester.runpytest_subprocess(
-        "-p", "tests.conftest", "-p", "no:cacheprovider", "-v", timeout=CHILD_TIMEOUT_S
+        "-p", "tests.conftest", "-p", "no:cacheprovider", "-v", *args, timeout=CHILD_TIMEOUT_S
     )
 
 
@@ -215,6 +217,58 @@ def test_error_while_stopping_workers_does_not_cascade(
     result.assert_outcomes(passed=2, errors=1)
     result.stdout.fnmatch_lines(
         ["*ERROR at teardown of test_breaks_stop_all*", "*stopping test workers raised*"]
+    )
+    result.stdout.no_fnmatch_line("*previous item was not torn down properly*")
+
+
+def test_timeout_while_stopping_workers_does_not_skip_teardown(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REC-044 D2: a pytest-timeout while stopping workers is one teardown ERROR, not a cascade.
+
+    pytest-timeout's signal method raises ``pytest.fail.Exception``, a
+    BaseException, wherever the main thread is. Landing in the worker stop, it
+    must not leave the wrapper before its ``yield``: that skips pytest's own
+    teardown (here the monkeypatch undo), so the next test errors with
+    "previous item was not torn down properly" and the stuck stop runs again.
+    """
+
+    pytester.makepyfile(
+        test_child=f"""
+        import time
+
+        from recertia.workers.embedded import EmbeddedQueueWorker
+
+        REAL_STOP_ALL = EmbeddedQueueWorker.stop_all.__func__
+
+
+        def _outlives_the_budget(cls, timeout=5.0):
+            time.sleep({STOP_HANG_S!r})  # pytest-timeout interrupts this
+            return True
+
+
+        def test_stop_outlives_the_budget(monkeypatch):
+            monkeypatch.setattr(EmbeddedQueueWorker, "stop_all", classmethod(_outlives_the_budget))
+
+
+        def test_next_test_is_clean():
+            pass
+
+
+        def test_monkeypatch_was_undone():
+            assert EmbeddedQueueWorker.stop_all.__func__ is REAL_STOP_ALL
+        """
+    )
+    result = _run_child(
+        pytester, monkeypatch, "-o", f"timeout={TEST_BUDGET_S:g}", "-o", "timeout_method=signal"
+    )
+
+    result.assert_outcomes(passed=3, errors=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*ERROR at teardown of test_stop_outlives_the_budget*",
+            f"*stopping test workers raised*Timeout (>{TEST_BUDGET_S:g}*s) from pytest-timeout*",
+        ]
     )
     result.stdout.no_fnmatch_line("*previous item was not torn down properly*")
 
