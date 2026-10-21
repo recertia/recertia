@@ -11,6 +11,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -595,22 +596,78 @@ def _append_ledger(path: str, count: int, actor: str) -> None:
         ledger.append(actor=actor, action="write", target=f"{actor}-{index}")
 
 
+# REC-030: the appenders are started with ``spawn``, not Linux's default ``fork``.
+# A forked child copies every lock in the state other threads of the pytest
+# process hold it at that instant, and nothing in the child can release it.
+# In the suite those threads exist (leaked queue pollers, worker pools), and a
+# child whose garbage collector finalized an inherited sqlite3 connection
+# blocked forever on SQLite's allocator mutex: ``join(30)`` saw exitcode None
+# and the never-exiting child then hung interpreter exit until the CI job
+# timeout. A spawned child starts from a fresh interpreter and inherits no
+# lock state; the cross-process flock under test is unchanged.
+_APPENDER_START_METHOD: Final = "spawn"
+
+
+def _run_ledger_appenders(
+    path: Path, *, procs: int = 4, count: int = 12, deadline_s: float = 60.0
+) -> list[int | None]:
+    """Run ``procs`` appender processes; return exit codes (None = killed at the deadline)."""
+
+    ctx = multiprocessing.get_context(_APPENDER_START_METHOD)
+    workers = [ctx.Process(target=_append_ledger, args=(str(path), count, f"p{i}")) for i in range(procs)]
+    for worker in workers:
+        worker.start()
+    deadline = time.monotonic() + deadline_s
+    for worker in workers:
+        worker.join(max(0.0, deadline - time.monotonic()))
+    codes = [worker.exitcode for worker in workers]
+    for worker in workers:
+        if worker.is_alive():  # never leave a stuck child to hang interpreter exit
+            worker.kill()
+            worker.join(5)
+    return codes
+
+
 def test_ledger_append_flock_keeps_one_chain(tmp_path: Path) -> None:
     """0.9: concurrent processes cannot fork the hash chain."""
 
     path = tmp_path / "ledger.jsonl"
-    procs = [
-        multiprocessing.Process(target=_append_ledger, args=(str(path), 12, f"p{i}"))
-        for i in range(4)
-    ]
-    for proc in procs:
-        proc.start()
-    for proc in procs:
-        proc.join(30)
-        assert proc.exitcode == 0
+    codes = _run_ledger_appenders(path)
+    assert codes == [0, 0, 0, 0], f"appender exit codes {codes} (None: stuck, killed at deadline)"
     ledger = HashChainLedger(path)
     ledger.verify()
     assert len(ledger.entries()) == 48
+
+
+def test_ledger_appenders_ignore_locks_held_by_parent_threads(tmp_path: Path) -> None:
+    """REC-030: a lock another thread holds when the appenders start must not wedge them.
+
+    Deterministic stand-in for the CI hang: a thread of this process holds the
+    file-lock registry guard (taken by every ``HashChainLedger.append``) while
+    the appenders start. A forked child would inherit it locked and block
+    forever; a spawned child has its own.
+    """
+
+    from recertia.fsutil import locks
+
+    held = threading.Event()
+    release = threading.Event()
+
+    def _hold_guard() -> None:
+        with locks._GUARD:
+            held.set()
+            release.wait(30)
+
+    holder = threading.Thread(target=_hold_guard, name="rec030-guard-holder", daemon=True)
+    holder.start()
+    assert held.wait(5)
+    try:
+        codes = _run_ledger_appenders(tmp_path / "ledger.jsonl", procs=2, count=3, deadline_s=20)
+    finally:
+        release.set()
+        holder.join(5)
+    assert codes == [0, 0], f"appender exit codes {codes} (None: stuck on an inherited lock)"
+    assert len(HashChainLedger(tmp_path / "ledger.jsonl").entries()) == 6
 
 
 def test_quota_sidecar_corrupt_fails_closed_and_keeps_computer_use(tmp_path: Path) -> None:
