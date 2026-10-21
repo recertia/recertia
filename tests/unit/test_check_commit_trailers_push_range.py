@@ -473,11 +473,14 @@ def test_empty_email_keeps_empty_marker(repo: Repo) -> None:
 
 
 def test_git_error_output_is_suppressed(repo: Repo) -> None:
-    # A bad revision makes git fail; its stderr (which echoes the argument)
-    # must not reach the log, and the exit code stays 1 as for a crash.
-    repo.commit()
-    head = repo.git("rev-parse", "HEAD")
-    result = repo.check(BASE=LEAK, HEAD=head)
+    # Both ends are real commits, but a commit between them is missing, so
+    # git rev-list fails; its stderr must not reach the log, and the exit
+    # code stays 1 as for a crash.
+    base = repo.commit()
+    middle = repo.commit()
+    head = repo.commit()
+    (repo.path / ".git" / "objects" / middle[:2] / middle[2:]).unlink()
+    result = repo.check(BASE=base, HEAD=head)
     assert result.returncode == 1, result
     assert "FAIL git rev-list exited" in result.stderr
     assert "Traceback" not in result.stderr
@@ -581,7 +584,7 @@ def test_env_inputs_are_not_echoed_unless_sha_shaped(repo: Repo) -> None:
     repo.publish_main()
     result = _push(repo, LEAK, after)
     assert result.returncode == 1, result
-    assert "push before=<invalid> is not in this clone" in result.stderr
+    assert "PUSH_BEFORE=<invalid> is not a 40-hex commit SHA" in result.stderr
     _assert_none_of(result, LEAK)
     result = repo.check(PUSH_BEFORE=ZERO, PUSH_AFTER=after, PUSH_REF="feature", DEFAULT_BRANCH=LEAK)
     assert result.returncode == 1, result
@@ -630,10 +633,231 @@ def test_non_utf8_identity_is_classified_per_commit(repo: Repo) -> None:
     _assert_none_of(result, LEAK)
 
 
-def test_github_app_bot_noreply_form_passes(repo: Repo) -> None:
-    # Square brackets stay legal in an address token (GitHub App noreply form).
+def test_github_app_bot_noreply_form_fails(repo: Repo) -> None:
+    # REC-027: only <digits>+<login> and <login> pass; a [bot] suffix is not a login.
     bot = "1+placeholder[bot]" + "@users.noreply." + "github.com"
     before = repo.commit()
     after = repo.commit(email=bot, trailers=(f"Co-authored-by: placeholder <{bot}>",))
     result = _push(repo, before, after)
+    assert result.returncode == 1, result
+    assert (
+        f"FAIL {after}: author=non-allowlisted, committer=non-allowlisted, Co-authored-by=non-allowlisted\n"
+        in (result.stderr)
+    )
+    _assert_none_of(result)
+
+
+# --- REC-027 (a): strict noreply local part ---------------------------------
+
+NOREPLY = "@users.noreply." + "github.com"
+
+
+@pytest.mark.parametrize(
+    "local",
+    [
+        "123+user",
+        "123+User-Name",
+        "user",
+        "a",
+        "9",
+        "123+" + "a" * 39,
+        "a" * 39,
+        "user-",
+    ],
+    ids=[
+        "id-login",
+        "mixed-case-hyphen",
+        "legacy",
+        "one-char",
+        "digit-login",
+        "id-39",
+        "legacy-39",
+        "trailing-hyphen",
+    ],
+)
+def test_strict_noreply_accepts_github_forms(repo: Repo, local: str) -> None:
+    before = repo.commit()
+    after = repo.commit(email=local + NOREPLY, coauthor=local + NOREPLY)
+    result = _push(repo, before, after)
     assert result.returncode == 0, result
+    assert f"ok 1 commit(s) in {before}..{after}" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "local",
+    [
+        "",
+        "+user",
+        "123+",
+        "12a+user",
+        "1+2+user",
+        "-user",
+        "123+-user",
+        "us.er",
+        "us_er",
+        "a" * 40,
+        "123+" + "a" * 40,
+        "user[bot]",
+        "us%er",
+        "us\u00e9r",
+        "\u212aelvin",  # KELVIN SIGN lowercases to ASCII "k"
+        "123\uff0buser",  # fullwidth plus
+    ],
+    ids=[
+        "empty",
+        "empty-id",
+        "empty-login",
+        "non-digit-id",
+        "two-plus",
+        "leading-hyphen",
+        "id-leading-hyphen",
+        "dot",
+        "underscore",
+        "legacy-40",
+        "id-40",
+        "bot-suffix",
+        "percent",
+        "non-ascii",
+        "kelvin-sign",
+        "fullwidth-plus",
+    ],
+)
+def test_strict_noreply_rejects_odd_local_parts(repo: Repo, local: str) -> None:
+    before = repo.commit()
+    after = repo.commit(trailers=(f"Co-authored-by: placeholder <{local}{NOREPLY}>",))
+    result = _push(repo, before, after)
+    assert result.returncode == 1, result
+    assert f"FAIL {after}: Co-authored-by=" in result.stderr
+    _assert_none_of(result)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"zz-\xff" + NOREPLY.encode(),
+        b"123+us\xc3\xa9r" + NOREPLY.encode(),
+        b"123+user\xfe" + NOREPLY.encode(),
+    ],
+    ids=["invalid-utf8", "utf8-accent", "invalid-utf8-tail"],
+)
+def test_strict_noreply_rejects_non_ascii_author_bytes(repo: Repo, raw: bytes) -> None:
+    before = repo.commit()
+    bad = _raw_bytes_commit(repo, raw, b"raw\n")
+    result = _push(repo, before, bad)
+    assert result.returncode == 1, result
+    assert f"FAIL {bad}: author=non-allowlisted\n" in result.stderr
+    assert "internal error" not in result.stderr
+
+
+def test_strict_noreply_rejects_lookalike_domain(repo: Repo) -> None:
+    before = repo.commit()
+    at, domain = NOREPLY[0], NOREPLY[1:]
+    for email in (
+        f"123+user{NOREPLY}.invalid",
+        f"123+user{at}x{domain}",
+        f"123+user{at}{domain.replace('.', '-', 1)}",
+    ):
+        after = repo.commit(email=email)
+        result = _push(repo, before, after)
+        assert result.returncode == 1, (email, result)
+        before = after
+
+
+# --- REC-027 (b): range SHAs must be real commits ---------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["HEAD", "main", "HEAD~1", "--all", "-n1", "a" * 39, "A" * 40, "g" * 40, "1" * 41, "1" * 40 + "..HEAD"],
+    ids=[
+        "head-ref",
+        "branch",
+        "relative",
+        "option",
+        "option-short",
+        "short",
+        "upper",
+        "non-hex",
+        "long",
+        "range",
+    ],
+)
+@pytest.mark.parametrize("which", ["BASE", "HEAD", "PUSH_BEFORE", "PUSH_AFTER"])
+def test_range_inputs_must_be_40_hex(repo: Repo, value: str, which: str) -> None:
+    base = repo.commit()
+    head = repo.commit(email=BAD)
+    if which in {"BASE", "HEAD"}:
+        env = {"BASE": base, "HEAD": head, which: value}
+    else:
+        env = {
+            "PUSH_BEFORE": base,
+            "PUSH_AFTER": head,
+            "PUSH_REF": "feature",
+            "DEFAULT_BRANCH": "main",
+            which: value,
+        }
+    repo.publish_main()
+    result = repo.check(**env)
+    assert result.returncode == 1, result
+    assert f"FAIL {which}=<invalid> is not a 40-hex commit SHA; failing closed." in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize("which", ["BASE", "HEAD", "PUSH_AFTER"])
+def test_range_inputs_must_name_a_commit(repo: Repo, which: str) -> None:
+    base = repo.commit()
+    head = repo.commit()
+    tree = repo.git("rev-parse", "HEAD^{tree}")
+    blob = repo.git("rev-parse", "HEAD:f1.txt")
+    for value in ("1" * 40, tree, blob):
+        if which == "PUSH_AFTER":
+            result = _push(repo, base, value)
+        else:
+            result = repo.check(**{"BASE": base, "HEAD": head, which: value})
+        assert result.returncode == 1, (value, result)
+        assert f"FAIL {which}={value} is not a commit in this clone; failing closed." in result.stderr
+
+
+def test_unknown_push_before_still_fails_closed_on_default_branch(repo: Repo) -> None:
+    repo.commit()
+    after = repo.commit()
+    result = _push(repo, "1" * 40, after)
+    assert result.returncode == 1, result
+    assert "is not in this clone (force push" in result.stderr
+
+
+def test_valid_range_inputs_still_pass(repo: Repo) -> None:
+    base = repo.commit()
+    head = repo.commit()
+    assert repo.check(BASE=base, HEAD=head).returncode == 0
+    result = _push(repo, base, head)
+    assert result.returncode == 0, result
+    assert f"ok 1 commit(s) in {base}..{head}" in result.stdout
+
+
+# --- REC-027 (c): at-sign lookalikes ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        f"placeholder <{GOOD}> zz-local\uff20leak-domain.invalid",  # fullwidth, outside brackets
+        f"placeholder <{GOOD}>, zz-local\ufe6bleak-domain.invalid",  # small commercial at
+        f"placeholder <{GOOD}> zz-local\U000e0040leak-domain.invalid",  # tag commercial at
+        f"zz-local\uff20leak-domain.invalid <{GOOD}>",  # lookalike before the bracket
+        f"{GOOD} zz-local\uff20leak-domain.invalid",  # next to a bare address
+        "zz-local\uff20leak-domain.invalid",  # lookalike only
+        f"placeholder <1+placeholder\uff20x{NOREPLY}>",  # inside brackets
+    ],
+    ids=["fullwidth", "small", "tag", "before-bracket", "beside-bare", "only", "inside-bracket"],
+)
+@pytest.mark.parametrize("path", ["push", "pull_request"])
+def test_at_sign_lookalike_fails_closed(repo: Repo, value: str, path: str) -> None:
+    before = repo.commit()
+    after = repo.commit(trailers=(f"Co-authored-by: {value}",))
+    result = _push(repo, before, after) if path == "push" else repo.check(BASE=before, HEAD=after)
+    assert result.returncode == 1, result
+    assert f"FAIL {after}: Co-authored-by=non-allowlisted\n" in result.stderr
+    out = result.stdout + result.stderr
+    for fragment in ("\uff20", "\ufe6b", "\U000e0040", "zz-local", "leak-domain"):
+        assert fragment not in out, (fragment, out)
