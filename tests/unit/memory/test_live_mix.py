@@ -248,7 +248,9 @@ def test_predecessor_non_regression_refuses_successor_that_drops_old_fixture(
             runs_root=tmp_path / "runs2",
             log_dir=logs,
         )
-    assert exc.value.failing_fixtures
+    # REC-009: decision-only refusal; fixture ids go to the operator audit sink.
+    assert exc.value.refusal_kind == "predecessor_non_regression"
+    assert exc.value.failing_count >= 1
     assert store.get_status("evolving", 2).lifecycle == "candidate"
 
 

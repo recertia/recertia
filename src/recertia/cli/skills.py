@@ -134,8 +134,22 @@ def skills_promote(
         False, "--require-task-class-gate", help="Require full task-class harness."
     ),
     model_validated_on: str = typer.Option("m1-seed", "--model-validated-on"),
+    audit_root: Optional[Path] = typer.Option(
+        None,
+        "--audit-root",
+        help="Operator-only audit root for refusal detail (default: RECERTIA_OPERATOR_AUDIT_ROOT).",
+    ),
+    operator_detail: bool = typer.Option(
+        False,
+        "--operator-detail",
+        help="Operator only: print the audit record (fixture ids, paths) for a refusal.",
+    ),
 ) -> None:
-    """Promote a skill to approved after the golden regression gate (specs §8)."""
+    """Promote a skill to approved after the golden regression gate (specs §8).
+
+    A refusal prints the decision only. Fixture ids and paths go to the operator
+    audit store; ``--operator-detail`` prints that record.
+    """
 
     from recertia.app.authz import PolicyDecisionPoint
     from recertia.app.promotion import PromotionService
@@ -143,6 +157,7 @@ def skills_promote(
     from recertia.memory.procedural.promote import PromotionError
     from recertia.memory.procedural.store import SkillStore
     from recertia.ports.identity import Principal
+    from recertia.review.promotion_audit import open_operator_audit
 
     if golden_dir is None and golden_root is None:
         typer.echo("provide --golden-dir and/or --golden-root", err=True)
@@ -155,6 +170,16 @@ def skills_promote(
     )
     store = SkillStore(skills_root)
     repo_root = Path.cwd()
+    if audit_root is None:
+        settings = ctx.obj.get("settings") if isinstance(ctx.obj, dict) else None
+        if settings is None:
+            from recertia.settings import load_settings
+
+            settings = load_settings()
+        root_setting: Path | str | None = settings.operator_audit_root
+    else:
+        root_setting = audit_root
+    audit = open_operator_audit(root_setting, forbidden_roots=[runs_root])
     service = PromotionService(pdp=PolicyDecisionPoint.load(surface="cli"))
     try:
         status = service.promote(
@@ -169,6 +194,7 @@ def skills_promote(
             model_validated_on=model_validated_on,
             repo_root=repo_root,
             require_task_class_gate=require_task_class_gate,
+            audit=audit,
         )
     except RecertiaError as exc:
         from recertia.cli.exit import raise_exit
@@ -176,9 +202,16 @@ def skills_promote(
         raise_exit(exc)
     except PromotionError as exc:
         typer.echo(f"PROMOTION FAILED: {exc}", err=True)
-        if exc.failing_fixtures:
-            typer.echo(f"failing_fixtures={','.join(exc.failing_fixtures)}", err=True)
-        raise typer.Exit(code=1) from exc
+        if operator_detail:
+            record = audit.read(exc.audit_ref) if audit is not None and exc.audit_ref else None
+            if record is None:
+                typer.echo(
+                    "operator detail unavailable: operator audit root unset or refused",
+                    err=True,
+                )
+            else:
+                typer.echo(json.dumps(record, indent=2, default=str), err=True)
+        raise typer.Exit(code=1) from None
 
     typer.echo(
         f"skill_id={status.skill_id} version={status.version} "

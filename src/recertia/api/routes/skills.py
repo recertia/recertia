@@ -15,6 +15,7 @@ from recertia.ledger import HashChainLedger
 from recertia.memory.procedural.promote import PromotionError
 from recertia.memory.procedural.store import SkillStore
 from recertia.ports.identity import ledger_actor
+from recertia.review.promotion_audit import open_operator_audit
 
 
 def register_skills_routes(app: FastAPI, rs: RouteState) -> None:
@@ -110,13 +111,19 @@ def register_skills_routes(app: FastAPI, rs: RouteState) -> None:
             "promote",
             tenant_id=tenant_id,
             dry_run=False,
-            meta={"skill_id": skill_id, "version": version},
+            meta={"skill_id": skill_id, "version": version, "decision_only": True},
         )
         job.status = "running"
         ctx.job_runs.save(job)
         store = SkillStore(ctx.tenant_skills_root(tenant_id))
         runs_root = ctx.tenant_runs_root(tenant_id)
         log_dir = runs_root / "promotion_logs"
+        # REC-009: refusal detail goes to the operator-only sink, never to the job record,
+        # the response or the tenant runs_root. Unset or misplaced root: detail is dropped.
+        audit = open_operator_audit(
+            getattr(ctx.settings, "operator_audit_root", ""),
+            forbidden_roots=[ctx.root, runs_root],
+        )
         try:
             status = ctx.promotion_service.promote(
                 principal,
@@ -129,6 +136,7 @@ def register_skills_routes(app: FastAPI, rs: RouteState) -> None:
                 require_task_class_gate=False,
                 golden_dir=Path("evals/golden") / "repo-chore" / skill_id,
                 console_roles=frozenset(user.roles) if user is not None else None,
+                audit=audit,
             )
             if status.lifecycle != "approved":
                 raise PromotionError(
@@ -138,16 +146,17 @@ def register_skills_routes(app: FastAPI, rs: RouteState) -> None:
             job.finished_at = datetime.now(timezone.utc).isoformat()
             job.meta["lifecycle"] = status.lifecycle
         except PromotionError as exc:
+            decision = exc.decision()
             job.status = "failed"
             job.error = str(exc)
             job.finished_at = datetime.now(timezone.utc).isoformat()
-            job.meta["failing_fixtures"] = list(exc.failing_fixtures)
+            job.meta.update(decision)
             ctx.job_runs.save(job)
             return {
                 "job_run_id": job.job_run_id,
                 "status": "failed",
                 "error": str(exc),
-                "failing_fixtures": list(exc.failing_fixtures),
+                **decision,
             }
         except Forbidden as exc:
             job.status = "failed"
@@ -156,11 +165,30 @@ def register_skills_routes(app: FastAPI, rs: RouteState) -> None:
             ctx.job_runs.save(job)
             raise HTTPException(status_code=403, detail=exc.message) from exc
         except Exception as exc:  # noqa: BLE001
+            # An unexpected error can carry fixture paths; keep it out of the job record.
+            audit_ref = (
+                audit.record(
+                    {
+                        "skill_id": skill_id,
+                        "version": version,
+                        "refusal_kind": "internal_error",
+                        "detail": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                if audit is not None
+                else None
+            )
+            message = (
+                f"promotion failed: internal error; operator detail: audit_ref={audit_ref}"
+                if audit_ref is not None
+                else "promotion failed: internal error"
+            )
             job.status = "failed"
-            job.error = str(exc)
+            job.error = message
             job.finished_at = datetime.now(timezone.utc).isoformat()
+            job.meta["audit_ref"] = audit_ref
             ctx.job_runs.save(job)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=message) from None
         ctx.job_runs.save(job)
         ledger = HashChainLedger(runs_root / "ledger.jsonl")
         ledger.append(

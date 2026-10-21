@@ -12,10 +12,11 @@ refusal — competence compounds; it does not replace.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from contracts.skill import SkillVersion
 from contracts.status import Certification, SkillStatus
@@ -38,12 +39,47 @@ class PromotionWriter:
         return self._store._write_status_unchecked(status)
 
 
-class PromotionError(Exception):
-    """Golden gate failed, or the skill is not yet eligible for approval."""
+REFUSAL_GOLDEN_GATE = "golden_gate"
+REFUSAL_PREDECESSOR = "predecessor_non_regression"
+REFUSAL_GATE_ERROR = "gate_error"
 
-    def __init__(self, message: str, *, failing_fixtures: list[str] | None = None) -> None:
+
+class PromotionAuditSink(Protocol):
+    """Operator-only store for refusal detail (``recertia.review.promotion_audit``)."""
+
+    def record(self, entry: Mapping[str, Any]) -> str: ...
+
+
+class PromotionError(Exception):
+    """Golden gate failed, or the skill is not yet eligible for approval.
+
+    Proposer-facing and decision-only (REC-009): a gate refusal carries the refusal kind,
+    the number of failing fixtures and an opaque ``audit_ref``. Fixture ids, golden paths,
+    log paths, inputs and criteria go only to the operator audit sink.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        refusal_kind: str | None = None,
+        failing_count: int = 0,
+        audit_ref: str | None = None,
+    ) -> None:
         super().__init__(message)
-        self.failing_fixtures = failing_fixtures or []
+        self.refusal_kind = refusal_kind
+        self.failing_count = failing_count
+        self.audit_ref = audit_ref
+
+    def decision(self) -> dict[str, Any]:
+        """The proposer-visible decision, for job records and HTTP bodies."""
+
+        return {
+            "decision": "refused",
+            "refusal_kind": self.refusal_kind,
+            "failing_count": self.failing_count,
+            "audit_ref": self.audit_ref,
+        }
 
 
 def promote_to_approved(
@@ -62,6 +98,7 @@ def promote_to_approved(
     factory: object | None = None,
     executor: object | None = None,
     gate: GateRunner | None = None,
+    audit: PromotionAuditSink | None = None,
 ) -> SkillStatus:
     """Run golden regression; on pass, write ``lifecycle=approved`` and the log ref.
 
@@ -70,6 +107,10 @@ def promote_to_approved(
 
     ``self_distilled`` versions are approved but stay inactive until live-mix admission
     (contribution evidence); human-authored and mined versions go active on approval.
+
+    A gate refusal raises a decision-only :class:`PromotionError`. Its full detail goes to
+    ``audit`` (operator-only). With no ``audit`` sink the detail is dropped, never written
+    anywhere a proposer can read; the log in ``log_dir`` then holds the decision only.
     """
 
     ver = store.get_version(skill_id, version)
@@ -97,21 +138,42 @@ def promote_to_approved(
         repo_root=repo_root,
     )
 
-    report = _run_regression(
-        ver,
-        golden_dir=golden_dir,
-        golden_root=golden_root,
-        runs_root=runs_root,
-        require_task_class_gate=require_task_class_gate,
-        extra_golden_dirs=extra_dirs,
-        factory=factory,
-        executor=executor,
-        gate=gate,
-    )
-
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{skill_id}-v{version}.json"
-    log_path.write_text(_report_json(report), encoding="utf-8")
+
+    gate_error: str | None = None
+    try:
+        report = _run_regression(
+            ver,
+            golden_dir=golden_dir,
+            golden_root=golden_root,
+            runs_root=runs_root,
+            require_task_class_gate=require_task_class_gate,
+            extra_golden_dirs=extra_dirs,
+            factory=factory,
+            executor=executor,
+            gate=gate,
+        )
+    except (ValueError, OSError) as exc:
+        # The message can name fixture paths or echo fixture contents (JSON and model
+        # validation errors); it goes to the operator sink only.
+        gate_error = f"{type(exc).__name__}: {exc}"
+    if gate_error is not None:
+        audit_ref = _record_refusal(
+            audit,
+            {
+                "skill_id": skill_id,
+                "version": version,
+                "refusal_kind": REFUSAL_GATE_ERROR,
+                "detail": gate_error,
+            },
+        )
+        _write_refusal_log(log_path, REFUSAL_GATE_ERROR, 0, audit_ref)
+        raise PromotionError(
+            _refusal_message("golden gate error", skill_id, version, None, audit_ref),
+            refusal_kind=REFUSAL_GATE_ERROR,
+            audit_ref=audit_ref,
+        )
 
     regressions = _predecessor_regressions(extra_dirs, report)
     if not report.all_passed or regressions:
@@ -121,12 +183,28 @@ def promote_to_approved(
         for name in regressions:
             if name not in failing:
                 failing.append(name)
-        kind = "predecessor non-regression" if regressions else "golden gate"
-        raise PromotionError(
-            f"{kind} failed for {skill_id}@v{version}: "
-            f"failing fixtures={failing} (log: {log_path})",
-            failing_fixtures=failing,
+        kind = REFUSAL_PREDECESSOR if regressions else REFUSAL_GOLDEN_GATE
+        label = "predecessor non-regression" if regressions else "golden gate"
+        audit_ref = _record_refusal(
+            audit,
+            {
+                "skill_id": skill_id,
+                "version": version,
+                "refusal_kind": kind,
+                "failing_fixtures": failing,
+                "results": _report_rows(report),
+                "detail": f"predecessor regressions={regressions}" if regressions else "",
+            },
         )
+        _write_refusal_log(log_path, kind, len(failing), audit_ref)
+        raise PromotionError(
+            _refusal_message(label, skill_id, version, len(failing), audit_ref),
+            refusal_kind=kind,
+            failing_count=len(failing),
+            audit_ref=audit_ref,
+        )
+
+    log_path.write_text(_report_json(report), encoding="utf-8")
 
     golden_ref = _portable_ref(log_path, repo_root)
 
@@ -316,18 +394,56 @@ def _run_regression(
         runner = GoldenGateRunner(GraphOrchestratorFactory(executor))  # type: ignore[arg-type]
     else:
         runner = GoldenGateRunner()
-    try:
-        return runner.run(
-            ver,
-            runs_root=runs_root,
-            golden_root=golden_root,
-            golden_dir=golden_dir,
-            require_task_class_gate=require_task_class_gate,
-            require_fixture=True,
-            extra_golden_dirs=extra_golden_dirs,
-        )
-    except ValueError as exc:
-        raise PromotionError(str(exc)) from exc
+    return runner.run(
+        ver,
+        runs_root=runs_root,
+        golden_root=golden_root,
+        golden_dir=golden_dir,
+        require_task_class_gate=require_task_class_gate,
+        require_fixture=True,
+        extra_golden_dirs=extra_golden_dirs,
+    )
+
+
+def _record_refusal(audit: PromotionAuditSink | None, entry: dict[str, Any]) -> str | None:
+    if audit is None:
+        return None
+    return audit.record(entry)
+
+
+def _refusal_message(
+    label: str, skill_id: str, version: int, failing_count: int | None, audit_ref: str | None
+) -> str:
+    message = f"promotion refused: {label} failed for {skill_id}@v{version}"
+    if failing_count is not None:
+        message += f": {failing_count} failing fixture(s)"
+    if audit_ref is not None:
+        return f"{message}; operator detail: audit_ref={audit_ref}"
+    return f"{message}; operator detail not recorded (operator audit root unset)"
+
+
+def _write_refusal_log(
+    log_path: Path, refusal_kind: str, failing_count: int, audit_ref: str | None
+) -> None:
+    """Decision-only log: no results, fixture ids, golden paths or run ids."""
+
+    payload = {
+        "all_passed": False,
+        "decision": "refused",
+        "refusal_kind": refusal_kind,
+        "failing_count": failing_count,
+        "audit_ref": audit_ref,
+    }
+    log_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _report_rows(report: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for result in report.results:
+        row = asdict(result)
+        row["at"] = result.at.isoformat()
+        rows.append(row)
+    return rows
 
 
 def _portable_ref(log_path: Path, repo_root: Path | None) -> str:
@@ -345,12 +461,7 @@ def _portable_ref(log_path: Path, repo_root: Path | None) -> str:
 
 
 def _report_json(report: Any) -> str:
-    results: list[dict] = []
-    for result in report.results:
-        row = asdict(result)
-        row["at"] = result.at.isoformat()
-        results.append(row)
-    payload = {"all_passed": report.all_passed, "results": results}
+    payload = {"all_passed": report.all_passed, "results": _report_rows(report)}
     return json.dumps(payload, indent=2) + "\n"
 
 

@@ -155,7 +155,10 @@ def test_intentionally_bad_skill_blocked_by_regression_gate(tmp_path: Path) -> N
             runs_root=tmp_path / "runs",
             log_dir=tmp_path / "logs",
         )
-    assert "intentionally-bad" in exc.value.failing_fixtures or exc.value.failing_fixtures
+    # REC-009: decision-only refusal; fixture ids go to the operator audit sink.
+    assert exc.value.refusal_kind == "golden_gate"
+    assert exc.value.failing_count >= 1
+    assert not hasattr(exc.value, "failing_fixtures")
     assert store.get_status("intentionally-bad", 1).lifecycle == "candidate"
 
 

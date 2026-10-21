@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Gap A fixture-id leak (REC-009, local prep; spec text pending CTO-rec and Rob)** —
+  a golden-gate refusal is now decision-only for proposers. `PromotionError` carries
+  `refusal_kind` (`golden_gate` | `predecessor_non_regression` | `gate_error`),
+  `failing_count` and an opaque `audit_ref`; the `failing_fixtures` attribute is gone.
+  Fixture ids, golden paths and result rows go to an operator-only SQLite store under
+  `RECERTIA_OPERATOR_AUDIT_ROOT` (`recertia.review.promotion_audit`), which fails closed:
+  unset means the detail is dropped, and a root inside a git checkout, the API root or a
+  tenant `runs_root` is refused. The promote HTTP body, the promote job record
+  (`GET /v1/jobs`, `GET /v1/jobs/{id}`; older records are redacted on read), the refusal
+  promotion log and CLI stderr no longer name fixtures; `recertia skills promote
+  --operator-detail` prints the audit record. Held-out splits get a strict hash-manifest
+  loader (`recertia.evals.heldout_manifest.verify_heldout_tree`) and a schema under
+  `evals/heldout/`, with no data committed.
+
 ### Fixed
 
 - **REL-3 probe_b / probe_a2 hang (REC-017)** — `tests/probes/rel3_probe.py` now

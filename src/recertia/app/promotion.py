@@ -41,6 +41,7 @@ class PromotionService:
         repo_root: Path | None = None,
         require_task_class_gate: bool = False,
         console_roles: frozenset[str] | None = None,
+        audit: Any | None = None,
     ) -> Any:
         self._require(principal, console_roles=console_roles)
         return promote_to_approved(
@@ -56,6 +57,7 @@ class PromotionService:
             repo_root=repo_root,
             require_task_class_gate=require_task_class_gate,
             gate=self._gate,
+            audit=audit,
         )
 
     def _require(

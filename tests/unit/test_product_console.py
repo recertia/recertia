@@ -177,7 +177,9 @@ def test_pc2_promote_does_not_skip_golden_gate(tmp_path: Path) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "failed"
-    assert "failing_fixtures" in body or "error" in body
+    # REC-009: the promote body is decision-only.
+    assert body["decision"] == "refused"
+    assert "failing_fixtures" not in body
 
     after = store.get_status(ver.skill_id, ver.version).lifecycle
     assert after != "approved"

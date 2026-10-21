@@ -30,6 +30,24 @@ class JobRunRecord:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    def public_dict(self) -> dict[str, Any]:
+        """Run-scope view (``GET /v1/jobs``): promote jobs never show refusal detail.
+
+        REC-009: new promote records are decision-only at the source. Records written
+        before that (no ``decision_only`` marker) may hold fixture ids in ``error`` and
+        ``meta.failing_fixtures``; both are redacted here.
+        """
+
+        out = self.to_dict()
+        if self.job != "promote":
+            return out
+        meta = dict(out.get("meta") or {})
+        meta.pop("failing_fixtures", None)
+        if not meta.get("decision_only") and out.get("error"):
+            out["error"] = "promotion refused (detail redacted)"
+        out["meta"] = meta
+        return out
+
 
 class JobRunStore:
     def __init__(self, path: Path | str) -> None:

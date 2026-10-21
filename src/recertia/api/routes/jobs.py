@@ -36,7 +36,9 @@ def register_jobs_routes(app: FastAPI, rs: RouteState) -> None:
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         return {
-            "items": [j.to_dict() for j in ctx.job_runs.list(tenant_id=tenant_id, limit=limit)]
+            "items": [
+                j.public_dict() for j in ctx.job_runs.list(tenant_id=tenant_id, limit=limit)
+            ]
         }
     @app.get("/v1/jobs/{job_run_id}")
     def get_job(
@@ -49,7 +51,7 @@ def register_jobs_routes(app: FastAPI, rs: RouteState) -> None:
         rec = ctx.job_runs.get(job_run_id, tenant_id=tenant_id)
         if rec is None:
             raise HTTPException(status_code=404, detail="job not found")
-        return rec.to_dict()
+        return rec.public_dict()
     @app.post("/v1/jobs/{job}/run")
     def trigger_job(
         job: str,
