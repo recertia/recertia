@@ -25,7 +25,8 @@ from recertia.evals.golden import GoldenReport, GoldenResult
 from recertia.memory.procedural.store import SkillStore
 from recertia.review.promotion import PromotionError, promote_to_approved
 from recertia.review.promotion_audit import OperatorAuditStore
-from tests.support.promotion_fixtures import FIXTURE, SKILL
+from tests.support.http import error_text
+from tests.support.promotion_fixtures import ABS_PATH, FIXTURE, SKILL
 from tests.support.promotion_fixtures import assert_no_leak as _assert_no_leak
 from tests.support.promotion_fixtures import exception_surfaces as _exception_surfaces
 from tests.support.promotion_fixtures import leak_golden as _golden
@@ -194,12 +195,32 @@ def test_audit_write_failure_after_the_gate_refuses_as_audit_unavailable(tmp_pat
     assert store.get_status(SKILL, 1).lifecycle == "candidate"
 
 
-def test_gate_error_detail_goes_to_the_audit_sink_only(tmp_path: Path) -> None:
+GATE_ERRORS = ("oserror_names_the_path", "validation_error_echoes_the_input")
+
+
+@pytest.mark.parametrize("case", GATE_ERRORS)
+def test_gate_error_detail_goes_to_the_audit_sink_only(case: str, tmp_path: Path) -> None:
+    """M5: the gate error's own text names the fixture and its path; proposers never see it.
+
+    The audit record must contain the fixture id and path, which proves the planted
+    error really echoes them (a vacuous error would let a re-appended message pass).
+    """
+
     store = SkillStore(tmp_path / "skills")
     store.write_candidate(_skill(1, command="true", criterion_run="true"))
     fixture = tmp_path / "golden" / "repo-chore" / FIXTURE
     fixture.mkdir(parents=True)
-    (fixture / "task.json").write_text("{not json " + FIXTURE, encoding="utf-8")
+    if case == "oserror_names_the_path":
+        (fixture / "task.json").mkdir()  # reading it raises IsADirectoryError(path)
+    else:
+        (fixture / "task.json").write_text(
+            json.dumps({"request": "synthetic", "expected_skill_id": SKILL}) + "\n",
+            encoding="utf-8",
+        )
+        (fixture / "goal.json").write_text(
+            json.dumps({"context": [f"{FIXTURE} lives at {fixture}"]}) + "\n",
+            encoding="utf-8",
+        )
     audit = OperatorAuditStore(tmp_path / "operator")
     with pytest.raises(PromotionError) as caught:
         promote_to_approved(
@@ -215,8 +236,17 @@ def test_gate_error_detail_goes_to_the_audit_sink_only(tmp_path: Path) -> None:
     assert exc.refusal_kind == "gate_error"
     for surface in _exception_surfaces(exc):
         _assert_no_leak(surface, fixture, tmp_path)
+    _assert_no_leak((tmp_path / "logs" / f"{SKILL}-v1.json").read_text(encoding="utf-8"), tmp_path)
     record = audit.read(exc.audit_ref or "")
-    assert record is not None and record["detail"].startswith("JSONDecodeError")
+    assert record is not None
+    expected = "IsADirectoryError" if case == "oserror_names_the_path" else "ValidationError"
+    assert record["detail"].startswith(expected), record["detail"]
+    assert FIXTURE in record["detail"]
+    # pydantic shortens long input values; the OSError carries the full path.
+    if case == "oserror_names_the_path":
+        assert str(fixture) in record["detail"]
+    else:
+        assert ABS_PATH.search(record["detail"]) and "repo-chore/" in record["detail"]
 
 
 # ----- HTTP: promote body and the jobs endpoints for a runs-only key -----
@@ -359,6 +389,50 @@ def test_jobs_endpoints_redact_legacy_promote_records(
         assert resp.status_code == 200
         _assert_no_leak(resp.text, tmp_path)
         assert "failing_fixtures" not in resp.text
+
+
+class _ExplodingGate:
+    """GateRunner stand-in whose unexpected error text names the fixture and its path."""
+
+    def __init__(self, fixture_dir: Path) -> None:
+        self.fixture_dir = fixture_dir
+
+    def run(self, version: Any, *, runs_root: Path, **kwargs: Any) -> GoldenReport:
+        del version, runs_root, kwargs
+        raise RuntimeError(f"fixture {FIXTURE} blew up reading {self.fixture_dir}/task.json")
+
+
+def test_promote_route_internal_error_text_never_reaches_proposers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M5: the generic 400 path keeps the raw exception text in the audit store only."""
+
+    client, app = _app(tmp_path, monkeypatch)
+    ctx = app.state.recertia
+    SkillStore(ctx.tenant_skills_root("t1")).write_candidate(
+        _skill(1, command="true", criterion_run="true")
+    )
+    fixture_dir = tmp_path / "heldout-src" / "repo-chore" / FIXTURE
+    monkeypatch.setattr(ctx.promotion_service, "_gate", _ExplodingGate(fixture_dir))
+    resp = client.post(
+        f"/v1/skills/{SKILL}/versions/1/promote", headers=_key(app, {"runs", "promote"})
+    )
+    assert resp.status_code == 400, resp.text
+    message = error_text(resp)
+    assert message.startswith("promotion failed: internal error; operator detail: audit_ref=pa-")
+    runs_only = _key(app, {"runs"})
+    jobs = client.get("/v1/jobs", headers=runs_only)
+    (job,) = [item for item in jobs.json()["items"] if item.get("job") == "promote"]
+    one = client.get(f"/v1/jobs/{job['job_run_id']}", headers=runs_only)
+    assert one.json()["status"] == "failed"
+    stored = ctx.job_runs.get(job["job_run_id"], tenant_id="t1")
+    assert stored is not None
+    for text in (resp.text, jobs.text, one.text, json.dumps(stored.to_dict(), default=str)):
+        _assert_no_leak(text, fixture_dir, tmp_path)
+        assert "blew up" not in text
+    record = OperatorAuditStore(tmp_path / "operator").read(message.rsplit("=", 1)[1])
+    assert record is not None and record["refusal_kind"] == "internal_error"
+    assert FIXTURE in record["detail"] and str(fixture_dir) in record["detail"]
 
 
 AUDIT_CASES = ("unset", "inside_api_root", "inside_runs_root", "open_error")
