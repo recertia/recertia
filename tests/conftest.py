@@ -232,7 +232,9 @@ def pytest_runtest_teardown(item: Any, nextitem: Any) -> Generator[None, None, N
     del item, nextitem
     try:
         failure = stop_test_workers_report(timeout=TEARDOWN_TIMEOUT_S)
-    except Exception as exc:  # never skip pytest's own teardown: that cascades
+    # pytest.fail.Exception too: pytest-timeout's signal method raises it here when the
+    # 60s per-test budget runs out mid-stop, and raising before the yield cascades.
+    except (Exception, pytest.fail.Exception) as exc:  # never skip pytest's own teardown
         failure = f"stopping test workers raised {exc!r} in teardown"
     try:
         result = yield

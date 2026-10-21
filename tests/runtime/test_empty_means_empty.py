@@ -42,7 +42,7 @@ def _empty_report(tmp_path: Path) -> dict:
         capture_output=True,
         text=True,
         cwd=tmp_path,
-        timeout=120,
+        timeout=45,  # below the suite's 60s pytest-timeout
     )
     return json.loads(out.read_text())
 

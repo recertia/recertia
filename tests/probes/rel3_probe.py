@@ -23,8 +23,11 @@ RESULTS: list[tuple[str, bool, str]] = []
 def record(name, ok, detail):
     RESULTS.append((name, ok, detail)); print(f"[{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
 
-_BARRIER_TIMEOUT_S = 30
-_JOIN_TIMEOUT_S = 60
+# Both stay below the suite-wide pytest-timeout (60s, pyproject.toml) so the
+# probe's own hang path (stack dumps, kill children) runs first, and children
+# are daemonic so a pre-empted test cannot leave the session blocked at exit.
+_BARRIER_TIMEOUT_S = 20
+_JOIN_TIMEOUT_S = 40
 
 def _spawn():
     return mp.get_context("spawn")
@@ -155,7 +158,7 @@ def holder_then_crash(root, journal, run):
 # --- A: crash then resume must not re-run an applied op --------------------------------
 def scen_crash_resume():
     root = Path(tempfile.mkdtemp()); j = root / "journal"
-    ctx = _spawn(); p = ctx.Process(target=holder_then_crash, args=(str(root), str(j), "r1"), name="rel3-holder-r1"); p.start(); _join_or_fail("scen_crash_resume", [p])
+    ctx = _spawn(); p = ctx.Process(target=holder_then_crash, args=(str(root), str(j), "r1"), name="rel3-holder-r1", daemon=True); p.start(); _join_or_fail("scen_crash_resume", [p])
     l = mk_lease(root); tok = l.acquire()
     led = OperationLedger(root / "runtime.db")
     def eff():
@@ -169,7 +172,7 @@ def scen_crash_resume():
 # --- A2: steal(inc2) does work, releases cleanly, then resume gets inc1 again -------------
 def scen_incarnation_reset():
     root = Path(tempfile.mkdtemp()); j = root / "journal"
-    ctx = _spawn(); p = ctx.Process(target=holder_then_crash, args=(str(root), str(j), "r2"), name="rel3-holder-r2"); p.start(); _join_or_fail("scen_incarnation_reset", [p])
+    ctx = _spawn(); p = ctx.Process(target=holder_then_crash, args=(str(root), str(j), "r2"), name="rel3-holder-r2", daemon=True); p.start(); _join_or_fail("scen_incarnation_reset", [p])
     l = mk_lease(root, "r2"); l.acquire(); inc_after_crash = l.incarnation; l.release()
     l3 = mk_lease(root, "r2"); l3.acquire(); inc_next = l3.incarnation; l3.release()
     record("A2 incarnation never goes backwards", inc_next >= inc_after_crash,
@@ -194,7 +197,7 @@ def racer(root, journal, run, barrier):
 
 def scen_race():
     root = Path(tempfile.mkdtemp()); j = root / "journal"; n = 8
-    ctx = _spawn(); b = ctx.Barrier(n); ps = [ctx.Process(target=racer, args=(str(root), str(j), "r3", b), name=f"rel3-racer-{i}") for i in range(n)]
+    ctx = _spawn(); b = ctx.Barrier(n); ps = [ctx.Process(target=racer, args=(str(root), str(j), "r3", b), name=f"rel3-racer-{i}", daemon=True) for i in range(n)]
     [p.start() for p in ps]; _join_or_fail("scen_race", ps)
     ev = sorted((float(t), k) for k, t in (l.split() for l in effects(Path(str(j) + ".hold"))))
     depth = mx = 0
@@ -216,7 +219,7 @@ def scen_unlinked_lock():
     root = Path(tempfile.mkdtemp())
     a = mk_lease(root, "r4"); ta = a.acquire()
     os.unlink(root / "locks" / "r4.lock")          # e.g. locks/ cleanup while a run is live
-    ctx = mp.get_context("spawn"); q = ctx.Queue(); go = ctx.Event(); p = ctx.Process(target=b_holder, args=(str(root), q, go), name="rel3-b_holder"); p.start()
+    ctx = mp.get_context("spawn"); q = ctx.Queue(); go = ctx.Event(); p = ctx.Process(target=b_holder, args=(str(root), q, go), name="rel3-b_holder", daemon=True); p.start()
     kind, tb = q.get(timeout=10)
     record("C lock-file unlink must not allow a 2nd holder", kind == "busy", f"holder A tok={ta} (alive); other process: {kind} tok={tb}")
     if kind == "acq":

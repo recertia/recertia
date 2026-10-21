@@ -27,7 +27,7 @@ pytest_plugins = ["pytester"]
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEADLINE_S = 1.0  # TEARDOWN_TIMEOUT_S in the child session
 MARGIN_S = 3.0
-CHILD_TIMEOUT_S = 90.0  # a hang shows up as Pytester.TimeoutExpired
+CHILD_TIMEOUT_S = 45.0  # a hang shows up as Pytester.TimeoutExpired, before the 60s pytest-timeout
 
 CHILD_CONFTEST = f"""
 import json

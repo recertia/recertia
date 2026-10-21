@@ -129,7 +129,7 @@ def _hashes_under_seed(seed: str) -> dict[str, str]:
         env=env,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=45,  # below the suite's 60s pytest-timeout
         check=False,
     )
     assert proc.returncode == 0, f"seed {seed}: {proc.stderr}"

@@ -65,6 +65,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from grimp's native rayon pool, started by the `tests/boundary` graph build
   on a cold `.grimp_cache`; they are not addressed here.
 
+- **pytest-timeout backstop vs the bounds under it (post-merge #112/#115)** — the
+  60s suite timeout pre-empted bounds that were meant to fire first: the REL-3
+  probe's join (60s, now 40s; barrier 30s, now 20s), the pytester child limits of
+  the teardown-wiring (90s) and exit-guard (60s) tests (now 45s), and two
+  subprocess limits (120s and 60s, now 45s). Probe children are daemonic, so a
+  pre-empted probe test can no longer block interpreter exit on a hung child. The
+  teardown wrapper now also catches `pytest.fail.Exception` (what the signal
+  method raises) while stopping workers, so a timeout there no longer skips
+  pytest's teardown and cascades. `container-smoke` leaves the timeout test's
+  PENDING list now that #112 is on main.
+
 ### Added
 
 - **REC-011 C1 part 1 run resolution** — `EvalStore.append_run` records

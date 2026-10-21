@@ -14,7 +14,7 @@ from pathlib import Path
 CI_YML = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 MAX_MINUTES = 60
 # Jobs whose timeout another open PR adds. Drop the entry once that PR is on main.
-PENDING = {"container-smoke": "#112 sets timeout-minutes: 5"}
+PENDING: dict[str, str] = {}
 
 
 def _job_timeouts() -> dict[str, int | None]:

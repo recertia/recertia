@@ -26,7 +26,7 @@ pytest_plugins = ["pytester"]
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GRACE_S = 1.0  # EXIT_GRACE_S and TEARDOWN_TIMEOUT_S in the child session
 EXIT_LIMIT_S = 30.0  # the hung child must be gone well within this
-CHILD_TIMEOUT_S = 60.0  # a hang shows up as Pytester.TimeoutExpired
+CHILD_TIMEOUT_S = 45.0  # a hang shows up as Pytester.TimeoutExpired, before the 60s pytest-timeout
 STUCK_S = 15.0  # a bounded stuck thread: without the guard the child exits 0 after this
 
 CHILD_CONFTEST = f"""
