@@ -74,6 +74,13 @@ def test_ratchet_targets_tests_but_plain_mypy_files_do_not() -> None:
     assert "tests" not in pyproject["tool"]["mypy"]["files"]
 
 
+def test_ci_pins_mypy_and_keeps_the_plain_gating_step() -> None:
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "pip install mypy==2.4.0" in ci
+    assert "run: mypy contracts/ src/recertia/\n" in ci
+    assert "run: python3 scripts/mypy_ratchet.py\n" in ci
+
+
 # End to end: run the real script (and real mypy) against a temporary module.
 
 BASE_MODULE = """\

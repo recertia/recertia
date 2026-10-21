@@ -39,6 +39,11 @@ jobs:
       - name: Ruff version
         run: ruff --version
 
+      # mypy error counts are version-dependent (1.11.2 gives 196 where 2.4.0 gives
+      # 198) and the ratchet below compares them. Re-seed with --write on a bump.
+      - name: Pin mypy
+        run: pip install mypy==2.4.0 && mypy --version
+
       - name: Lint (ruff)
         run: ruff check contracts/ src/ scripts/ tests/ conftest.py
 
