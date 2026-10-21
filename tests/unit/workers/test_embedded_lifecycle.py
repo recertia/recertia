@@ -286,3 +286,41 @@ def test_shutdown_all_ignores_a_patched_time_monotonic(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(time, "monotonic", exhausted_clock)
     assert AsyncRunWorker.shutdown_all(timeout=5) is True
+
+
+def test_teardown_stops_queue_workers_before_pools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CTO-rec S3: a queue worker's last submit must not leak a pool past teardown.
+
+    The stand-in ``stop_all`` submits a run, as a queue worker can while it
+    stops. Queue first, then pools: ``shutdown_all`` closes the pool that
+    submit used. Pools first: the submit restarts a closed pool (F2) after
+    ``shutdown_all`` ran, so a ``recertia-run`` thread and a registered worker
+    outlive teardown.
+    """
+
+    from recertia.workers.run_worker import AsyncRunWorker
+    from tests.conftest import stop_test_workers_report
+
+    worker = AsyncRunWorker(events=_NullEvents())  # type: ignore[arg-type]
+    worker._run = lambda req: "succeeded"  # type: ignore[method-assign]
+    before = {t for t in threading.enumerate() if t.name.startswith("recertia-run")}
+    results: list[str] = []
+
+    def last_submit_then_stop(cls: Any, timeout: float = 5.0) -> bool:
+        del cls
+        run_id = f"r{len(results)}"
+        worker.submit(SimpleNamespace(tenant_id="t1", run_id=run_id))  # type: ignore[arg-type]
+        results.append(worker._futures[("t1", run_id)].result(timeout))  # stop waits for in-flight work
+        return True
+
+    try:
+        with monkeypatch.context() as mp:  # undone before this test's own teardown
+            mp.setattr(EmbeddedQueueWorker, "stop_all", classmethod(last_submit_then_stop))
+            assert stop_test_workers_report(timeout=5) is None
+        assert results == ["succeeded"]
+        run_threads = [t for t in threading.enumerate() if t.name.startswith("recertia-run")]
+        leaked = [t for t in run_threads if t not in before and t.is_alive()]
+        assert worker not in AsyncRunWorker._instances
+        assert leaked == []
+    finally:
+        AsyncRunWorker.shutdown_all(timeout=5)

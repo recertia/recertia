@@ -3,6 +3,11 @@
 Each test runs a child pytest in a subprocess with ``tests.conftest`` loaded as
 a plugin, so the hook wiring (not only ``stop_test_workers``) is covered. A
 subprocess keeps a deliberately hung thread out of this process.
+
+Loading the conftest with ``-p`` registers it earlier than a real
+``conftest.py``, so the child's hook order differs slightly from the suite's
+(CTO-rec S2): the teardown wrapper still wraps pytest's own teardown (fixture
+finalizers), which is the property these tests check.
 """
 
 from __future__ import annotations
@@ -68,6 +73,19 @@ def hung_run():
     worker._pool.submit(run)
     assert entered.wait(10)
     return worker
+
+
+@pytest.fixture()
+def finalizer_sees_no_workers():
+    worker = AsyncRunWorker(events=None)
+    worker._pool.submit(lambda: None).result(10)  # an idle recertia-run thread
+    yield worker
+    alive = [
+        t.name
+        for t in threading.enumerate()
+        if t.name.startswith(("recertia-run", "recertia-queue")) and t.is_alive()
+    ]
+    assert alive == [], "worker threads alive in a fixture finalizer: " + repr(alive)
 """
 
 
@@ -194,5 +212,65 @@ def test_error_while_stopping_workers_does_not_cascade(
     result.assert_outcomes(passed=2, errors=1)
     result.stdout.fnmatch_lines(
         ["*ERROR at teardown of test_breaks_stop_all*", "*stopping test workers raised*"]
+    )
+    result.stdout.no_fnmatch_line("*previous item was not torn down properly*")
+
+
+def test_workers_are_stopped_before_fixture_finalizers(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CTO-rec S2: fixture finalizers run with every worker thread already stopped.
+
+    Against "yield first, then stop", the finalizer sees the live pool thread
+    and the test ERRORs at teardown.
+    """
+
+    pytester.makepyfile(
+        test_child="""
+        def test_uses_a_pool(finalizer_sees_no_workers):
+            pass
+        """
+    )
+    result = _run_child(pytester, monkeypatch)
+
+    result.assert_outcomes(passed=1)
+    result.stdout.no_fnmatch_line("*worker threads alive in a fixture finalizer*")
+
+
+def test_finalizer_error_keeps_the_leak_message(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CTO-rec S1b: when a finalizer raises, the leak message rides on that error as a note."""
+
+    pytester.makepyfile(
+        test_child="""
+        import pytest
+
+        from recertia.workers.embedded import EmbeddedQueueWorker
+
+
+        @pytest.fixture()
+        def boom():
+            yield
+            raise RuntimeError("finalizer boom")
+
+
+        def test_leaks_and_finalizer_raises(monkeypatch, boom):
+            monkeypatch.setattr(EmbeddedQueueWorker, "stop_all", classmethod(lambda cls, timeout=5.0: False))
+
+
+        def test_next_test_is_clean():
+            pass
+        """
+    )
+    result = _run_child(pytester, monkeypatch)
+
+    result.assert_outcomes(passed=2, errors=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*ERROR at teardown of test_leaks_and_finalizer_raises*",
+            "*RuntimeError: finalizer boom*",
+            "*embedded queue worker did not stop within 1s*",
+        ]
     )
     result.stdout.no_fnmatch_line("*previous item was not torn down properly*")

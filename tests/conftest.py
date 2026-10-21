@@ -121,7 +121,7 @@ def pytest_runtest_setup(item: Any) -> None:
 TEARDOWN_TIMEOUT_S = 5.0
 
 
-@pytest.hookimpl(wrapper=True)
+@pytest.hookimpl(wrapper=True, trylast=True)
 def pytest_runtest_teardown(item: Any, nextitem: Any) -> Generator[None, None, None]:
     """Stop every worker thread a test started (REC-029 N4, S1, S2; REC-031 F1, F3).
 
@@ -138,6 +138,11 @@ def pytest_runtest_teardown(item: Any, nextitem: Any) -> Generator[None, None, N
     get a collateral "previous item was not torn down properly" error. An
     exception while stopping is reported the same way, never raised before
     the ``yield``: that would skip pytest's teardown and error every later test.
+    If pytest's teardown itself raises, the leak message is attached to that
+    exception as a note instead of being lost.
+
+    ``trylast`` keeps this wrapper inside the capture wrapper, so output
+    printed while stopping lands in the test's captured teardown section.
     """
 
     del item, nextitem
@@ -145,7 +150,12 @@ def pytest_runtest_teardown(item: Any, nextitem: Any) -> Generator[None, None, N
         failure = stop_test_workers_report(timeout=TEARDOWN_TIMEOUT_S)
     except Exception as exc:  # never skip pytest's own teardown: that cascades
         failure = f"stopping test workers raised {exc!r} in teardown"
-    result = yield
+    try:
+        result = yield
+    except BaseException as exc:  # a finalizer raised: keep the leak message
+        if failure is not None:
+            exc.add_note(failure)
+        raise
     if failure is not None:
         pytest.fail(failure, pytrace=False)
     return result
@@ -164,6 +174,9 @@ def stop_test_workers_report(timeout: float = 5.0) -> str | None:
     from recertia.workers.embedded import EmbeddedQueueWorker
     from recertia.workers.run_worker import AsyncRunWorker
 
+    # Queue workers first, then pools (CTO-rec S3): a live queue worker can
+    # still submit a run, and a submit into a pool that shutdown_all already
+    # closed silently starts a new pool (F2) whose thread outlives teardown.
     queue_stopped = EmbeddedQueueWorker.stop_all(timeout=timeout)
     pools_stopped = AsyncRunWorker.shutdown_all(timeout=timeout)
     problems = []
