@@ -165,3 +165,34 @@ def test_stuck_queue_worker_fails_teardown_without_a_collateral_error(
         ]
     )
     result.stdout.no_fnmatch_line("*previous item was not torn down properly*")
+
+
+def test_error_while_stopping_workers_does_not_cascade(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An exception while stopping workers is one teardown ERROR, not a session-wide cascade."""
+
+    pytester.makepyfile(
+        test_child="""
+        from recertia.workers.embedded import EmbeddedQueueWorker
+
+
+        def _boom(cls, timeout=5.0):
+            raise StopIteration
+
+
+        def test_breaks_stop_all(monkeypatch):
+            monkeypatch.setattr(EmbeddedQueueWorker, "stop_all", classmethod(_boom))
+
+
+        def test_next_test_is_clean():
+            pass
+        """
+    )
+    result = _run_child(pytester, monkeypatch)
+
+    result.assert_outcomes(passed=2, errors=1)
+    result.stdout.fnmatch_lines(
+        ["*ERROR at teardown of test_breaks_stop_all*", "*stopping test workers raised*"]
+    )
+    result.stdout.no_fnmatch_line("*previous item was not torn down properly*")

@@ -135,11 +135,16 @@ def pytest_runtest_teardown(item: Any, nextitem: Any) -> Generator[None, None, N
 
     A failure is raised only *after* the ``yield`` (F3): pytest's own teardown
     (fixture finalizers, monkeypatch undo) has run, so the next test does not
-    get a collateral "previous item was not torn down properly" error.
+    get a collateral "previous item was not torn down properly" error. An
+    exception while stopping is reported the same way, never raised before
+    the ``yield``: that would skip pytest's teardown and error every later test.
     """
 
     del item, nextitem
-    failure = stop_test_workers_report(timeout=TEARDOWN_TIMEOUT_S)
+    try:
+        failure = stop_test_workers_report(timeout=TEARDOWN_TIMEOUT_S)
+    except Exception as exc:  # never skip pytest's own teardown: that cascades
+        failure = f"stopping test workers raised {exc!r} in teardown"
     result = yield
     if failure is not None:
         pytest.fail(failure, pytrace=False)
