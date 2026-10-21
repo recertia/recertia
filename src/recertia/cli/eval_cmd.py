@@ -25,15 +25,28 @@ def eval_run(
     eval_db: Path = typer.Option(Path(".recertia/evals.db"), "--eval-db"),
     snapshot_id: str = typer.Option("eval-cli", "--snapshot-id"),
 ) -> None:
-    """Run golden fixtures with the eval firewall; append observations."""
+    """Run golden fixtures with the eval firewall; append observations.
+
+    ``--golden-root`` and ``--golden-dir`` must resolve inside a git checkout (REC-009):
+    a decrypted held-out split runs only through ``run_heldout_suite``.
+    """
 
     import json
 
     from recertia.app.authz import PolicyDecisionPoint
     from recertia.app.evals import EvalService
     from recertia.errors import RecertiaError
+    from recertia.evals.golden import PublicGoldenPathError, require_public_golden_path
     from recertia.evals.store import EvalStore
     from recertia.ports.identity import Principal
+
+    try:
+        require_public_golden_path(golden_root)
+        if golden_dir is not None:
+            require_public_golden_path(golden_dir)
+    except PublicGoldenPathError as exc:
+        typer.echo(f"EVAL REFUSED: {exc}", err=True)
+        raise typer.Exit(code=2) from None
 
     principal = (
         ctx.obj["principal"]

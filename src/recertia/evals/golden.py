@@ -932,6 +932,27 @@ def run_heldout_suite(
     return report
 
 
+class PublicGoldenPathError(ValueError):
+    """A public golden path that is not inside a git checkout (REC-009)."""
+
+
+def require_public_golden_path(path: Path) -> None:
+    """Refuse a public golden root or dir whose realpath is outside every git checkout.
+
+    The exact complement of :func:`~recertia.evals.heldout_manifest.verify_heldout_tree`,
+    which refuses a held-out root *inside* a checkout: public goldens live in the
+    repository, so a decrypted held-out split can never be run through the public path
+    unverified and unmasked. The message carries no path.
+    """
+
+    if not _under_git_checkout(Path(os.path.realpath(path))):
+        raise PublicGoldenPathError(
+            "eval run refuses a golden path outside a git checkout: public goldens live "
+            "in the repository; run a decrypted held-out split with "
+            "recertia.evals.golden.run_heldout_suite"
+        )
+
+
 def run_eval_suite(
     *,
     task_class: str,
