@@ -20,6 +20,7 @@ from scripts.mypy_ratchet import (
     parse_mypy_output,
     read_baseline,
     render_baseline,
+    write_baseline,
 )
 
 SCRIPT = REPO_ROOT / "scripts" / "mypy_ratchet.py"
@@ -77,6 +78,20 @@ def test_baseline_round_trips(tmp_path: Path) -> None:
     path = tmp_path / "baseline.txt"
     path.write_text(render_baseline(counts), encoding="utf-8")
     assert read_baseline(path) == counts
+
+
+@pytest.mark.parametrize("existing", [b"# old\r\n", b"# old\n", None])
+def test_write_baseline_keeps_existing_line_endings(tmp_path: Path, existing: bytes | None) -> None:
+    path = tmp_path / "baseline.txt"
+    if existing is not None:
+        path.write_bytes(existing)
+    write_baseline(path, render_baseline(Counter({ASSIGN: 2})))
+    data = path.read_bytes()
+    if existing == b"# old\r\n":
+        assert data.count(b"\r\n") == data.count(b"\n") > 0
+    else:
+        assert b"\r" not in data
+    assert read_baseline(path) == Counter({ASSIGN: 2})
 
 
 def test_committed_baseline_parses() -> None:
@@ -175,3 +190,13 @@ def test_e2e_fix_plus_write_passes(tmp_path: Path) -> None:
     result = _ratchet(tmp_path)
     assert result.returncode == 0, result.stderr
     assert "mypy ratchet ok (0 errors, 0 fingerprints" in result.stdout
+
+
+def test_e2e_write_keeps_crlf(tmp_path: Path) -> None:
+    _seed(tmp_path)
+    baseline = tmp_path / "mypy-baseline.txt"
+    baseline.write_bytes(baseline.read_bytes().replace(b"\n", b"\r\n"))
+    assert _ratchet(tmp_path, "--write").returncode == 0
+    data = baseline.read_bytes()
+    assert data.count(b"\r\n") == data.count(b"\n") > 0
+    assert _ratchet(tmp_path).returncode == 0

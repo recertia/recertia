@@ -101,6 +101,17 @@ def render_baseline(counts: Counter[Fingerprint]) -> str:
     return "\n".join(lines)
 
 
+def write_baseline(path: Path, text: str) -> None:
+    """Write ``text`` with the existing file's line endings (CRLF or LF), else LF.
+
+    Pinning the newline keeps ``--write`` output the same on every platform.
+    """
+
+    newline = "\r\n" if path.exists() and b"\r\n" in path.read_bytes() else "\n"
+    with path.open("w", encoding="utf-8", newline=newline) as handle:
+        handle.write(text)
+
+
 def _describe(key: Fingerprint) -> str:
     return f"{key.path} [{key.code or 'no code'}] {key.message}"
 
@@ -163,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
     baseline_path = root / BASELINE_NAME
     actual = run_mypy(root, args.targets)
     if args.write:
-        baseline_path.write_text(render_baseline(actual), encoding="utf-8")
+        write_baseline(baseline_path, render_baseline(actual))
         print(f"wrote {baseline_path}")
         return 0
     failures = compare_counts(actual, read_baseline(baseline_path))
