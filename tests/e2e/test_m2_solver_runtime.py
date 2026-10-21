@@ -7,6 +7,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from contracts.budget import Budget
 from contracts.criteria import SensitivityProof, SkillCertificationCriterion, TaskCriterion
 from contracts.resources import ResourceClaim
@@ -328,22 +330,29 @@ def test_independent_steps_run_concurrently_conflicting_serialise(tmp_path: Path
     registry = default_registry()
     original = registry.handler("shell")
     # REC-028: measure the behaviour, not wall clock. Each independent step
-    # waits at a two-party barrier, so they can only both succeed if they run
-    # at the same time (serial execution breaks the barrier after its timeout).
-    # The conflicting steps record their intervals, and those must not overlap.
-    # The old ``elapsed < 0.09`` check timed the whole apply (snapshots, shell
-    # spawns, transcript) and flaked under parallel CPU load.
-    meet = threading.Barrier(2, timeout=10)
+    # meets the other at a two-party barrier before AND after its real shell
+    # call, so both calls sit between two rendezvous: they can only pass if the
+    # steps are in flight at the same time (serial execution breaks the barrier
+    # after its timeout). The conflicting steps record their intervals, and
+    # those must not overlap. The old ``elapsed < 0.09`` check timed the whole
+    # apply (snapshots, shell spawns, transcript) and flaked under parallel CPU
+    # load. Healthy arrival skew is milliseconds; 5 s bounds a regression.
+    barrier_timeout_s = 5
+    meet = threading.Barrier(2, timeout=barrier_timeout_s)
+    done = threading.Barrier(2, timeout=barrier_timeout_s)
     intervals: dict[str, tuple[float, float]] = {}
     guard = threading.Lock()
 
     def slow_shell(inputs: dict, workdir: Path):
         command = str(inputs["command"])
         start = time.monotonic()
-        if "shared.txt" not in command:
+        independent_step = "shared.txt" not in command
+        if independent_step:
             meet.wait()
         time.sleep(0.05)
         out = original(inputs, workdir)
+        if independent_step:
+            done.wait()
         with guard:
             intervals[command] = (start, time.monotonic())
         return out
@@ -394,20 +403,26 @@ def test_independent_steps_run_concurrently_conflicting_serialise(tmp_path: Path
     workdir = tmp_path / "work"
     workdir.mkdir()
     writer = TranscriptWriter(TranscriptStore(tmp_path / "t"), "r", 1)
-    result = applicator.apply(
-        independent,
-        params={},
-        workdir=workdir,
-        run_id="r",
-        attempt_no=1,
-        transcript=writer,
-    )
-    assert result.ok, "independent steps did not run concurrently (barrier broken)"
-    assert not meet.broken
+    try:
+        result = applicator.apply(
+            independent,
+            params={},
+            workdir=workdir,
+            run_id="r",
+            attempt_no=1,
+            transcript=writer,
+        )
+    except threading.BrokenBarrierError:
+        pytest.fail(
+            f"steps a and b did not run concurrently "
+            f"(rendezvous timed out after {barrier_timeout_s} s)"
+        )
+    assert result.ok
     assert len(result.waves) == 1
     assert set(result.waves[0].wave.step_ids) == {"a", "b"}
     a_start, a_end = intervals["echo a > A.txt"]
     b_start, b_end = intervals["echo b > B.txt"]
+    # Implied by the two rendezvous; kept as documentation of the property.
     assert a_start < b_end and b_start < a_end, "independent steps did not overlap"
 
     workdir2 = tmp_path / "work2"
