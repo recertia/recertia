@@ -111,3 +111,18 @@ def pytest_runtest_setup(item: Any) -> None:
     from recertia.solver.resilience import default_breaker
 
     default_breaker().reset()
+
+
+def pytest_runtest_teardown(item: Any, nextitem: Any) -> None:
+    """Stop every embedded queue worker a test started (REC-029, N4).
+
+    Apps built with ``create_app`` start a ``recertia-queue`` daemon thread on
+    the first create or resume and nothing stopped it, so threads piled up
+    across the suite. This runs before fixture finalizers, so no queue is
+    closed under a live worker thread.
+    """
+
+    del item, nextitem
+    from recertia.workers.embedded import EmbeddedQueueWorker
+
+    EmbeddedQueueWorker.stop_all(timeout=5.0)
