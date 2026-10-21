@@ -27,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 GRACE_S = 1.0  # EXIT_GRACE_S and TEARDOWN_TIMEOUT_S in the child session
 EXIT_LIMIT_S = 30.0  # the hung child must be gone well within this
 CHILD_TIMEOUT_S = 60.0  # a hang shows up as Pytester.TimeoutExpired
+STUCK_S = 15.0  # a bounded stuck thread: without the guard the child exits 0 after this
 
 CHILD_CONFTEST = f"""
 import os
@@ -123,7 +124,7 @@ def test_hung_run_exits_the_session_nonzero_within_the_limit(
     assert wall < EXIT_LIMIT_S
     result.assert_outcomes(passed=2, errors=1)  # the summary was printed before the exit
     result.stderr.fnmatch_lines(
-        ["*recertia exit guard: 1 worker thread(s) still alive 1s after the session ended*recertia-run*"]
+        ["*recertia exit guard: 1 worker thread(s) still alive past the 1s exit grace*recertia-run*"]
     )
 
 
@@ -176,3 +177,119 @@ def test_clean_session_exits_zero_without_os_exit(
     assert wall < EXIT_LIMIT_S
     result.assert_outcomes(passed=2)
     result.stderr.no_fnmatch_line("*recertia exit guard*")
+
+
+# --- Nested in-process sessions (REC-036 S1) ------------------------------------------
+# The guard must run for the outermost session only. pytest unconfigures a config
+# whose pytest_configure raised before tests.conftest's ran, so a session counter
+# could drift: an inner session failing during configure either fired the guard
+# inside the inner session (os._exit of the whole process mid-test) or left the
+# outer session without a guard. The outer session here is a pytester child; each
+# of its tests runs an inner session in-process with tests.conftest loaded.
+
+NESTED_SOURCE = """
+import threading
+
+import pytest
+
+pytest_plugins = ["pytester"]
+
+FAILING_CONFTEST = "def pytest_configure(config):\\n    raise RuntimeError('inner configure failed')\\n"
+
+
+@pytest.fixture()
+def live_worker():
+    release = threading.Event()
+    thread = threading.Thread(target=release.wait, name="recertia-queue-outer", daemon=True)
+    thread.start()
+    yield thread
+    release.set()
+    thread.join(10)
+
+
+def run_inner(pytester, conftest=None):
+    if conftest is not None:
+        pytester.makeconftest(conftest)
+    pytester.makepyfile(test_inner="def test_inner():\\n    pass\\n")
+    return pytester.runpytest_inprocess("-p", "tests.conftest", "-p", "no:cacheprovider")
+
+
+def run_failing_inner(pytester):
+    try:
+        result = run_inner(pytester, FAILING_CONFTEST)
+    except RuntimeError as exc:
+        assert "inner configure failed" in str(exc)
+    else:
+        assert result.ret != 0
+"""
+
+
+def test_nested_sessions_do_not_run_the_guard_and_the_outer_guard_still_fires(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A normal inner session and one failing during configure, both with a live worker thread.
+
+    Neither inner session may run the guard (it would see the outer thread and
+    ``os._exit`` the outer process mid-test, with no summary), and the outer
+    session's own guard still fires for the stuck thread its last test leaves.
+    """
+
+    result, wall = _run_child(
+        pytester,
+        monkeypatch,
+        NESTED_SOURCE
+        + """
+
+def test_normal_inner_session(pytester, live_worker):
+    assert run_inner(pytester).ret == 0
+    assert live_worker.is_alive()
+
+
+def test_inner_session_fails_during_configure(pytester, live_worker):
+    run_failing_inner(pytester)
+    assert live_worker.is_alive()
+
+
+def test_leaves_a_stuck_worker():
+    from conftest import NEVER
+
+    threading.Thread(target=NEVER.wait, name="recertia-queue-stuck").start()
+""",
+    )
+
+    result.assert_outcomes(passed=3)  # no os._exit mid-session: the summary was printed
+    assert result.ret == 1
+    assert _os_exit_status(pytester) == "1"
+    assert wall < EXIT_LIMIT_S
+    result.stderr.fnmatch_lines(["*recertia exit guard: 1 worker thread(s)*recertia-queue-stuck*"])
+
+
+def test_outer_guard_fires_after_an_inner_session_failed_during_configure(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no live thread during the failing inner session, the outer guard must still run.
+
+    The stuck thread ends on its own after ``STUCK_S``, so a missing guard shows
+    up as rc 0 with no guard line instead of a hang.
+    """
+
+    result, wall = _run_child(
+        pytester,
+        monkeypatch,
+        NESTED_SOURCE
+        + f"""
+
+def test_inner_session_fails_during_configure(pytester):
+    run_failing_inner(pytester)
+
+
+def test_leaves_a_stuck_worker():
+    threading.Thread(target=threading.Event().wait, args=({STUCK_S!r},), name="recertia-queue-stuck").start()
+""",
+    )
+
+    result.assert_outcomes(passed=2)
+    assert result.ret == 1
+    assert _os_exit_status(pytester) == "1"
+    assert wall < STUCK_S
+    result.stderr.fnmatch_lines(["*recertia exit guard*recertia-queue-stuck*"])

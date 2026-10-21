@@ -95,8 +95,9 @@ def _guarded_create_connection(address: Any, *args: Any, **kwargs: Any) -> socke
 
 
 def pytest_configure(config: Any) -> None:
-    global _open_sessions
-    _open_sessions += 1
+    global _outermost_config
+    if _outermost_config is None:  # first config wins; nested in-process sessions never replace it
+        _outermost_config = config
     if not network_guard_enabled():
         return
     setattr(socket.socket, "connect", _guarded_connect)
@@ -107,13 +108,16 @@ def pytest_configure(config: Any) -> None:
 
 @pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config: Any) -> None:
-    global _open_sessions
+    global _outermost_config
     setattr(socket.socket, "connect", _REAL["connect"])
     setattr(socket.socket, "connect_ex", _REAL["connect_ex"])
     setattr(socket, "getaddrinfo", _REAL["getaddrinfo"])
     setattr(socket, "create_connection", _REAL["create_connection"])
-    _open_sessions -= 1
-    if _open_sessions == 0:  # the outermost session only, never a nested in-process one
+    # The outermost session only, never a nested in-process one. Keyed on the config
+    # object, not a counter: pytest unconfigures a config whose pytest_configure
+    # failed before ours ran, so a counter could drift (REC-036 S1).
+    if config is _outermost_config:
+        _outermost_config = None
         session_exit_guard(config)
 
 
@@ -128,7 +132,7 @@ def pytest_unconfigure(config: Any) -> None:
 EXIT_GRACE_S = 5.0
 WORKER_THREAD_PREFIXES = ("recertia-run", "recertia-queue")
 _EXIT_STATUS = pytest.StashKey[int]()
-_open_sessions = 0
+_outermost_config: Any = None  # the config of the outermost session (REC-036 S1)
 
 
 def pytest_sessionfinish(session: Any, exitstatus: Any) -> None:
@@ -144,7 +148,10 @@ def lingering_worker_threads() -> list[threading.Thread]:
 
 
 def session_exit_guard(config: Any) -> None:
-    """``os._exit`` after the report if worker threads would block interpreter exit.
+    """``os._exit`` after the report if worker threads are still alive.
+
+    Pool threads would block interpreter exit; a daemon ``recertia-queue``
+    thread would not, but a leaked one still fails the process.
 
     Runs at the end of ``pytest_unconfigure`` (trylast), after the terminal
     summary. A clean session has no lingering worker thread and returns at
@@ -174,8 +181,8 @@ def session_exit_guard(config: Any) -> None:
     names = sorted(t.name for t in stuck)
     sys.stdout.flush()
     sys.stderr.write(
-        f"recertia exit guard: {len(stuck)} worker thread(s) still alive {EXIT_GRACE_S:g}s after the"
-        f" session ended: {names}; os._exit({status}) so interpreter exit cannot hang on them\n"
+        f"recertia exit guard: {len(stuck)} worker thread(s) still alive past the {EXIT_GRACE_S:g}s"
+        f" exit grace: {names}; os._exit({status}) so interpreter exit cannot hang on them\n"
     )
     sys.stderr.flush()
     os._exit(status)
