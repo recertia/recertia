@@ -5,9 +5,12 @@ a plugin, so the hook wiring (not only ``stop_test_workers``) is covered. A
 subprocess keeps a deliberately hung thread out of this process.
 
 Loading the conftest with ``-p`` registers it earlier than a real
-``conftest.py``, so the child's hook order differs slightly from the suite's
-(CTO-rec S2): the teardown wrapper still wraps pytest's own teardown (fixture
-finalizers), which is the property these tests check.
+``conftest.py``. The child's hook order (logging, capture, the conftest
+wrapper, runner) matches the suite's only because the wrapper is ``trylast``;
+without it the suite's wrapper sorts outside capture while the child's stays
+inside, so these child tests cannot catch a ``trylast`` regression (CTO-rec
+D1, D2). ``test_teardown_wrapper_is_trylast_inside_capture`` checks it in this
+process, where the conftest is loaded as a real ``conftest.py``.
 """
 
 from __future__ import annotations
@@ -274,3 +277,22 @@ def test_finalizer_error_keeps_the_leak_message(
         ]
     )
     result.stdout.no_fnmatch_line("*previous item was not torn down properly*")
+
+
+def test_teardown_wrapper_is_trylast_inside_capture(request: pytest.FixtureRequest) -> None:
+    """CTO-rec D1: the suite's teardown wrapper is ``trylast`` and sorts inside capturemanager.
+
+    In-process, so it sees the real ``conftest.py`` registration order. Without
+    ``trylast`` the wrapper sorts outside capture and output printed while
+    stopping workers escapes the test's captured teardown section.
+    """
+
+    conftest_path = (REPO_ROOT / "tests" / "conftest.py").resolve()
+    hook = request.config.pluginmanager.hook.pytest_runtest_teardown
+    impls = hook.get_hookimpls()  # call order is reversed: the last entry is outermost
+    ours = [i for i in impls if Path(i.function.__code__.co_filename).resolve() == conftest_path]
+    capture = [i for i in impls if i.plugin_name == "capturemanager"]
+    assert len(ours) == 1, [i.plugin_name for i in impls]
+    assert len(capture) == 1, [i.plugin_name for i in impls]
+    assert ours[0].wrapper and ours[0].trylast
+    assert impls.index(ours[0]) < impls.index(capture[0]), [i.plugin_name for i in impls]
