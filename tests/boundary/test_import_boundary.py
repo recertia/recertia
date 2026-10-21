@@ -42,3 +42,23 @@ def test_retrieve_cannot_maintain_the_index() -> None:
         if isinstance(node, ast.Attribute) and node.attr in forbidden:
             hits.append((node.attr, node.lineno))
     assert hits == [], f"retrieve.py touches index maintenance {hits}"
+
+
+def test_operator_audit_sink_not_importable_from_proposer_planes() -> None:
+    """REC-009: proposers (distill, the miner, the solver, nodes) cannot reach the audit sink.
+
+    Checks direct and transitive import chains. ``recertia.review.promotion`` depends only
+    on the ``PromotionAuditSink`` protocol, so it must not import the store either.
+    """
+
+    import grimp
+
+    sink = "recertia.review.promotion_audit"
+    graph = grimp.build_graph("recertia")
+    assert sink in graph.modules
+    proposer_planes = ("recertia.nodes", "recertia.distill", "recertia.solver")
+    for plane in proposer_planes:
+        for module in sorted(m for m in graph.modules if m == plane or m.startswith(plane + ".")):
+            assert not graph.chain_exists(importer=module, imported=sink), module
+    assert not graph.chain_exists(importer="recertia.jobs.workers", imported=sink)
+    assert not graph.chain_exists(importer="recertia.review.promotion", imported=sink)

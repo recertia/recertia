@@ -107,6 +107,7 @@ KNOWN_ENV_KEYS = frozenset(
         "RECERTIA_TENANT_SKILLS",
         "RECERTIA_POLICY_PATH",
         "RECERTIA_POLICY_VERSION",
+        "RECERTIA_OPERATOR_AUDIT_ROOT",
         "RECERTIA_LIBRARY_COMMIT",
         "RECERTIA_SCRATCH_MAX_STEPS",
         "RECERTIA_FETCH_ALLOWLIST",
@@ -317,6 +318,8 @@ class Settings:
 
     policy_path: str = ""
     policy_version: str = ""
+    # REC-009: operator-only promotion audit store. Unset means refusal detail is dropped.
+    operator_audit_root: str = ""
     library_commit: str = ""
     scratch_max_steps: int = 5
     fetch_allowlist: str = "pypi.org,files.pythonhosted.org,raw.githubusercontent.com,api.github.com"
@@ -558,6 +561,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         tenant_skills=_bool(env, "RECERTIA_TENANT_SKILLS"),
         policy_path=_raw(env, "RECERTIA_POLICY_PATH").strip(),
         policy_version=_raw(env, "RECERTIA_POLICY_VERSION").strip(),
+        operator_audit_root=_raw(env, "RECERTIA_OPERATOR_AUDIT_ROOT").strip(),
         library_commit=_raw(env, "RECERTIA_LIBRARY_COMMIT").strip(),
         scratch_max_steps=_int(env, "RECERTIA_SCRATCH_MAX_STEPS", 5),
         fetch_allowlist=_raw(
