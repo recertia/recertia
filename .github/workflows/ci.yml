@@ -12,7 +12,7 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     permissions:
       contents: read
     env:
@@ -217,6 +217,7 @@ jobs:
   container-smoke:
     name: container sandbox smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
