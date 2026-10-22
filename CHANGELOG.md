@@ -97,26 +97,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Writers on an imported root honour backup/restore's root lock (REC-058, #144)** —
+- **Run handles honour backup/restore's root lock, including workers (REC-058, #144)** —
   correction to the REL-3 runtime.db entry below, which read as if every opener honoured
-  `.lock`. Until now only the leftover-import path did: on a root whose import had already
-  completed, `open_run_persistence` took no root lock, so CLI and worker handles could
-  write while backup or restore held the exclusive `.lock` (the API was kept out only by
-  `api.lock`). Now every handle from `open_run_persistence` holds a shared `.lock` from
-  open until `close()`, on fresh, imported and leftover roots alike. On a fresh or
-  imported root, an open that finds the exclusive lock held waits at most
-  `RECERTIA_IMPORT_LOCK_TIMEOUT_S` (default 5 s), then raises typed `RootBusy` before any
-  db file is opened, so nothing is written; the caller retries after release. Backup and
-  restore refuse while any handle is open. What the lock does not guard: SQLite files in
-  the root that are opened directly rather than through an `open_run_persistence` handle
-  (for example the worker queue, eval and API stores), and any process that ignores the
-  advisory flock. The lock is per runtime root, not per tenant, so an open handle on one
-  tenant also makes a pending leftover import on another tenant of the same root raise
-  `RootBusy` until it closes. The leftover path's shared wait (`migrate=off` with pending
-  files) is still unbounded, and `RootBusy` is not yet the `root_busy` API/CLI error
-  (#145). Tests: `tests/unit/persistence/test_root_lock_writers.py`
-  (`test_write_on_imported_root_*`, `test_open_on_imported_root_*`,
-  `test_open_handle_on_imported_root_keeps_backup_out_until_close`).
+  `.lock`. Only the leftover-import path did. On a root whose import had already completed,
+  `open_run_persistence` took no root lock, and workers open `<root>/runs/<tenant>`, whose
+  `.lock` is not the `<root>/.lock` that backup and restore take. So CLI and worker handles
+  could write while backup or restore held the exclusive lock (the API was kept out only by
+  `api.lock`). Now:
+  - Every handle from `open_run_persistence` holds a shared root `.lock` from open until
+    `close()`, on fresh, imported and leftover roots. The queue worker (`recertia worker`)
+    and the embedded async worker pass the new `runtime_root` argument
+    (`open_run_persistence`, `build_default_orchestrator`), so their handles lock
+    `<root>/.lock`. Files and tenant id are unchanged.
+  - On a fresh or imported root, an open that finds the exclusive lock held waits at most
+    `RECERTIA_IMPORT_LOCK_TIMEOUT_S` (default 5 s), then raises typed `RootBusy` before any
+    run-store db file is opened. Leftover files are re-checked once the lock is held: an
+    open that waited out a restore which brought them back also raises `RootBusy`, and the
+    retry imports them. Before, such an open served its pre-restore decision and could
+    lose a leftover checkpoint.
+  - Backup and restore refuse while any handle is open. The `.lock` refusal now reads
+    "an open run handle, worker or import holds the root lock".
+  - `build_default_orchestrator` and `GraphOrchestrator` close a handle they opened when
+    wiring fails, so the lock is not leaked.
+  - On Windows the lock uses `LockFileEx`, which has a shared mode; with `msvcrt.locking`
+    two handles on one root refused each other. Blocking calls keep msvcrt's 10 s retry
+    budget.
+
+  Known limits:
+  - Stores opened directly rather than through a run handle are not guarded (worker queue,
+    skill index, lineage, eval and API stores); a worker opens some of them before it takes
+    the lock. Neither are processes that ignore the advisory lock, nor API-process readers
+    that open `<root>/runs/<tenant>` without `runtime_root` (the API is kept out by
+    `api.lock`).
+  - The lock is per runtime root, not per tenant. An open handle on one tenant, including
+    a long worker run, makes a pending leftover import on another tenant raise `RootBusy`
+    until it closes.
+  - `RootBusy` is not yet the retryable `root_busy` API/CLI error (#145), so a worker claim
+    refused with it is marked failed, not re-queued.
+  - The leftover path (`migrate=off` with pending files) still waits without a bound (#153)
+    and does not re-check its decision under the lock.
+  - The Windows path is tested on Linux through a fake `kernel32` only, not on a Windows
+    host.
+  - Worker imports on older releases lock `<root>/runs/<tenant>/.lock`, so mixed-version
+    workers do not exclude each other.
+
+  Tests: `tests/unit/persistence/test_root_lock_writers.py`,
+  `tests/unit/persistence/test_root_lock_windows_path.py`.
 
 - **CLI tests read stderr at the click floor (REC-053)** — the `dev` extra gains
   `click>=8.2`. Six CLI tests read `result.stderr` from a default `CliRunner()`, and

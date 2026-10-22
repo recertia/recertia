@@ -96,14 +96,15 @@ def execute_claim(root: Path, claim: Claim, *, queue: RunQueue | None = None) ->
         approve_default_tools=approve,
         principal=principal,
         surface="worker",
+        runtime_root=root,
     )
-    if queue is not None:
-        bundle.orchestrator.hooks = [
-            CancelHopHook(lambda: queue.cancel_requested(claim.tenant_id, claim.run_id)),
-            *bundle.orchestrator.hooks,
-        ]
-    action = str(payload.get("action") or "start")
     try:
+        if queue is not None:
+            bundle.orchestrator.hooks = [
+                CancelHopHook(lambda: queue.cancel_requested(claim.tenant_id, claim.run_id)),
+                *bundle.orchestrator.hooks,
+            ]
+        action = str(payload.get("action") or "start")
         if action == "resume":
             bundle.orchestrator.resume(claim.run_id, workdir=workdir, script=script)
         else:

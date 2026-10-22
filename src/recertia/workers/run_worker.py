@@ -268,17 +268,18 @@ class AsyncRunWorker:
             principal=worker_principal,
             surface="worker",
             model_config=req.model_config,
+            runtime_root=req.runs_root.parent.parent,
         )
-        bundle.orchestrator.max_criterion_timeout_s = req.max_criterion_timeout_s
         ws_handle = None
-        if req.cancel_check is not None:
-            from recertia.graph.hooks import CancelHopHook
-
-            bundle.orchestrator.hooks = [
-                CancelHopHook(req.cancel_check),
-                *bundle.orchestrator.hooks,
-            ]
         try:
+            bundle.orchestrator.max_criterion_timeout_s = req.max_criterion_timeout_s
+            if req.cancel_check is not None:
+                from recertia.graph.hooks import CancelHopHook
+
+                bundle.orchestrator.hooks = [
+                    CancelHopHook(req.cancel_check),
+                    *bundle.orchestrator.hooks,
+                ]
             from recertia.persistence.layout import RuntimeLayout
             from recertia.runtime.workspace_lock import WorkspaceLock
 

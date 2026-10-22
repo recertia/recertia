@@ -13,8 +13,8 @@ from recertia.ledger import HashChainLedger
 from recertia.mea.store import AuditedStateStore
 from recertia.persistence.db import MigrationChecksumError, apply_migrations, open_db
 from recertia.persistence.import_legacy import (
-    _import_lock_timeout_s,
     import_legacy_runtime,
+    import_lock_timeout_s,
     legacy_import_complete,
     legacy_sqlite_pending,
     sqlite_has_table,
@@ -102,6 +102,7 @@ def open_run_persistence(
     *,
     durability: str = "normal",
     migrate: MigrateMode | None = None,
+    runtime_root: Path | str | None = None,
 ) -> RunPersistence:
     """Open checkpoints, operations, the ledger, trajectories, audits, and snapshots.
 
@@ -118,30 +119,49 @@ def open_run_persistence(
     ``.lock`` for its lifetime (released by ``close``), so it cannot write
     while backup or restore holds the exclusive lock. Taking it waits at most
     ``RECERTIA_IMPORT_LOCK_TIMEOUT_S``, then raises ``RootBusy`` before any
-    db file is opened or written.
+    db file is opened or written. Leftover files are re-checked once the lock
+    is held: if a restore brought some back while this open waited, it raises
+    ``RootBusy`` too, and the retry imports them.
+
+    A bare path is its own runtime root (the CLI layout), so its ``.lock`` is
+    ``<path>/.lock``. Pass ``runtime_root`` when ``root`` is a tenant runs
+    directory under a runtime root (workers use ``<runtime_root>/runs/<tenant>``):
+    the handle then locks ``<runtime_root>/.lock``, the lock backup and restore
+    take. Files and tenant id are unchanged.
     """
 
     del durability
     if isinstance(root, RunsRootLayout):
+        if runtime_root is not None:
+            raise ValueError("runtime_root applies to a path root, not a RunsRootLayout")
         layout = root
     else:
         path = Path(root)
         path.mkdir(parents=True, exist_ok=True)
-        layout = RuntimeLayout(path).local_runs()
+        if runtime_root is None:
+            layout = RuntimeLayout(path).local_runs()
+        else:
+            layout = RunsRootLayout(parent=RuntimeLayout(Path(runtime_root)), tenant=None, runs_root=path)
     tenant = str(layout.tenant) if layout.tenant is not None else "local"
     mode = migrate if migrate is not None else load_settings().runtime_db_migrate
     use_runtime, read_fallback = _resolve_runtime_db(layout, mode)
     shared = RootLock(layout.parent.root_lock)
     if use_runtime:
         try:
-            shared.acquire_shared(timeout_s=_import_lock_timeout_s())
+            shared.acquire_shared(timeout_s=import_lock_timeout_s())
         except RootLockBusy as exc:
             raise RootBusy(
                 f"cannot open the runtime root while the root lock is held: {shared.path}"
             ) from exc
+        if legacy_sqlite_pending(layout):
+            # Decided before the lock; a restore may have brought leftover files back.
+            shared.release()
+            raise RootBusy(
+                f"leftover runtime files appeared while waiting for the root lock: {shared.path}"
+            )
     else:
         shared.acquire_shared()
-    leftover_lock: RootLock | None = shared
+    handle_lock: RootLock | None = shared
     try:
         if use_runtime:
             conn = open_db(layout.runtime_db)
@@ -178,13 +198,13 @@ def open_run_persistence(
             trajectories=TrajectoryStore(layout.trajectories_dir),
             audited_states=AuditedStateStore(layout.audited_states_dir),
             workspaces=WorkspaceManager(layout.snapshots_dir),
-            root_lock=leftover_lock,
+            root_lock=handle_lock,
         )
-        leftover_lock = None
+        handle_lock = None
         return persist
     finally:
-        if leftover_lock is not None:
-            leftover_lock.release()
+        if handle_lock is not None:
+            handle_lock.release()
 
 
 def _resolve_runtime_db(

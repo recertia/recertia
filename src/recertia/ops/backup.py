@@ -176,12 +176,12 @@ def verify_archive(archive: Path) -> dict[str, Any]:
     return manifest
 
 
-def _exclusive_lock(path: Path, *, action: str) -> RootLock:
+def _exclusive_lock(path: Path, *, action: str, holder: str = "the API") -> RootLock:
     lock = RootLock(path)
     try:
         lock.try_exclusive()
     except RootLockBusy as exc:
-        raise BackupError(f"{action} refused: the API holds the root lock") from exc
+        raise BackupError(f"{action} refused: {holder} holds the root lock") from exc
     return lock
 
 
@@ -191,7 +191,9 @@ def _exclusive_root_locks(root: Path, *, action: str) -> tuple[RootLock, RootLoc
     layout = RuntimeLayout(root)
     api_lock = _exclusive_lock(layout.api_lock, action=action)
     try:
-        root_lock = _exclusive_lock(layout.root_lock, action=action)
+        root_lock = _exclusive_lock(
+            layout.root_lock, action=action, holder="an open run handle, worker or import"
+        )
     except Exception:
         api_lock.release()
         raise

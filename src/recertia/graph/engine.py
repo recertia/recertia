@@ -112,39 +112,45 @@ class GraphOrchestrator:
         self.runs_root = Path(runs_root)
         self.runs_root.mkdir(parents=True, exist_ok=True)
         self.persistence = persistence if persistence is not None else open_run_persistence(self.runs_root)
-        self.checkpoints = self.persistence.checkpoints
-        self.ops = self.persistence.operations
-        self.ledger = self.persistence.ledger
-        self.ledger.set_default_fencing_token(lambda: self._fencing_token)
-        self.workspaces = self.persistence.workspaces
-        self.retriever = retriever
-        self.store = store
-        self.env_fingerprint = env_fingerprint or {}
-        self.tools = tools
-        self.model = model
-        self.verifier_model = verifier_model
-        self.transcripts = transcripts
-        self.applicator = applicator
-        self.episodic = episodic
-        self.affordances = affordances
-        self.facts = facts
-        self.reviewer = reviewer
-        self.one_off_log = one_off_log
-        self.policy = policy
-        self.on_finalize = on_finalize
-        self.max_criterion_timeout_s = max_criterion_timeout_s
-        self.trajectories = self.persistence.trajectories
-        self._trajectory_emitter = TrajectoryEmitter()
-        self.audited_states = self.persistence.audited_states
-        self.hooks = list(hooks) if hooks is not None else default_hop_hooks()
-        self.state_hops = list(state_hops) if state_hops is not None else default_state_hops()
-        self.capability_warn = capability_warn
-        self.tenant_id = "local"
-        self._fencing_token: int | None = None
-        self._incarnation: int = 1
-        self._lease: RunLease | None = None
-        self._last_hop_ended: float | None = None
-        self._offload_handles: dict[str, OffloadHandle] = {}
+        try:
+            self.checkpoints = self.persistence.checkpoints
+            self.ops = self.persistence.operations
+            self.ledger = self.persistence.ledger
+            self.ledger.set_default_fencing_token(lambda: self._fencing_token)
+            self.workspaces = self.persistence.workspaces
+            self.retriever = retriever
+            self.store = store
+            self.env_fingerprint = env_fingerprint or {}
+            self.tools = tools
+            self.model = model
+            self.verifier_model = verifier_model
+            self.transcripts = transcripts
+            self.applicator = applicator
+            self.episodic = episodic
+            self.affordances = affordances
+            self.facts = facts
+            self.reviewer = reviewer
+            self.one_off_log = one_off_log
+            self.policy = policy
+            self.on_finalize = on_finalize
+            self.max_criterion_timeout_s = max_criterion_timeout_s
+            self.trajectories = self.persistence.trajectories
+            self._trajectory_emitter = TrajectoryEmitter()
+            self.audited_states = self.persistence.audited_states
+            self.hooks = list(hooks) if hooks is not None else default_hop_hooks()
+            self.state_hops = list(state_hops) if state_hops is not None else default_state_hops()
+            self.capability_warn = capability_warn
+            self.tenant_id = "local"
+            self._fencing_token: int | None = None
+            self._incarnation: int = 1
+            self._lease: RunLease | None = None
+            self._last_hop_ended: float | None = None
+            self._offload_handles: dict[str, OffloadHandle] = {}
+        except BaseException:
+            if persistence is None:
+                # This init opened the handle, which holds the shared root lock.
+                self.persistence.close()
+            raise
 
     def close(self) -> None:
         self.persistence.close()

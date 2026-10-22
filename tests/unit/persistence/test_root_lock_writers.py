@@ -7,6 +7,7 @@ ADR-0022 baseline (N3 guard).
 from __future__ import annotations
 
 import hashlib
+import tarfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -17,7 +18,7 @@ import pytest
 from contracts.criteria import TaskCriterion
 from contracts.run import RunManifest, RunState, Task
 from recertia.graph.persistence import open_run_persistence
-from recertia.ops.backup import BackupError, _exclusive_root_locks, backup_tree
+from recertia.ops.backup import BackupError, _exclusive_root_locks, backup_tree, restore_tree
 from recertia.persistence.import_legacy import legacy_import_complete, legacy_sqlite_pending
 from recertia.persistence.layout import RuntimeLayout
 from recertia.persistence.root_lock import RootBusy
@@ -58,7 +59,9 @@ def _db_byte_snapshot(root: Path) -> dict[str, str]:
     return snap
 
 
-_BUSY_BOUND_S = 5.0  # RECERTIA_IMPORT_LOCK_TIMEOUT_S (0.25s here) plus slack
+# Thread-join bound, not ADR-0022's BUSY_BOUND_S: RECERTIA_IMPORT_LOCK_TIMEOUT_S
+# (0.25s here) plus slack.
+_JOIN_BOUND_S = 5.0
 
 
 def _imported_root(tmp_path: Path) -> Path:
@@ -113,17 +116,20 @@ def test_write_on_imported_root_while_backup_lock_held_is_blocked_or_fails_close
     api_lock, lock = _exclusive_root_locks(root, action="backup")
     try:
         worker, box = _start_writer(root, "busy-run")
-        worker.join(timeout=_BUSY_BOUND_S)
+        worker.join(timeout=_JOIN_BOUND_S)
+        # #144 allows either mode, so a still-blocked writer passes here. The chosen
+        # mode (typed RootBusy within the bound, never a hang) is pinned by
+        # test_open_on_imported_root_under_backup_lock_raises_root_busy_within_bound.
         blocked = worker.is_alive()
         if not blocked:
             assert isinstance(box.get("error"), RootBusy), box
-            assert float(box["elapsed"]) <= _BUSY_BOUND_S  # type: ignore[arg-type]
+            assert float(box["elapsed"]) <= _JOIN_BOUND_S  # type: ignore[arg-type]
         assert box["wrote"] is False
         assert _db_byte_snapshot(root) == before
     finally:
         lock.release()
         api_lock.release()
-    worker.join(timeout=_BUSY_BOUND_S)
+    worker.join(timeout=_JOIN_BOUND_S)
     assert not worker.is_alive()
 
 
@@ -136,19 +142,19 @@ def test_write_on_imported_root_succeeds_after_backup_lock_released(
     api_lock, lock = _exclusive_root_locks(root, action="restore")
     try:
         worker, box = _start_writer(root, "busy-run")
-        worker.join(timeout=_BUSY_BOUND_S)
+        worker.join(timeout=_JOIN_BOUND_S)
         assert box["wrote"] is False
         assert _db_byte_snapshot(root) == before
     finally:
         lock.release()
         api_lock.release()
-    worker.join(timeout=_BUSY_BOUND_S)
+    worker.join(timeout=_JOIN_BOUND_S)
     assert not worker.is_alive()
     if not box["wrote"]:
         # Refused while busy: the same write, retried after release, lands.
         assert isinstance(box.get("error"), RootBusy), box
         retry, box = _start_writer(root, "busy-run")
-        retry.join(timeout=_BUSY_BOUND_S)
+        retry.join(timeout=_JOIN_BOUND_S)
         assert not retry.is_alive()
     assert box["wrote"] is True, box
     assert "error" not in box, box
@@ -170,11 +176,11 @@ def test_open_on_imported_root_under_backup_lock_raises_root_busy_within_bound(
     api_lock, lock = _exclusive_root_locks(root, action="backup")
     try:
         worker, box = _start_writer(root, "busy-run")
-        worker.join(timeout=_BUSY_BOUND_S)
+        worker.join(timeout=_JOIN_BOUND_S)
         assert not worker.is_alive(), "open hung while the root lock was held"
         assert isinstance(box.get("error"), RootBusy), box
         assert "cannot open the runtime root while the root lock is held" in str(box["error"])
-        assert float(box["elapsed"]) <= _BUSY_BOUND_S  # type: ignore[arg-type]
+        assert float(box["elapsed"]) <= _JOIN_BOUND_S  # type: ignore[arg-type]
     finally:
         lock.release()
         api_lock.release()
@@ -193,3 +199,369 @@ def test_open_handle_on_imported_root_keeps_backup_out_until_close(tmp_path: Pat
     finally:
         opened.close()
     assert backup_tree(root, archive) == archive.resolve()
+
+
+def _backup_locks_free(root: Path) -> bool:
+    """True when backup could take ``api.lock`` and ``.lock`` right now (released at once)."""
+
+    try:
+        api_lock, lock = _exclusive_root_locks(root, action="backup")
+    except BackupError:
+        return False
+    lock.release()
+    api_lock.release()
+    return True
+
+
+def _run_store_snapshot(runs_root: Path) -> dict[str, str]:
+    """Bytes of the run-handle stores only (runtime / leftover checkpoint and op dbs)."""
+
+    names = ("runtime.db", "checkpoints.db", "operations.db")
+    return {
+        key: digest
+        for key, digest in _db_byte_snapshot(runs_root).items()
+        if "/" not in key and key.startswith(names)
+    }
+
+
+def _hist(p: object, run_id: str) -> list[tuple[int, str]]:
+    return [(seq, node) for seq, node, *_rest in p.checkpoints.history(run_id)]  # type: ignore[attr-defined]
+
+
+def test_two_handles_on_an_imported_root_are_open_together(tmp_path: Path) -> None:
+    """The handle lock is shared: a worker run and an API read can coexist on one root."""
+
+    root = _imported_root(tmp_path)
+    first = open_run_persistence(root)
+    try:
+        second = open_run_persistence(root)
+        try:
+            second.checkpoints.save("second-run", 1, "n", None, _state("second-run"))
+        finally:
+            second.close()
+        assert "second-run" in first.checkpoints.list_run_ids()
+    finally:
+        first.close()
+
+
+# --- MF1: worker handles lock the runtime root that backup/restore lock ---
+
+
+def _worker_claim(run_id: str) -> object:
+    from recertia.workers.queue import Claim
+
+    return Claim(
+        tenant_id="acme",
+        run_id=run_id,
+        kind="run",
+        claim_token=1,
+        attempt=1,
+        payload={"request": run_id, "budget": {"max_attempts": 1}},
+    )
+
+
+def test_worker_claim_is_refused_while_backup_holds_root_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``recertia worker`` (serve.execute_claim) runs in ``root/runs/<tenant>``."""
+
+    from recertia.workers.serve import execute_claim
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    root = tmp_path / "rt"
+    tenant_dir = root / "runs" / "acme"
+    open_run_persistence(tenant_dir).close()
+    before = _run_store_snapshot(tenant_dir)
+    api_lock, lock = _exclusive_root_locks(root, action="backup")
+    try:
+        started = time.monotonic()
+        with pytest.raises(RootBusy):
+            execute_claim(root, _worker_claim("w-run"))  # type: ignore[arg-type]
+        assert time.monotonic() - started <= _JOIN_BOUND_S
+        assert _run_store_snapshot(tenant_dir) == before
+    finally:
+        lock.release()
+        api_lock.release()
+    execute_claim(root, _worker_claim("w-run"))  # type: ignore[arg-type]
+    opened = open_run_persistence(tenant_dir)
+    try:
+        assert "w-run" in opened.checkpoints.list_run_ids()
+    finally:
+        opened.close()
+
+
+def test_worker_run_keeps_backup_out_of_the_runtime_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """While a worker run is live, backup of the runtime root is refused."""
+
+    from recertia.graph.engine import GraphOrchestrator
+    from recertia.workers.serve import execute_claim
+
+    root = tmp_path / "rt"
+    seen: list[bool] = []
+    real_start = GraphOrchestrator.start
+
+    def start_and_probe(self: GraphOrchestrator, *args: object, **kwargs: object) -> object:
+        seen.append(_backup_locks_free(root))
+        return real_start(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(GraphOrchestrator, "start", start_and_probe)
+    execute_claim(root, _worker_claim("live-run"))  # type: ignore[arg-type]
+    assert seen == [False]
+    assert _backup_locks_free(root)
+
+
+def test_async_worker_run_is_refused_while_backup_holds_root_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The API/embedded worker (AsyncRunWorker) uses ``<root>/runs/<tenant>`` too."""
+
+    from recertia.api.events import RunEventLog
+    from recertia.workers.run_worker import AsyncRunWorker, load_async_request
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    root = tmp_path / "rt"
+    tenant_dir = root / "runs" / "acme"
+    open_run_persistence(tenant_dir).close()
+    req = load_async_request(
+        {
+            "run_id": "a-run",
+            "tenant_id": "acme",
+            "request": "a-run",
+            "budget": {"max_attempts": 1},
+            "workdir": str(root / "workspaces" / "acme" / "a-run"),
+            "skills_root": str(root / "skills"),
+            "facts_root": str(root / "facts"),
+            "runs_root": str(tenant_dir),
+            "index_path": str(tenant_dir / "skill_index.db"),
+        }
+    )
+    req.workdir.mkdir(parents=True, exist_ok=True)
+    worker = AsyncRunWorker(events=RunEventLog(root))
+    try:
+        before = _run_store_snapshot(tenant_dir)
+        api_lock, lock = _exclusive_root_locks(root, action="backup")
+        try:
+            with pytest.raises(RootBusy):
+                worker._run(req)
+            assert _run_store_snapshot(tenant_dir) == before
+        finally:
+            lock.release()
+            api_lock.release()
+        assert worker._run(req) == "succeeded"
+    finally:
+        worker.shutdown(wait=True)
+    opened = open_run_persistence(tenant_dir)
+    try:
+        assert "a-run" in opened.checkpoints.list_run_ids()
+    finally:
+        opened.close()
+
+
+# --- MF2: leftover files that a restore brings back while an open waits ---
+
+
+def _pending_root(root: Path, run_id: str) -> None:
+    p = open_run_persistence(root, migrate="off")
+    try:
+        for seq in (1, 2):
+            p.checkpoints.save(run_id, seq, f"n{seq}", None, _state(run_id))
+    finally:
+        p.close()
+    assert legacy_sqlite_pending(RuntimeLayout(root).local_runs())
+
+
+def _start_slow_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, threading.Thread]:
+    """Restore a pre-import backup (leftover seqs 1-2) into an empty root, slowly.
+
+    Returns once restore holds the root lock and is about to extract.
+    """
+
+    src = tmp_path / "src"
+    _pending_root(src, "r")
+    archive = tmp_path / "pre-import.tar.gz"
+    backup_tree(src, archive)
+    target = tmp_path / "target"
+    target.mkdir()
+    real_extract = tarfile.TarFile.extractall
+    extracting = threading.Event()
+
+    def slow_extract(self: tarfile.TarFile, *args: object, **kwargs: object) -> None:
+        extracting.set()
+        time.sleep(0.5)
+        real_extract(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(tarfile.TarFile, "extractall", slow_extract)
+    restore = threading.Thread(target=restore_tree, args=(archive, target), kwargs={"overwrite": True})
+    restore.start()
+    assert extracting.wait(_JOIN_BOUND_S)
+    return target, restore
+
+
+def test_open_racing_restore_fails_closed_then_retry_imports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "3")
+    target, restore = _start_slow_restore(tmp_path, monkeypatch)
+    try:
+        # Decided on the empty tree, then waited for restore's lock.
+        with pytest.raises(RootBusy, match="leftover runtime files appeared"):
+            open_run_persistence(target)
+    finally:
+        restore.join(_JOIN_BOUND_S)
+    assert not restore.is_alive()
+    layout = RuntimeLayout(target).local_runs()
+    assert legacy_sqlite_pending(layout)  # the refused open imported nothing
+    retry = open_run_persistence(target)
+    try:
+        assert _hist(retry, "r") == [(1, "n1"), (2, "n2")]
+    finally:
+        retry.close()
+    assert legacy_import_complete(layout.runtime_db)
+
+
+def test_open_racing_restore_does_not_lose_a_leftover_seq(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A caller that sees no run would start it at seq 1; the leftover seq 1 must survive."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "3")
+    target, restore = _start_slow_restore(tmp_path, monkeypatch)
+    try:
+        try:
+            p = open_run_persistence(target)
+        except RootBusy:
+            restore.join(_JOIN_BOUND_S)
+            p = open_run_persistence(target)  # the caller's retry
+    finally:
+        restore.join(_JOIN_BOUND_S)
+    try:
+        seen = p.checkpoints.latest_seq("r")
+        if seen is None:
+            p.checkpoints.save("r", 1, "fresh", None, _state("r"))
+    finally:
+        p.close()
+    q = open_run_persistence(target)
+    try:
+        history = _hist(q, "r")
+    finally:
+        q.close()
+    assert (seen, history) == (2, [(1, "n1"), (2, "n2")])
+
+
+# --- MF3 / S3: the handle's lock is not leaked on a failure ---
+
+
+def test_orchestrator_wiring_failure_releases_root_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from recertia.bootstrap import build_default_orchestrator
+    from recertia.graph.engine import GraphOrchestrator
+
+    root = tmp_path / "runs"
+
+    def broken_init(self: GraphOrchestrator, *args: object, **kwargs: object) -> None:
+        raise RuntimeError("injected wiring failure")
+
+    monkeypatch.setattr(GraphOrchestrator, "__init__", broken_init)
+    with pytest.raises(RuntimeError, match="injected wiring failure"):
+        build_default_orchestrator(root, skills_root=tmp_path / "skills", facts_root=tmp_path / "facts")
+    assert _backup_locks_free(root)
+
+
+def test_orchestrator_init_failure_releases_its_own_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import recertia.graph.engine as engine
+
+    root = tmp_path / "runs"
+
+    def broken_hooks() -> list[object]:
+        raise RuntimeError("injected init failure")
+
+    monkeypatch.setattr(engine, "default_hop_hooks", broken_hooks)
+    with pytest.raises(RuntimeError, match="injected init failure"):
+        engine.GraphOrchestrator(root)
+    assert _backup_locks_free(root)
+
+
+def test_lock_released_when_open_raises_after_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import recertia.graph.persistence as gp
+
+    root = tmp_path / "runs"
+    open_run_persistence(root).close()
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise OSError("injected")
+
+    monkeypatch.setattr(gp, "TrajectoryStore", boom)
+    with pytest.raises(OSError, match="injected"):
+        open_run_persistence(root)
+    monkeypatch.undo()
+    assert _backup_locks_free(root)
+
+
+def test_lock_released_when_close_raises(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    p = open_run_persistence(root)
+
+    def boom() -> None:
+        raise RuntimeError("injected close")
+
+    p.checkpoints.close = boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="injected close"):
+        p.close()
+    assert _backup_locks_free(root)
+
+
+# --- MF5: ruling condition (4), cross-tenant RootBusy ---
+
+
+def test_cross_tenant_pending_import_is_root_busy_while_other_tenant_handle_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    rt = RuntimeLayout(tmp_path / "rt")
+    la, lb = rt.tenant("tenant-a"), rt.tenant("tenant-b")
+    pb0 = open_run_persistence(lb, migrate="off")
+    try:
+        for seq in (1, 2):
+            pb0.checkpoints.save("b-run", seq, f"n{seq}", None, _state("b-run"))
+    finally:
+        pb0.close()
+    assert legacy_sqlite_pending(lb)
+    pa = open_run_persistence(la)
+    try:
+        pa.checkpoints.save("a-run", 1, "a1", None, _state("a-run"))
+        before = _db_byte_snapshot(lb.runs_root)
+        started = time.monotonic()
+        with pytest.raises(RootBusy):
+            open_run_persistence(lb)
+        assert time.monotonic() - started <= _JOIN_BOUND_S
+        assert _db_byte_snapshot(lb.runs_root) == before  # nothing imported or partly applied
+        assert legacy_sqlite_pending(lb)
+        assert pa.checkpoints.list_run_ids() == ["a-run"]  # B never visible through A
+    finally:
+        pa.close()
+    pb = open_run_persistence(lb)
+    try:
+        assert _hist(pb, "b-run") == [(1, "n1"), (2, "n2")]
+        assert pb.checkpoints.list_run_ids() == ["b-run"]
+    finally:
+        pb.close()
+    assert legacy_import_complete(lb.runtime_db)
+    pb = open_run_persistence(lb)  # re-open: no duplicate rows, no re-import
+    try:
+        assert _hist(pb, "b-run") == [(1, "n1"), (2, "n2")]
+    finally:
+        pb.close()
+    pa = open_run_persistence(la)
+    try:
+        assert pa.checkpoints.list_run_ids() == ["a-run"]
+    finally:
+        pa.close()
