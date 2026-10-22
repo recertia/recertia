@@ -75,6 +75,9 @@ timeout_method = "signal"
 # Native watchdog: dumps every thread's stack when a test runs past 60s even if the
 # main thread is blocked in C, where the signal method's handler cannot run (REC-017).
 faulthandler_timeout = 60
+markers = [
+    "windows: needs real Windows (kernel32); runs in the ci.yml `root lock (windows-latest)` job (REC-058)",
+]
 
 [tool.ruff]
 line-length = 110
