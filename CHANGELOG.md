@@ -76,6 +76,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pytest's teardown and cascades. `container-smoke` leaves the timeout test's
   PENDING list now that #112 is on main.
 
+- **faulthandler backstop under pytest-timeout (REC-017, rest of #96)** —
+  `faulthandler_timeout = 60` in `[tool.pytest.ini_options]`. pytest-timeout's
+  `signal` method runs its handler on the main thread, which never happens while
+  that thread is blocked in C (the REC-017 child sat in `pthread_mutex_lock` under
+  `sqlite3.connect`), so such a hang printed nothing until the CI job was killed.
+  faulthandler's native watchdog dumps every thread's stack at 60s regardless; it
+  does not exit (`faulthandler_exit_on_timeout` stays off), so failing the test is
+  still pytest-timeout's job. The watchdog is one native thread per running test,
+  so a `fork` inside a test now always sees a multi-threaded process (CPython's
+  fork `DeprecationWarning`; it holds no recertia or SQLite lock). New test
+  `tests/unit/test_faulthandler_backstop.py`.
+
 ### Added
 
 - **REC-011 C1 part 1 run resolution** — `EvalStore.append_run` records
