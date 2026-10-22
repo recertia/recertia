@@ -204,6 +204,18 @@ def test_lock_busy_open_raises_without_writing_elsewhere(
         imported.close()
 
 
+def test_exclusive_held_by_this_thread_is_removed() -> None:
+    """REC-056b1: the pid/tid holder helper was a stub that always said False. It is gone.
+
+    The lock is the flock alone, so nothing may ask the lock file who holds it.
+    """
+
+    with pytest.raises(ImportError, match="exclusive_held_by_this_thread"):
+        from recertia.persistence.root_lock import exclusive_held_by_this_thread  # type: ignore[attr-defined]
+
+        del exclusive_held_by_this_thread
+
+
 def test_same_thread_holder_gets_root_busy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -32,6 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
+- **Stub lock-identity helper removed (REC-056b1, #132)** —
+  `recertia.persistence.root_lock.exclusive_held_by_this_thread` is deleted. It was a stub
+  that always returned `False`: the root lock is the flock alone and the `.lock` file text is
+  never holder identity, so there is nothing to replace it with. Importing it now raises
+  `ImportError` (`tests/unit/persistence/test_import_legacy.py`). The REL-3 R4 probe T3
+  (`tests/probes/rel3_probe_r4.py`) no longer calls it and checks only that an open with
+  leftover pid/thread text in `.lock` and no flock held still imports the leftover files. The
+  six skipped R4 probes stay skipped (#139).
+
 - **Negative-fixture API (REC-046)** — `recertia.validation.sensitivity.empty_negative_fixture`
   is removed; call `author_sensitivity_proof(criterion)` without `negative_workdir` (it owns
   and removes the directory), or pass a directory you own. The critic's negative fixture
