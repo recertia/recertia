@@ -1636,7 +1636,7 @@ class RuntimeLayout:
     root: Path
     control_db: Path          # root / "control.db"
     locks_dir: Path           # root / "locks"
-    root_lock: Path           # root / ".lock"
+    root_lock: Path           # root / ".lock" (lock order: api.lock, then .lock, then one tenant_lock)
     api_lock: Path            # root / "api.lock"
     api_keys_db: Path         # root / "api_keys.sqlite"
     quotas_db: Path           # root / "quotas.sqlite"
@@ -1655,6 +1655,7 @@ class RunsRootLayout:
     parent: RuntimeLayout
     tenant: TenantId | None
     runs_root: Path
+    tenant_lock: Path           # runs_root / ".tenant.lock" (REC-065; taken after parent.root_lock)
     runtime_db: Path            # runs_root / "runtime.db"   (file may be created empty)
     checkpoints_db: Path        # runs_root / "checkpoints.db"  (live until rel3_runtime_db)
     operations_db: Path         # runs_root / "operations.db"

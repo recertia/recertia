@@ -97,6 +97,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Per-tenant root locking: tenants on one root no longer exclude each other (REC-065,
+  #158)** — each runs root gets its own lock file, `<runs_root>/.tenant.lock`
+  (`RunsRootLayout.tenant_lock`), nested under the runtime root's `.lock`. Locks are taken
+  in one fixed order, documented in `persistence/root_lock.py`: `api.lock` (backup and
+  restore only), then the root `.lock`, then one tenant lock.
+  - The leftover import takes the root `.lock` shared, then its tenant lock exclusive
+    (before: the root `.lock` exclusive). A run handle (`open_run_persistence`) takes the
+    root `.lock` shared, then its tenant lock shared, for the handle's lifetime. Both
+    waits share the one `RECERTIA_IMPORT_LOCK_TIMEOUT_S` bound.
+  - So an open handle or an import on one tenant, including a long worker run, no longer
+    makes another tenant's pending import raise `RootBusy`, and imports of different
+    tenants run at the same time. A second import of the same tenant, or an import while
+    a handle of the same tenant is open, still waits within the bound and then raises
+    typed `RootBusy` without writing; the message names the lock that was held.
+  - Backup and restore are unchanged: they take the root `.lock` exclusive, which every
+    tenant import and handle holds shared, so they still refuse while any tenant holds
+    its lock.
+  - Backup does not archive `.tenant.lock` files and restore does not extract them, as
+    for `.lock` and `api.lock`.
+  - Mixed versions: a REC-058 handle takes only the root `.lock` shared, so it does not
+    keep a newer release's import of the same tenant out. Upgrade all processes that
+    share a root together.
+
+  Tests: `tests/unit/persistence/test_root_lock_writers.py` (REC-065 section),
+  `tests/unit/persistence/test_root_lock_windows_path.py`,
+  `tests/unit/persistence/test_root_lock_windows_real.py`. Three REC-058 tests that
+  pinned the cross-tenant `RootBusy` now assert that the other tenant proceeds, or use
+  an import of the same tenant as the holder.
+
 - **Run handles honour backup/restore's root lock, including workers (REC-058, #144)** —
   correction to the REL-3 runtime.db entry below, which read as if every opener honoured
   `.lock`. Only the leftover-import path did. On a root whose import had already completed,
@@ -154,6 +183,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The lock is per runtime root, not per tenant (#158). An open handle on one tenant,
     including a long worker run, makes a pending leftover import on another tenant raise
     `RootBusy` until it closes; on the worker path that claim is re-queued, not failed.
+    REC-065 (above) adds per-tenant locks and lifts this limit.
   - `RootBusy` is not yet the `root_busy` API/CLI error (#145): the API returns a generic
     error for it.
   - The leftover path (`migrate=off` with pending files) still waits without a bound
