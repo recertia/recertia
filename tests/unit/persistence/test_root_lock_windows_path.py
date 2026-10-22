@@ -491,9 +491,11 @@ def _fail_lock_with(kernel32: FakeKernel32, monkeypatch: pytest.MonkeyPatch, win
     monkeypatch.setattr(kernel32, "lock", failing_lock)
 
 
-# ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_SHARING_BUFFER_EXCEEDED: none is 33,
-# and the fake's OSError carries errno EIO (not EACCES / EDEADLOCK).
-_NOT_BUSY_WINERRORS = (6, 87, 36)
+# ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_DISK_FULL: none is 33, and none
+# maps to EACCES / EDEADLOCK. On Windows ctypes.WinError maps them to EBADF, EINVAL and
+# ENOSPC; off Windows the fake's OSError carries errno EIO. (ERROR_SHARING_BUFFER_EXCEEDED,
+# 36, is not usable here: on Windows it maps to EACCES.)
+_NOT_BUSY_WINERRORS = (6, 87, 112)
 
 
 @pytest.mark.parametrize("winerror", _NOT_BUSY_WINERRORS)
