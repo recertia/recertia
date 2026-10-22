@@ -129,9 +129,11 @@ Cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` except in `dev`. The session
 token is not returned in JSON and is not stored in `localStorage`.
 
 Pending OIDC login starts are unauthenticated, so they are capped in process: 16 per
-client, and 1024 in total as a backstop. A client past its limit loses its own oldest
-start, so one client's flood cannot evict or block another client's login. When the whole
-table is full, the oldest pending start is evicted and the new login is still accepted.
+client, and 1024 in total as a backstop. The per-client check runs first: a client at its
+limit loses only its own oldest start (it is not rejected, and no other client's entry is
+touched), so one client's flood cannot evict or block another client's login. Only a start
+from a client under its limit can meet a full table; it evicts the globally oldest pending
+start and is accepted.
 
 The client is the socket peer address. `X-Forwarded-For` is read only when the peer is
 inside `RECERTIA_TRUSTED_PROXIES` (comma-separated CIDRs, empty by default); then the

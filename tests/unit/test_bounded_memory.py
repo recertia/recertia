@@ -76,6 +76,23 @@ def test_one_client_past_its_limit_cannot_evict_another_clients_login() -> None:
     assert store.take_oidc(again) is not None
 
 
+def test_over_limit_client_on_full_table_evicts_only_its_own_oldest() -> None:
+    # Per-client check first: a client at its own limit drops its OWN oldest start, even
+    # when the table is full and the globally oldest entry belongs to another client.
+    store = _store()
+    other = store.begin_oidc(redirect_uri=CB, client_key="198.51.100.7")[0]  # globally oldest
+    mine = [store.begin_oidc(redirect_uri=CB, client_key="203.0.113.66")[0] for _ in range(PER_CLIENT)]
+    for i in range(PENDING_MAX - PER_CLIENT - 1):
+        store.begin_oidc(redirect_uri=CB, client_key=f"192.0.{i % 64}.1")
+    assert len(store._oidc) == PENDING_MAX
+    before = set(store._oidc) - set(mine)
+    new_state = store.begin_oidc(redirect_uri=CB, client_key="203.0.113.66")[0]
+    assert len(store._oidc) == PENDING_MAX
+    assert other in store._oidc
+    assert set(store._oidc) - set(mine) - {new_state} == before  # other clients intact
+    assert _pending_for(store, "203.0.113.66") == [*mine[1:], new_state]
+
+
 def test_full_global_table_evicts_oldest_and_accepts_new_login() -> None:
     store = _store()
     states = [
