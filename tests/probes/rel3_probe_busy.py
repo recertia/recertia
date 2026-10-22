@@ -1,12 +1,11 @@
 """#90 lock-busy path: legacy state not yet imported while a writer is on runtime.db."""
 import sys, tempfile, sqlite3
 from pathlib import Path
-from tests.probes.rel3_probe import state, record, RESULTS
+from tests.probes.rel3_probe import state, record, RESULTS, owned_root
 from recertia.graph.persistence import open_run_persistence
 from recertia.persistence.root_lock import RootLock
 
-with tempfile.TemporaryDirectory() as tmp:
-    root = Path(tmp)
+with owned_root() as root:  # reaps the lock holder before removing the dir
     p0 = open_run_persistence(root, migrate="off")
     for s in (1, 2, 3): p0.checkpoints.save("legacy-run", s, f"n{s}", None, state("legacy-run"))
     p0.close()
