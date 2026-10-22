@@ -125,9 +125,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       that tenant meanwhile. A REC-058 handle takes only the root `.lock` shared, so it
       does not keep a newer import of the same tenant out; neither process reports an
       error.
-    - If you cannot stop every process at once: run an `auto` open of every tenant
-      before the upgrade, so no tenant is pending, which closes the window. Or keep the
-      new processes on `migrate=off` or `manual` until every old process is gone.
+    - If you cannot stop every process at once: keep the new processes on `migrate=off`
+      or `manual` until every old process is gone.
 
   Tests: `tests/unit/persistence/test_root_lock_writers.py` (REC-065 section),
   `tests/unit/persistence/test_root_lock_windows_path.py`,
