@@ -18,7 +18,7 @@ from recertia.retrieval.pipeline import Retriever
 from recertia.review import ReviewService
 from recertia.solver.model import StubModelClient
 from recertia.validation.judge import artifact_only_context, context_hash, evaluate_judge
-from recertia.validation.sensitivity import author_sensitivity_proof, empty_negative_fixture
+from recertia.validation.sensitivity import author_sensitivity_proof
 
 
 def _proven(cmd: str, criterion_id: str = "gate") -> TaskCriterion:
@@ -92,8 +92,7 @@ def test_vacuous_criterion_fails_sensitivity_authoring(tmp_path: Path) -> None:
         source="critic",
         weight=1.0,
     )
-    neg = empty_negative_fixture(parent=tmp_path)
-    proof = author_sensitivity_proof(vacuous, negative_workdir=neg)
+    proof = author_sensitivity_proof(vacuous)
     assert proof.rejected is False
     assert proof.checked_against
 

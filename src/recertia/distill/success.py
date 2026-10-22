@@ -24,7 +24,7 @@ from contracts.skill import (
 from recertia.distill.candidate import DistillRejected, assert_non_noop_skill, is_noop_command
 from recertia.distill.prior import load_authoring_prior
 from recertia.distill.reusability import assess_reusability
-from recertia.validation.sensitivity import author_sensitivity_proof, empty_negative_fixture
+from recertia.validation.sensitivity import author_sensitivity_proof
 
 _SHELL_TOKEN = re.compile(r"[A-Za-z0-9_./\-]+\.(?:txt|md|py|toml|yml|yaml|json|gitignore)")
 
@@ -86,8 +86,7 @@ def distill_success(
 
     check_cmd = _default_check_command(workdir, request)
     cert = _cert_from_locked(locked, check_cmd)
-    neg = empty_negative_fixture()
-    proof = author_sensitivity_proof(cert, negative_workdir=neg)
+    proof = author_sensitivity_proof(cert)
     cert = cert.model_copy(update={"sensitivity_proof": proof})
 
     now = datetime.now(timezone.utc)

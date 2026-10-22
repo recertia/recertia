@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
+- **Negative-fixture API (REC-046)** — `recertia.validation.sensitivity.empty_negative_fixture`
+  is removed; call `author_sensitivity_proof(criterion)` without `negative_workdir` (it owns
+  and removes the directory), or pass a directory you own. `propose_criteria` and
+  `refine_goal_criteria` (`recertia.validation.critic`) drop their unused `workdir`
+  keyword.
+
 - **Promotion API, CLI and library (REC-009)** —
   - `PromotionError.failing_fixtures` is removed; use `refusal_kind`, `failing_count`
     and `audit_ref`. `promote_to_approved` requires `audit=` (an operator audit sink);
@@ -50,12 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Leaked `recertia-neg-*` temp dirs (REC-046)** — `author_sensitivity_proof` now takes
-  `negative_workdir` as optional. When it is omitted, the criterion runs in an empty
+- **Leaked `recertia-neg-*` temp dirs (REC-046)** — sensitivity proofs no longer leave an
+  empty `recertia-neg-*` directory behind. `author_sensitivity_proof` takes
+  `negative_workdir` as optional; when it is omitted, the criterion runs in a
   `tempfile.TemporaryDirectory(prefix="recertia-neg-")` that is removed before the call
-  returns or raises. `empty_negative_fixture` is unchanged and still leaves its directory to
-  the caller; existing callers that pass `negative_workdir=empty_negative_fixture()` keep
-  leaking until they drop the argument (follow-up).
+  returns or raises. The critic (`intake`), the success and paper distillers and the mine
+  worker now use it, so a full test run leaves 0 such directories instead of 73. The
+  critic's negative fixture is no longer created inside the task workdir.
 
 - **REL-3 probe_b / probe_a2 hang (REC-017)** — `tests/probes/rel3_probe.py` now
   uses the multiprocessing `spawn` context, so a probe child never inherits

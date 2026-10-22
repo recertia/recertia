@@ -33,11 +33,11 @@ def intake(state: RunState, ctx: NodeContext) -> NodeOutcome:
             criteria, goal=state.task.goal, workdir=ctx.workdir
         )
         # Ensure sensitivity proofs exist for required criteria.
-        criteria = refine_goal_criteria(criteria, workdir=ctx.workdir)
+        criteria = refine_goal_criteria(criteria)
         note = f"compiled goal → {len(criteria)} criterion(ies)"
     elif not criteria:
         request_text = state.task.request or ""
-        criteria = propose_criteria(request_text, workdir=ctx.workdir)
+        criteria = propose_criteria(request_text)
         note = f"critic proposed {len(criteria)} criterion(ies) from request"
 
     if ctx.max_criterion_timeout_s is not None:

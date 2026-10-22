@@ -11,7 +11,7 @@ from contracts.stats import ApplyDiversity, SkillStats
 from contracts.status import SkillStatus
 from recertia.memory.procedural.apply_diversity import note_apply_session
 from recertia.memory.procedural.store import SkillStore
-from recertia.validation.sensitivity import author_sensitivity_proof, empty_negative_fixture
+from recertia.validation.sensitivity import author_sensitivity_proof
 
 
 def test_note_apply_session_does_not_rewrite_version(tmp_path: Path) -> None:
@@ -38,8 +38,7 @@ def test_single_session_applications_fail_approved_self_distilled_gate() -> None
         run="true",
         preregistered=True,
         sensitivity_proof=author_sensitivity_proof(
-            SkillCertificationCriterion(id="ok", kind="command", run="true", preregistered=True),
-            negative_workdir=empty_negative_fixture(),
+            SkillCertificationCriterion(id="ok", kind="command", run="true", preregistered=True)
         ),
     )
     version = SkillVersion(

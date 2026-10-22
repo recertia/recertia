@@ -23,7 +23,7 @@ from contracts.skill import FailureMode, Hygiene, Provenance, SkillVersion, Step
 from recertia.distill.candidate import assert_candidate_hygiene
 from recertia.distill.prior import load_authoring_prior
 from recertia.jobs.arxiv import ArxivPaper
-from recertia.validation.sensitivity import author_sensitivity_proof, empty_negative_fixture
+from recertia.validation.sensitivity import author_sensitivity_proof
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _WORD = re.compile(r"[a-z0-9]+", re.I)
@@ -149,7 +149,7 @@ def distill_paper(
         weight=1.0,
         preregistered=True,
     )
-    proof = author_sensitivity_proof(cert, negative_workdir=empty_negative_fixture())
+    proof = author_sensitivity_proof(cert)
     cert = cert.model_copy(update={"sensitivity_proof": proof})
 
     version = SkillVersion(

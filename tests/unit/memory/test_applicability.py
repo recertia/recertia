@@ -11,16 +11,14 @@ from contracts.status import SkillStatus
 from recertia.ledger import HashChainLedger
 from recertia.memory.procedural.applicability import check_applicability, refuse_if_inapplicable
 from recertia.memory.procedural.store import SkillStore
-from recertia.validation.sensitivity import author_sensitivity_proof, empty_negative_fixture
+from recertia.validation.sensitivity import author_sensitivity_proof
 
 
 def _cert(run: str = "true") -> SkillCertificationCriterion:
     base = SkillCertificationCriterion(id="ok", kind="command", run=run, preregistered=True)
     return base.model_copy(
         update={
-            "sensitivity_proof": author_sensitivity_proof(
-                base, negative_workdir=empty_negative_fixture()
-            )
+            "sensitivity_proof": author_sensitivity_proof(base)
         }
     )
 
@@ -92,8 +90,7 @@ def test_criterion_mismatch_is_rejected() -> None:
                 op="lt",
                 threshold=0.01,
                 preregistered=True,
-            ),
-            negative_workdir=empty_negative_fixture(),
+            )
         ),
     )
     version = _skill().model_copy(update={"certification_criteria": [metric]})

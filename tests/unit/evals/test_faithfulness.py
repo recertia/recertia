@@ -21,7 +21,7 @@ from recertia.evals.faithfulness import (
 from recertia.evals.interventions import apply_corrupt, apply_empty, apply_filler, apply_irrelevant
 from recertia.evals.store import EvalStore
 from recertia.ledger import HashChainLedger
-from recertia.validation.sensitivity import author_sensitivity_proof, empty_negative_fixture
+from recertia.validation.sensitivity import author_sensitivity_proof
 
 
 def _skill(skill_id: str = "used-skill", task_class: str = "repo-chore") -> SkillVersion:
@@ -34,8 +34,7 @@ def _skill(skill_id: str = "used-skill", task_class: str = "repo-chore") -> Skil
         sensitivity_proof=author_sensitivity_proof(
             SkillCertificationCriterion(
                 id="ok", kind="command", run="test -f pyproject.toml", preregistered=True
-            ),
-            negative_workdir=empty_negative_fixture(),
+            )
         ),
     )
     return SkillVersion(

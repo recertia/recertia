@@ -16,7 +16,7 @@ from recertia.jobs import Proposal
 from recertia.memory.procedural.store import SkillStore
 from recertia.review.autonomy_config import DEFAULT_AUTONOMY, AutonomyConfig
 from recertia.trajectory.store import TrajectoryStore
-from recertia.validation.sensitivity import author_sensitivity_proof, empty_negative_fixture
+from recertia.validation.sensitivity import author_sensitivity_proof
 
 
 def mine_from_repo_hints(store: SkillStore, *, hints: list[str]) -> list[Proposal]:
@@ -714,9 +714,7 @@ def draft_from_mine_proposal(proposal: Proposal) -> SkillVersion:
         )
         # Sensitivity proof still required for store hygiene; command is intentionally soft
         # until a domain-specific machine-checkable criterion is authored.
-        proof = author_sensitivity_proof(
-            criterion, negative_workdir=empty_negative_fixture()
-        )
+        proof = author_sensitivity_proof(criterion)
         abstract_preview = (abstract[:400] + "…") if len(abstract) > 400 else abstract
         return SkillVersion(
             skill_id=proposal.skill_id,
@@ -775,9 +773,7 @@ def draft_from_mine_proposal(proposal: Proposal) -> SkillVersion:
         run="test -f ok.txt",
         preregistered=True,
     )
-    proof = author_sensitivity_proof(
-        criterion, negative_workdir=empty_negative_fixture()
-    )
+    proof = author_sensitivity_proof(criterion)
     return SkillVersion(
         skill_id=proposal.skill_id,
         version=1,

@@ -19,7 +19,6 @@ from contracts.criteria import (
 
 __all__ = [
     "author_sensitivity_proof",
-    "empty_negative_fixture",
     "mutate_workspace",
     "sensitivity_evidence_hash",
     "sensitivity_proof_binds",
@@ -72,15 +71,6 @@ def author_sensitivity_proof(
         checked_against=f"sha256:{negative_fingerprint}",
         evidence_hash=sensitivity_evidence_hash(criterion, negative_fingerprint),
     )
-
-
-def empty_negative_fixture(parent: Path | None = None) -> Path:
-    """Create an empty temporary workspace; the caller must remove it.
-
-    Prefer ``author_sensitivity_proof`` without ``negative_workdir``, which cleans up.
-    """
-
-    return Path(tempfile.mkdtemp(prefix="recertia-neg-", dir=parent))
 
 
 def mutate_workspace(source: Path, *, drop_files: bool = True) -> Path:

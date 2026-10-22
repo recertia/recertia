@@ -6,7 +6,7 @@ from contracts.criteria import SkillCertificationCriterion
 from contracts.skill import FailureMode, Hygiene, Precondition, Provenance, SkillVersion, Step
 from contracts.status import SkillStatus
 from recertia.memory.procedural.lint import lint_report
-from recertia.validation.sensitivity import author_sensitivity_proof, empty_negative_fixture
+from recertia.validation.sensitivity import author_sensitivity_proof
 
 
 def _minimal(**overrides) -> SkillVersion:
@@ -17,8 +17,7 @@ def _minimal(**overrides) -> SkillVersion:
         run="true",
         preregistered=True,
         sensitivity_proof=author_sensitivity_proof(
-            SkillCertificationCriterion(id="ok", kind="command", run="true", preregistered=True),
-            negative_workdir=empty_negative_fixture(),
+            SkillCertificationCriterion(id="ok", kind="command", run="true", preregistered=True)
         ),
     )
     payload = dict(
