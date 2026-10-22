@@ -299,3 +299,37 @@ def test_heartbeat_expiry_is_read(tmp_path: Path) -> None:
     assert thief.incarnation == 2
     assert token >= 2
     thief.release()
+
+
+def test_lease_records_a_file_id_wider_than_sqlite_int(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows ``st_ino`` (the file ID) can exceed SQLite's signed 64 bits (REC-058)."""
+
+    import recertia.graph.lease as lease_mod
+
+    huge = 2**64 + 5  # e.g. a ReFS 128-bit file ID
+    real_fstat = os.fstat
+
+    def wide_fstat(fd: int) -> object:
+        st = real_fstat(fd)
+        values = list(st)
+        values[1] = huge  # st_ino
+        return os.stat_result(values)
+
+    monkeypatch.setattr(lease_mod.os, "fstat", wide_fstat)
+    db = tmp_path / "runtime.db"
+    lease = RunLease(tmp_path / "locks" / "r.lock", db_path=db, tenant_id="t", run_id="r")
+    assert lease.acquire() == 1
+    try:
+        conn = sqlite3.connect(db)
+        try:
+            row = conn.execute("SELECT lock_ino, typeof(lock_ino) FROM run_leases").fetchone()
+        finally:
+            conn.close()
+    finally:
+        lease.release()
+    assert tuple(row) == (hex(huge), "text")
+    assert lease_mod._sqlite_int(2**63 - 1) == 2**63 - 1
+    assert lease_mod._sqlite_int(-(2**63)) == -(2**63)
+    assert lease_mod._sqlite_int(2**63) == hex(2**63)

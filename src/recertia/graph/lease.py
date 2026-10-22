@@ -76,6 +76,24 @@ def _lease_ttl_s(ttl_s: float | None) -> float:
     return DEFAULT_LEASE_TTL_S
 
 
+_SQLITE_INT_MIN, _SQLITE_INT_MAX = -(2**63), 2**63 - 1
+
+
+def _sqlite_int(value: int) -> int | str:
+    """``st_dev`` / ``st_ino`` for the diagnostic ``run_leases`` columns.
+
+    SQLite integers are signed 64-bit. On Windows ``st_ino`` is the file ID, which can
+    be larger (an unsigned 64-bit index, or 128 bits on ReFS), and binding it raised
+    ``OverflowError`` on every lease. A value out of range is stored as hex text, which
+    keeps it exact; INTEGER affinity leaves non-decimal text as text.
+    """
+
+    value = int(value)
+    if _SQLITE_INT_MIN <= value <= _SQLITE_INT_MAX:
+        return value
+    return f"{value:#x}"
+
+
 class RunLease:
     """Exclusive lease held for the duration of start or resume."""
 
@@ -117,8 +135,8 @@ class RunLease:
             lock_gen = secrets.token_hex(16)
             token, incarnation = self._record_acquire(
                 token,
-                lock_dev=int(st.st_dev),
-                lock_ino=int(st.st_ino),
+                lock_dev=_sqlite_int(st.st_dev),
+                lock_ino=_sqlite_int(st.st_ino),
                 lock_gen=lock_gen,
                 prior_gen=prior_gen,
                 path_existed=path_existed,
@@ -169,8 +187,8 @@ class RunLease:
         self,
         token: int,
         *,
-        lock_dev: int,
-        lock_ino: int,
+        lock_dev: int | str,
+        lock_ino: int | str,
         lock_gen: str,
         prior_gen: str | None,
         path_existed: bool,
