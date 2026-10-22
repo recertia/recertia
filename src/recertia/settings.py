@@ -324,7 +324,8 @@ class Settings:
     console_cookie_secure: bool | None = None
     console_session_secret: str = ""
     # REC-056a: reverse proxies whose X-Forwarded-For the console login trusts. Empty
-    # (default) means forwarded headers are never read and the socket peer is the client.
+    # (default) means X-Forwarded-For is never used for the client key: the socket peer is
+    # the client (the header is still inspected to detect a proxy-headers rewrite).
     trusted_proxies: tuple[str, ...] = ()
     oidc_issuer: str = ""
     oidc_client_id: str = ""

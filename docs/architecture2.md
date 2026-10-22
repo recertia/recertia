@@ -1318,12 +1318,15 @@ touched), so one client's flood cannot evict or block another client's login. On
 from a client under its limit can meet a full table; it evicts the globally oldest pending
 start and is accepted.
 
-The client is the socket peer address. `X-Forwarded-For` is read only when the peer is
-inside `RECERTIA_TRUSTED_PROXIES` (comma-separated CIDRs, empty by default); then every
-`X-Forwarded-For` line is joined in order and the client is the rightmost hop that is not
-itself a trusted proxy. A missing header, a malformed hop (anything but a bare IP, such as
-an empty element or `ip:port`), or a chain made only of trusted proxies falls back to the
-peer. `Forwarded` is never read, even from a trusted peer. IPv4-mapped IPv6 addresses
+The client is the socket peer address. `X-Forwarded-For` is used for the client key only
+when the peer is inside `RECERTIA_TRUSTED_PROXIES` (comma-separated CIDRs, empty by
+default); it is otherwise inspected only to detect a proxy-headers rewrite (below). For a
+trusted peer, every `X-Forwarded-For` line is joined in order and, walking from the right,
+the client is the first hop that is not itself a trusted proxy. A missing header, a chain
+made only of trusted proxies, or a malformed hop (anything but a bare IP, such as an empty
+element or `ip:port`) met on that walk before the client falls back to the peer; malformed
+hops left of the client are not looked at. `Forwarded` is never read, even from a trusted
+peer. IPv4-mapped IPv6 addresses
 (`::ffff:a.b.c.d`) count as the IPv4 address, and IPv6 clients are keyed by their /64. A
 Unix-socket listener (`--uds`) has no peer address, so every login start through it shares
 the fixed key `unknown` (one 16-slot limit). The per-client limit must stay below the global
@@ -1336,7 +1339,7 @@ proxies' own addresses; `0.0.0.0/0` and `::/0` are refused at startup. The proxy
 append the address it received the connection from to `X-Forwarded-For` (for example,
 nginx `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`), and must not pass a
 client's header through unchanged as the only value. When `X-Forwarded-For` arrives from a
-peer outside `RECERTIA_TRUSTED_PROXIES`, the header is ignored and a warning naming
+peer outside `RECERTIA_TRUSTED_PROXIES`, it does not change the key and a warning naming
 `RECERTIA_TRUSTED_PROXIES` is logged once per process.
 
 **Always start uvicorn with `--no-proxy-headers`** (as in the launch command below), or with
@@ -1348,7 +1351,22 @@ place, so a peer that equals one of its hops, or a peer that is not an IP addres
 means something rewrote it. Such starts fail closed: they all share the fixed key
 `proxy-headers-rewritten` (one 16-slot limit), so forged hops cannot mint new keys or evict
 another client's login, and a warning naming `--no-proxy-headers` is logged once per
-process. Logins through that path then share one small limit, so fix the launch flags.
+process. A trusted proxy that appends its own address is not a rewrite: when the peer is
+trusted and a different hop remains to their left, its trailing self-hops are skipped
+before detection. That skip relies on the rewriter setting the peer port to 0, which
+uvicorn does for a bare hop (a real TCP peer never has port 0), so a rewritten peer never
+gets it. `X-Forwarded-For` parsing is bounded before the header is split (16 header lines,
+8192 bytes, 64 hops); anything larger gets the same fail-closed key, with its own one-time
+warning.
+
+**Warning: with uvicorn's default `--proxy-headers` behind a reverse proxy on loopback,
+every user lands in one shared 16-slot bucket.** One client can then keep everyone's
+logins failing. This is the fail-closed outcome, not a supported mode: fix the launch flags
+(`--no-proxy-headers` plus `RECERTIA_TRUSTED_PROXIES`). A client that puts its own address in
+`X-Forwarded-For` also lands in that shared bucket; it can only evict starts inside it.
+When the bucket first reaches its 16-start limit, a second warning is logged once per
+process. **Symptom:** all logins fail intermittently behind a proxy → check the logs for
+`proxy-headers-rewritten`.
 
 Telemetry keeps only the newest 1024 spans and 1024 events in memory, process-wide across
 tenants; exporters still receive every record. In-memory readers (the telemetry dashboard,

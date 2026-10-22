@@ -143,6 +143,7 @@ def register_auth_routes(app: FastAPI, rs: RouteState) -> None:
             request.client.host if request.client else None,
             request.headers.getlist("x-forwarded-for"),
             trusted_proxies,
+            request.client.port if request.client else None,
         )
         state, verifier, nonce = ctx.sessions.begin_oidc(redirect_uri=redirect, client_key=client_key)
         return {

@@ -361,11 +361,20 @@ class SessionStore:
         with self._oidc_lock:
             self._purge_oidc_locked()
             mine = [k for k, v in self._oidc.items() if v.client_key == client_key]
+            shared_full = client_key == _OIDC_REWRITTEN_CLIENT and len(mine) >= _OIDC_PENDING_PER_CLIENT
             while len(mine) >= _OIDC_PENDING_PER_CLIENT:
                 self._oidc.pop(mine.pop(0), None)
             while len(self._oidc) >= _OIDC_PENDING_MAX:
                 del self._oidc[next(iter(self._oidc))]
             self._oidc[state] = OidcPending(verifier, redirect_uri, time.time(), nonce, client_key)
+        if shared_full:
+            _warn_once(
+                "rewritten-full",
+                "console OIDC login: the shared fail-closed client key 'proxy-headers-rewritten' "
+                "is at its 16-start limit, so pending logins in it are now being evicted and "
+                "users will see intermittent login failures. Start uvicorn with "
+                "--no-proxy-headers and list real proxies in RECERTIA_TRUSTED_PROXIES.",
+            )
         return state, verifier, nonce
 
     def claim_jti(self, jti: str) -> None:
@@ -408,13 +417,22 @@ def parse_trusted_proxies(cidrs: Iterable[str]) -> tuple[IPNetwork, ...]:
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 _OIDC_IPV6_KEY_PREFIX = 64
+# X-Forwarded-For parsing bounds (per request). Anything larger fails closed.
+_XFF_MAX_LINES = 16
+_XFF_MAX_BYTES = 8192
+_XFF_MAX_HOPS = 64
 _warned: set[str] = set()
+_warned_lock = Lock()
 
 
 def _warn_once(kind: str, message: str) -> None:
-    if kind not in _warned:
+    """Log ``message`` once per process for each ``kind``."""
+
+    with _warned_lock:
+        if kind in _warned:
+            return
         _warned.add(kind)
-        _log.warning(message)
+    _log.warning(message)
 
 
 def _ip(value: str) -> IPAddress | None:
@@ -452,36 +470,65 @@ def _is_trusted(ip: IPAddress, trusted: Sequence[IPNetwork]) -> bool:
     return any(ip in net for net in trusted)
 
 
-def oidc_client_key(peer: str | None, forwarded_for: Sequence[str], trusted: Sequence[IPNetwork]) -> str:
+def oidc_client_key(
+    peer: str | None,
+    forwarded_for: Sequence[str],
+    trusted: Sequence[IPNetwork],
+    peer_port: int | None = None,
+) -> str:
     """Client identity for the per-client pending-login limit (REC-056a).
 
-    * ``peer`` is the ASGI peer host (``request.client.host``); ``forwarded_for`` is every
-      ``X-Forwarded-For`` header line, in order. ``Forwarded`` (RFC 7239) is never read.
+    * ``peer`` / ``peer_port`` are the ASGI peer (``request.client``); ``forwarded_for`` is
+      every ``X-Forwarded-For`` header line, in order. ``Forwarded`` (RFC 7239) is never read.
     * No peer (e.g. ``uvicorn --uds``): the fixed key ``"unknown"``, shared by everyone.
+    * Bounded parsing, checked before the header is split: more than ``_XFF_MAX_LINES``
+      lines, ``_XFF_MAX_BYTES`` bytes or ``_XFF_MAX_HOPS`` hops fails closed to the fixed
+      ``"proxy-headers-rewritten"`` key (one-time warning). Malformed input never raises.
+    * A trusted proxy's own trailing self-hops: when the peer is trusted, its port is
+      non-zero and a hop other than the peer remains to their left (and the peer appears
+      nowhere in that remainder), trailing bare-IP hops equal to the peer are dropped
+      before detection. This relies on the rewriter setting port 0, which uvicorn does
+      for a bare hop; a real TCP peer never has port 0.
     * Rewrite detection (fail closed): an outer proxy-headers layer (uvicorn's default
-      ``--proxy-headers``) replaces the peer with an XFF hop but leaves the header in place.
-      If the peer is not an IP, or equals one of the XFF hops, the key is the fixed
-      ``"proxy-headers-rewritten"`` bucket and a one-time warning names
-      ``--no-proxy-headers``. A spoofed XFF then cannot mint keys or evict other clients.
-    * Otherwise the socket peer is the client. ``X-Forwarded-For`` is used only when the
-      peer is inside ``trusted`` (IPv4-mapped peers are folded to IPv4 first): the client
-      is the rightmost hop that is not itself a trusted proxy. A missing header, a
-      malformed hop (not a bare IP, e.g. empty or ``ip:port``) or a chain made only of
-      trusted proxies falls back to the peer. XFF from an untrusted peer is ignored, with
-      a one-time warning naming ``RECERTIA_TRUSTED_PROXIES``.
+      ``--proxy-headers``, or ``--forwarded-allow-ips '*'``) replaces the peer with an XFF
+      hop but leaves the header in place. If the peer is not an IP, or equals one of the
+      hops, the key is the fixed ``"proxy-headers-rewritten"`` bucket and a one-time
+      warning names ``--no-proxy-headers``. A spoofed XFF then cannot mint keys or evict
+      other clients.
+    * Otherwise the socket peer is the client. ``X-Forwarded-For`` is used for the key
+      only when the peer is inside ``trusted`` (IPv4-mapped peers are folded to IPv4
+      first): walking from the right, the client is the first hop that is not itself a
+      trusted proxy. A missing header, a chain made only of trusted proxies, or a
+      malformed hop (not a bare IP, e.g. empty or ``ip:port``) met on that walk before
+      the client falls back to the peer; malformed hops left of the client are not
+      looked at. XFF from an untrusted peer does not change the key; it logs a one-time
+      warning naming ``RECERTIA_TRUSTED_PROXIES``.
     * IPv6 keys are grouped by /64.
     """
 
     if not peer:
         return _OIDC_UNKNOWN_CLIENT
+    if len(forwarded_for) > _XFF_MAX_LINES or sum(len(v) for v in forwarded_for) > _XFF_MAX_BYTES:
+        return _oversized_xff()
     hops = [h.strip() for value in forwarded_for for h in value.split(",")]
+    if len(hops) > _XFF_MAX_HOPS:
+        return _oversized_xff()
     peer_ip = _ip(peer)
+    if peer_port and peer_ip is not None and hops and _is_trusted(peer_ip, trusted):
+        tail = hops
+        while tail and _ip(tail[-1]) == peer_ip:  # bare-IP self-hops only
+            tail = tail[:-1]
+        if tail and len(tail) < len(hops) and peer_ip not in {_hop_ip_loose(h) for h in tail}:
+            hops = tail
     if peer_ip is None or (hops and (peer.strip() in hops or peer_ip in {_hop_ip_loose(h) for h in hops})):
         _warn_once(
             "rewrite",
             "console OIDC login: the client address looks rewritten from X-Forwarded-For by an "
-            "outer proxy-headers layer; using one shared fail-closed client key. Start uvicorn "
-            "with --no-proxy-headers and list real proxies in RECERTIA_TRUSTED_PROXIES.",
+            "outer proxy-headers layer, so EVERY such login now shares ONE fail-closed client "
+            "key with a 16-start limit. If uvicorn runs with its default --proxy-headers behind "
+            "a reverse proxy on loopback, every user lands in that one bucket and one client "
+            "can keep everyone's logins failing. Start uvicorn with --no-proxy-headers and "
+            "list the real proxies in RECERTIA_TRUSTED_PROXIES.",
         )
         return _OIDC_REWRITTEN_CLIENT
     if not _is_trusted(peer_ip, trusted):
@@ -500,6 +547,16 @@ def oidc_client_key(peer: str | None, forwarded_for: Sequence[str], trusted: Seq
         if not _is_trusted(ip, trusted):
             return _key(ip)
     return _key(peer_ip)
+
+
+def _oversized_xff() -> str:
+    _warn_once(
+        "xff-oversized",
+        "console OIDC login: X-Forwarded-For exceeds the parsing bounds "
+        f"({_XFF_MAX_LINES} lines, {_XFF_MAX_BYTES} bytes, {_XFF_MAX_HOPS} hops); using the "
+        "shared fail-closed client key for such requests.",
+    )
+    return _OIDC_REWRITTEN_CLIENT
 
 
 def oidc_configured() -> bool:
