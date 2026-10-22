@@ -287,10 +287,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs `python -m pytest tests/unit/persistence -k root_lock -rs -v -o
   timeout_method=thread`, so the root lock is exercised against the real `kernel32`. Any
   `tests/unit/persistence/test_root_lock_*.py` file is picked up by name. A new `windows`
-  pytest marker labels tests that need real Windows (it does not select them, so the file
-  name must contain `root_lock`). The job fails on any failed, errored or skipped test
-  (xfail included), on fewer passes than its `ROOT_LOCK_MIN_PASSED` (2), and on a missing
-  or empty JUnit report. Markers are now strict (`addopts = ["--strict-markers"]`), and the
+  pytest marker labels tests that need real Windows; a second step runs
+  `pytest tests/unit/persistence -m windows` with its own minimum
+  (`WINDOWS_MARKED_MIN_PASSED`, 13), so a marked test outside the `root_lock` name
+  selection still runs. The job fails on any failed, errored or skipped test (xfail
+  included) in either step, on fewer passes than `ROOT_LOCK_MIN_PASSED` (67) or
+  `WINDOWS_MARKED_MIN_PASSED`, and on a missing or empty JUnit report. Markers are now strict (`addopts = ["--strict-markers"]`), and the
   Linux `ci` job's pytest prints skip reasons (`-rs`). It has a read-only token, no secrets, `checkout`
   with `persist-credentials: false`, and actions pinned to the same SHAs as
   `weekly-ops.yml`. The `ci` job and the required check are unchanged.

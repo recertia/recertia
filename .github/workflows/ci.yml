@@ -277,7 +277,10 @@ jobs:
       RECERTIA_NO_NETWORK: "1"
       # The guard below fails the job unless at least this many root-lock tests pass.
       # Raise it whenever a root-lock test is added (REC-058 MF-1).
-      ROOT_LOCK_MIN_PASSED: "2"
+      ROOT_LOCK_MIN_PASSED: "67"
+      # Same rule for the `-m windows` run (test_root_lock_windows_real.py), so a
+      # real-Windows test cannot drop out of the selection unnoticed.
+      WINDOWS_MARKED_MIN_PASSED: "13"
     defaults:
       run:
         shell: bash
@@ -336,4 +339,32 @@ jobs:
               sys.exit("guard: a root-lock test was skipped, failed or errored on Windows")
           if counts["passed"] < minimum:
               sys.exit(f"guard: {counts['passed']} root-lock tests passed, fewer than {minimum}")
+          PY
+
+      # Selected by marker, not name: every `windows`-marked test must pass here too.
+      - name: Windows-marked tests (real Windows)
+        run: |
+          python -m pytest tests/unit/persistence -m windows -rs -v \
+            -o timeout_method=thread --junitxml=windows-marked.xml
+          python - <<'PY'
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path("windows-marked.xml")
+          minimum = int(os.environ["WINDOWS_MARKED_MIN_PASSED"])
+          if not report.is_file():
+              sys.exit(f"guard: {report} is missing")
+          try:
+              root = ET.parse(report).getroot()
+          except ET.ParseError as exc:
+              sys.exit(f"guard: {report} is not valid JUnit XML: {exc}")
+          suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+          cases = [case for suite in suites for case in suite.iter("testcase")]
+          bad = [c for c in cases if any(c.find(t) is not None for t in ("skipped", "failure", "error"))]
+          passed = len(cases) - len(bad)
+          print(f"guard: {passed} passed, {len(bad)} skipped/failed/errored, minimum passed {minimum}")
+          if not cases or bad or passed < minimum:
+              sys.exit("guard: windows-marked tests did not all pass, or fewer than the minimum")
           PY
