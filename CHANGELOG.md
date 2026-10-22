@@ -142,6 +142,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Backup no longer archives the root's `.lock` and `api.lock`, and restore does not
     extract them. Both are empty lock targets that backup and restore hold exclusively,
     and Windows byte-range locks are mandatory, so reading or overwriting them failed.
+  - Run leases on Windows: `run_leases.lock_dev`/`lock_ino` (diagnostic only) store a
+    value outside SQLite's signed 64 bits as hex text. On `windows-latest` the file ID in
+    `st_ino` was wider, and every `RunLease.acquire` raised `OverflowError`, so every
+    worker run failed there.
 
   Known limits:
   - Stores opened directly rather than through a run handle are not guarded (worker queue,
@@ -292,7 +296,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`WINDOWS_MARKED_MIN_PASSED`, 13), so a marked test outside the `root_lock` name
   selection still runs. The job fails on any failed, errored or skipped test (xfail
   included) in either step, on fewer passes than `ROOT_LOCK_MIN_PASSED` (67) or
-  `WINDOWS_MARKED_MIN_PASSED`, and on a missing or empty JUnit report. Markers are now strict (`addopts = ["--strict-markers"]`), and the
+  `WINDOWS_MARKED_MIN_PASSED`, and on a missing or empty JUnit report. Each guard also
+  fails when its minimum is below 1 or not an integer, and on success prints a
+  `guard: {...}` summary. Markers are now strict (`addopts = ["--strict-markers"]`), and
+  so are xfails (`xfail_strict = true`: an unexpected pass fails), and the
   Linux `ci` job's pytest prints skip reasons (`-rs`). It has a read-only token, no secrets, `checkout`
   with `persist-credentials: false`, and actions pinned to the same SHAs as
   `weekly-ops.yml`. The `ci` job and the required check are unchanged.
