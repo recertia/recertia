@@ -3,6 +3,11 @@
 
 Writes PREFREEZE-REFUSALS.json, then MANIFEST.sha256 last. Scratch roots only — never
 evals/golden/_promotion_logs, skills/, or .recertia/.
+
+``attempts`` is not measured here: each case calls ``promote_to_approved`` exactly once and
+the gate exposes no replay or retry count, so every row records ``"attempts": null`` with
+``"attempts_measured": false``. The T2 harness must measure attempts (and first-attempt and
+final outcomes) itself; nothing in this file is evidence of an attempt count.
 """
 
 from __future__ import annotations
@@ -35,6 +40,11 @@ CASES = (
     "ensure-src-layout",
     "pin-python-version",
     "strip-trailing-whitespace",
+)
+ATTEMPTS_NOT_MEASURED_REASON = (
+    "not measured: prefreeze.py calls promote_to_approved once per case and the gate "
+    "exposes no replay or retry count; the T2 harness must measure attempts and the "
+    "first-attempt and final outcomes"
 )
 EDIT_SUMMARIES = {
     "add-editorconfig": "omit the [*.py] section from .editorconfig",
@@ -98,6 +108,63 @@ def _refusal_kind(message: str) -> str:
     if "lifecycle" in text:
         return "lifecycle"
     return "other"
+
+
+def case_row(
+    *,
+    skill_id: str,
+    refusal_kind: str,
+    backend_used: str,
+    criteria_diff: str,
+    executor_id: str,
+    code_sha: str,
+    date_pt: str,
+    message: str,
+) -> dict[str, Any]:
+    """One PREFREEZE-REFUSALS.json row. ``attempts`` is explicitly not measured (None)."""
+
+    row: dict[str, Any] = {
+        "id": skill_id,
+        "edit_summary": EDIT_SUMMARIES[skill_id],
+        "refusal_kind": refusal_kind,
+        "backend_used": backend_used,
+        "criteria_diff": criteria_diff,
+        "executor_id": executor_id,
+        "code_sha": code_sha,
+        "date_pt": date_pt,
+        "attempts": None,
+        "attempts_measured": False,
+        "message": message,
+    }
+    if skill_id == "add-editorconfig":
+        row["note"] = (
+            "predecessor fixture is the same directory as the candidate's and is "
+            "deduplicated; refusal is the candidate failing"
+        )
+    return row
+
+
+def case_row_problems(row: dict[str, Any]) -> list[str]:
+    """Reasons a row must not be frozen (empty when it is acceptable)."""
+
+    problems: list[str] = []
+    if row.get("refusal_kind") not in ALLOWED_KINDS:
+        problems.append(f"refusal_kind {row.get('refusal_kind')!r} not allowed")
+    if row.get("backend_used") != "container":
+        problems.append(f"backend_used {row.get('backend_used')!r} is not container")
+    if row.get("criteria_diff") != "identical":
+        problems.append("certification_criteria changed")
+    measured = row.get("attempts_measured")
+    attempts = row.get("attempts")
+    if measured is True:
+        if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
+            problems.append(f"attempts_measured but attempts={attempts!r}")
+    elif measured is False:
+        if attempts is not None:
+            problems.append(f"attempts={attempts!r} recorded without a measurement")
+    else:
+        problems.append("attempts_measured missing")
+    return problems
 
 
 def write_manifest() -> Path:
@@ -195,7 +262,6 @@ def prove() -> dict[str, Any]:
 
             store.write_candidate(SkillVersion.model_validate(v2))
             observed.clear()
-            attempts = 1
             kind = "other"
             message = ""
             try:
@@ -216,37 +282,25 @@ def prove() -> dict[str, Any]:
                 kind = _refusal_kind(message)
             backends = sorted(set(observed))
             backend_used = backends[0] if len(backends) == 1 else ",".join(backends) or "none"
-            row = {
-                "id": skill_id,
-                "edit_summary": EDIT_SUMMARIES[skill_id],
-                "refusal_kind": kind,
-                "backend_used": backend_used,
-                "criteria_diff": _criteria_identical(skill_id),
-                "executor_id": executor_id,
-                "code_sha": code_sha,
-                "date_pt": date_pt,
-                "attempts": attempts,
-                "message": message,
-            }
-            if skill_id == "add-editorconfig":
-                row["note"] = (
-                    "predecessor fixture is the same directory as the candidate's and is "
-                    "deduplicated; refusal is the candidate failing"
+            cases.append(
+                case_row(
+                    skill_id=skill_id,
+                    refusal_kind=kind,
+                    backend_used=backend_used,
+                    criteria_diff=_criteria_identical(skill_id),
+                    executor_id=executor_id,
+                    code_sha=code_sha,
+                    date_pt=date_pt,
+                    message=message,
                 )
-            cases.append(row)
+            )
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
         if scratch.exists():
             subprocess.run(["chmod", "-R", "a+rwX", str(scratch)], check=False)
             shutil.rmtree(scratch, ignore_errors=True)
 
-    bad = [
-        row
-        for row in cases
-        if row["refusal_kind"] not in ALLOWED_KINDS
-        or row["backend_used"] != "container"
-        or row["criteria_diff"] != "identical"
-    ]
+    bad = [{**row, "problems": case_row_problems(row)} for row in cases if case_row_problems(row)]
     payload = {
         "epsilon": 0.0,
         "golden_backend": "container",
@@ -254,6 +308,7 @@ def prove() -> dict[str, Any]:
         "runtime": runtime,
         "code_sha": code_sha,
         "date_pt": date_pt,
+        "not_measured": {"attempts": ATTEMPTS_NOT_MEASURED_REASON},
         "cases": cases,
     }
     (SET_DIR / "PREFREEZE-REFUSALS.json").write_text(

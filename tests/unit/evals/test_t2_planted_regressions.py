@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
+from types import ModuleType
 
 REPO = Path(__file__).resolve().parents[3]
 SET_DIR = REPO / "evals" / "planted-regressions" / "t2"
@@ -73,7 +76,66 @@ def test_prefreeze_refusals_are_allowed_kinds_on_container() -> None:
         assert row["refusal_kind"] in allowed, skill_id
         assert row["backend_used"] == "container", skill_id
         assert row["criteria_diff"] == "identical", skill_id
-        assert row["attempts"] >= 1
+        if row.get("attempts_measured") is True:
+            assert isinstance(row["attempts"], int), skill_id
+            assert row["attempts"] >= 1, skill_id
+        else:
+            assert row["attempts"] is None, skill_id
+
+
+def _load_prefreeze() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("t2_prefreeze", SET_DIR / "prefreeze.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # No __pycache__ in the frozen set: the manifest test compares every file on disk.
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
+    return module
+
+
+def test_prefreeze_refusals_do_not_present_attempts_as_a_measurement() -> None:
+    """The pre-freeze run never measured attempts; no row may read as if it had (REC-013)."""
+
+    payload = json.loads((SET_DIR / "PREFREEZE-REFUSALS.json").read_text(encoding="utf-8"))
+    rows = payload["cases"]
+    assert rows
+    unmeasured = []
+    for row in rows:
+        skill_id = row["id"]
+        assert "attempts_measured" in row, f"{skill_id}: attempts has no measured/not-measured flag"
+        assert isinstance(row["attempts_measured"], bool), skill_id
+        if row["attempts_measured"]:
+            assert isinstance(row["attempts"], int) and row["attempts"] >= 1, skill_id
+        else:
+            assert row["attempts"] is None, f"{skill_id}: unmeasured attempts carries a number"
+            unmeasured.append(skill_id)
+    if unmeasured:
+        reason = payload.get("not_measured", {}).get("attempts")
+        assert isinstance(reason, str) and reason.strip(), "no top-level not_measured.attempts reason"
+
+
+def test_prefreeze_case_rows_mark_attempts_not_measured() -> None:
+    """Rows the pre-freeze script would write carry no attempt count it did not measure."""
+
+    prefreeze = _load_prefreeze()
+    row = prefreeze.case_row(
+        skill_id="add-license-mit",
+        refusal_kind="predecessor_non_regression",
+        backend_used="container",
+        criteria_diff="identical",
+        executor_id="recertia.solver.executor.ContainerExecutor",
+        code_sha="0" * 40,
+        date_pt="2026-10-21",
+        message="predecessor non-regression failed",
+    )
+    assert row["attempts"] is None
+    assert row["attempts_measured"] is False
+    assert prefreeze.case_row_problems(row) == []
+    assert prefreeze.case_row_problems({**row, "attempts": 1}) != []
 
 
 def test_golden_fixtures_match_head() -> None:
