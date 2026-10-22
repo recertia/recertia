@@ -23,8 +23,11 @@ So tenants on one root do not exclude each other, an import still excludes
 every other import and handle of its own tenant, and backup/restore still
 exclude every tenant. Nothing holds a tenant lock without the root lock, and
 nothing waits for the root lock while holding a tenant lock, so the order has
-no cycle. A tenant lock waits within the same bound as the root lock
-(:class:`TenantLock`).
+no cycle. (The one exception is ``graph/ops.py``'s blocking exclusive
+``<db_parent>/.lock`` for the operations schema, #160: in the CLI layout that is
+the root lock. It is unreachable from a run handle today, because
+``open_run_persistence`` runs ``ensure_operations_schema`` first.) A tenant lock
+waits within the same bound as the root lock (:class:`TenantLock`).
 
 The lock file is a flock target only. It must not record pid/tid identity:
 a SIGKILLed holder leaves an empty file, and leftover text is never treated
@@ -330,7 +333,13 @@ class TenantLock:
             raise
 
     def release(self) -> None:
-        """Tenant lock first, then the root lock (the reverse of ``acquire``)."""
+        """Tenant lock first, then the root lock (the reverse of ``acquire``).
+
+        The order is not observable from outside: once the root lock is free,
+        backup or restore may take it while the tenant fd is still closing, and
+        neither takes a tenant lock. It is kept so release mirrors ``acquire``
+        and nothing ever holds a tenant lock without the root lock.
+        """
 
         try:
             self.tenant.release()
