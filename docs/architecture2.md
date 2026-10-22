@@ -1311,6 +1311,33 @@ opt in.
 Cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` except in `dev`. The session
 token is not returned in JSON and is not stored in `localStorage`.
 
+Pending OIDC login starts are unauthenticated, so they are capped in process: 16 per
+client, and 1024 in total as a backstop. The per-client check runs first: a client at its
+limit loses only its own oldest start (it is not rejected, and no other client's entry is
+touched), so one client's flood cannot evict or block another client's login. Only a start
+from a client under its limit can meet a full table; it evicts the globally oldest pending
+start and is accepted.
+
+The client is the socket peer address. `X-Forwarded-For` is read only when the peer is
+inside `RECERTIA_TRUSTED_PROXIES` (comma-separated CIDRs, empty by default); then the
+client is the rightmost hop that is not itself a trusted proxy. A missing header, a
+malformed hop (anything but a bare IP, such as an empty element or `ip:port`), or a chain
+made only of trusted proxies falls back to the peer. `Forwarded` is never read, even from a
+trusted peer. The per-client limit must stay below the global cap; the module refuses to
+load otherwise.
+
+**Always start uvicorn with `--no-proxy-headers`** (as in the launch command below), or with
+an empty `FORWARDED_ALLOW_IPS`.
+uvicorn's default `--proxy-headers` trusts `X-Forwarded-For` from `FORWARDED_ALLOW_IPS`
+(loopback by default) and rewrites the peer before the app runs, so anything on the host
+could choose its own client key. The app cannot undo that rewrite, so the flag is the one
+place it is turned off; `RECERTIA_TRUSTED_PROXIES` is then the only trust path. Behind a
+reverse proxy, list the proxy there. Without it, every user behind the proxy shares one
+client limit.
+
+Telemetry keeps the newest 1024 spans and 1024 events in memory; exporters still receive
+every record.
+
 Promote and improvement jobs require the `promote` / `jobs` API-key scopes (or
 `admin`), or a console reviewer session. A `runs` key cannot approve skills.
 
@@ -1355,7 +1382,7 @@ Prefer the product console for day-to-day operator chores once the API is up:
 
 ```bash
 # From a configured environment with RECERTIA_* model credentials as above:
-python -m uvicorn recertia.api.app:app --host 127.0.0.1 --port 8080
+python -m uvicorn recertia.api.app:app --host 127.0.0.1 --port 8080 --no-proxy-headers
 # Open http://127.0.0.1:8080/console
 ```
 

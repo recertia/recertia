@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import secrets
@@ -18,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -31,6 +33,25 @@ from recertia.api.auth import validate_tenant_id
 Role = Literal["operator", "reviewer", "admin"]
 _VALID_ROLES = frozenset({"operator", "reviewer", "admin"})
 _OIDC_TTL_S = 600
+# Pending OIDC login starts are unauthenticated, so the map is bounded (REC-056a).
+# Order (CTO-rec ruling): the per-client check runs first. A client (see oidc_client_key)
+# at _OIDC_PENDING_PER_CLIENT evicts only its OWN oldest start and is never rejected; it
+# never touches another client's entries. Only a start from a client under its limit can
+# meet a full map; that start evicts the globally oldest entry and is accepted. So one
+# client's flood cannot push out another client's login.
+_OIDC_PENDING_MAX = 1024
+_OIDC_PENDING_PER_CLIENT = 16
+_OIDC_DEFAULT_CLIENT = "local"
+
+
+def _validate_oidc_limits(per_client: int, total: int) -> None:
+    """Invariant: 0 < per-client limit < global cap (else one client could fill the map)."""
+
+    if not 0 < per_client < total:
+        raise ValueError(f"OIDC pending limits need 0 < per_client ({per_client}) < total ({total})")
+
+
+_validate_oidc_limits(_OIDC_PENDING_PER_CLIENT, _OIDC_PENDING_MAX)
 
 
 def auth_mode() -> str:
@@ -129,6 +150,7 @@ class OidcPending:
     redirect_uri: str
     created_at: float
     nonce: str
+    client_key: str = _OIDC_DEFAULT_CLIENT
 
 
 def _checked_tenants(
@@ -323,13 +345,22 @@ class SessionStore:
             active_tenant=tenant_id,
         )
 
-    def begin_oidc(self, *, redirect_uri: str) -> tuple[str, str, str]:
+    def begin_oidc(
+        self, *, redirect_uri: str, client_key: str = _OIDC_DEFAULT_CLIENT
+    ) -> tuple[str, str, str]:
+        """Record a pending login start for ``client_key`` (see ``_OIDC_PENDING_*``)."""
+
         state = secrets.token_urlsafe(24)
         verifier = secrets.token_urlsafe(48)
         nonce = secrets.token_urlsafe(24)
         with self._oidc_lock:
             self._purge_oidc_locked()
-            self._oidc[state] = OidcPending(verifier, redirect_uri, time.time(), nonce)
+            mine = [k for k, v in self._oidc.items() if v.client_key == client_key]
+            while len(mine) >= _OIDC_PENDING_PER_CLIENT:
+                self._oidc.pop(mine.pop(0), None)
+            while len(self._oidc) >= _OIDC_PENDING_MAX:
+                del self._oidc[next(iter(self._oidc))]
+            self._oidc[state] = OidcPending(verifier, redirect_uri, time.time(), nonce, client_key)
         return state, verifier, nonce
 
     def claim_jti(self, jti: str) -> None:
@@ -359,6 +390,52 @@ class SessionStore:
         expired = [k for k, v in self._oidc.items() if now - v.created_at > _OIDC_TTL_S]
         for key in expired:
             self._oidc.pop(key, None)
+
+
+IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+def parse_trusted_proxies(cidrs: Iterable[str]) -> tuple[IPNetwork, ...]:
+    """Parse ``Settings.trusted_proxies`` (already validated by load_settings)."""
+
+    return tuple(ipaddress.ip_network(c, strict=False) for c in cidrs)
+
+
+def _trusted(addr: str, trusted: Sequence[IPNetwork]) -> bool:
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    return any(ip in net for net in trusted)
+
+
+def oidc_client_key(peer: str | None, forwarded_for: Sequence[str], trusted: Sequence[IPNetwork]) -> str:
+    """Client identity for the per-client pending-login limit (REC-056a).
+
+    The socket peer is the client. ``X-Forwarded-For`` is read only when the peer is
+    inside a trusted proxy network; then the rightmost hop that is not itself a trusted
+    proxy is the client. A missing header, a malformed hop (not a bare IP, e.g. empty or
+    ``ip:port``), or a chain made only of trusted proxies falls back to the peer.
+    ``Forwarded`` is never read, even from a trusted peer.
+
+    ``peer`` must be the real socket peer: serve with ``uvicorn --no-proxy-headers``, since
+    uvicorn's default ProxyHeadersMiddleware rewrites the peer from X-Forwarded-For for
+    loopback connections before the app runs (go-live.md).
+    """
+
+    if not peer:
+        return "unknown"
+    if not trusted or not _trusted(peer, trusted):
+        return peer
+    hops = [h.strip() for value in forwarded_for for h in value.split(",")]
+    for hop in reversed(hops):
+        try:
+            ip = ipaddress.ip_address(hop)
+        except ValueError:
+            return peer
+        if not any(ip in net for net in trusted):
+            return str(ip)
+    return peer
 
 
 def oidc_configured() -> bool:

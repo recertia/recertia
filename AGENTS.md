@@ -58,7 +58,7 @@ files under a gitignored `.recertia/` dir; no external database is required for 
 - CLI run (example): `recertia run --goal evals/golden/repo-chore/add-editorconfig/goal.json
   --local-exec --runs-root .recertia --workdir .recertia/ws`. Inspect with
   `recertia runs show <run_id> --route-log` and `recertia ledger verify`.
-- HTTP API: `RECERTIA_EXECUTION_BACKEND=local uvicorn recertia.api.app:app --host 127.0.0.1 --port 8000`
+- HTTP API: `RECERTIA_EXECUTION_BACKEND=local uvicorn recertia.api.app:app --host 127.0.0.1 --port 8000 --no-proxy-headers`
   (default port 8000; interactive docs at `/docs`). Endpoints under `/v1/*` require an
   `X-API-Key` header. Issue a key that writes to the same root the server uses
   (`.recertia/api_keys.sqlite`): `recertia keys issue --tenant demo --scopes runs,metrics --actor dev`.
