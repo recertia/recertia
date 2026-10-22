@@ -254,6 +254,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflow's only write grant (job-scoped `issues: write` on `GITHUB_TOKEN`); the
   workflow-level `permissions` is now `{}`.
 
+- **Nightly alert and extras hardening (REC-062)** — follow-up to the #143 review.
+  The alert job's run-id dedupe now counts only comments by `github-actions`, so a
+  visitor's comment carrying the run-id key cannot suppress an alert. Its condition is
+  `always() && github.event_name == 'schedule' && needs.import-all.result != 'success'`,
+  so a job that hits `timeout-minutes` (reported as cancelled) also alerts. A new
+  `Extras import` step imports psycopg, pypdf and opentelemetry and fails unless
+  psycopg uses the `binary` implementation, so dropping `[binary]` is loud.
+  `NIGHTLY_EXTRAS` gains `api`, so the pin script's conflicting-floor check now
+  compares the `api` and `dev` floors. The script matches names by PEP 503
+  normalisation. Comments note the 60-day schedule auto-disable, the 100-item `gh`
+  fetch limit and the psycopg 3.2.1 wheel range (cp312 at most).
+
 - **REL-3 runtime.db** — `open_run_persistence` imports leftover
   `checkpoints.db` / `operations.db` into `runtime.db` when
   `RECERTIA_RUNTIME_DB_MIGRATE=auto` (default), then copies the sources to

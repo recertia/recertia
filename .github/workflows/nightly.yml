@@ -13,6 +13,8 @@ name: nightly
 # "nightly: scheduled run failing", through the alert job (REC-057 N5).
 
 on:
+  # GitHub disables scheduled workflows in a public repo after 60 days without
+  # repository activity; then neither the nightly nor its alert job runs (REC-062).
   schedule:
     - cron: "17 5 * * *"
   workflow_dispatch:
@@ -34,7 +36,12 @@ jobs:
       ANTHROPIC_API_KEY: ""
       RECERTIA_NO_NETWORK: "1"
       # Extras both arms install; the lowest arm pins every one of their floors too.
-      NIGHTLY_EXTRAS: dev,postgres,pdf,otel
+      # `api` repeats dev's fastapi/uvicorn/httpx floors, so listing it lets the
+      # conflicting-floor check catch drift between the two lists (REC-062).
+      # psycopg[binary]==3.2.1 has wheels only up to cp312 (the first cp313 wheel is
+      # psycopg-binary 3.2.2), so this floor would not install on 3.13. The lowest arm
+      # is 3.11 because requires-python is >=3.11 (it predates the extras), not for that.
+      NIGHTLY_EXTRAS: dev,api,postgres,pdf,otel
     strategy:
       fail-fast: false
       matrix:
@@ -62,6 +69,7 @@ jobs:
           if [ "$DEPS" = "lowest" ]; then
             python - <<'PY'
           import os
+          import re
           import tomllib
           from pathlib import Path
 
@@ -70,7 +78,7 @@ jobs:
           reqs = list(data["project"]["dependencies"])
           for extra in os.environ["NIGHTLY_EXTRAS"].split(","):
               reqs += optional[extra]
-          pins = {}
+          pins = {}  # PEP 503 name -> (name as written, floor)
           for req in reqs:
               if ";" in req:
                   raise SystemExit(f"environment markers are not supported here: {req}")
@@ -79,19 +87,48 @@ jobs:
                   raise SystemExit(f"direct dep has no >= floor: {req}")
               # A constraint cannot carry extras: psycopg[binary]>=3.2 pins psycopg==3.2.
               name = head.split("[", 1)[0].strip()
-              pin = f"{name}=={rest.split(',', 1)[0].strip()}"
-              if pins.setdefault(name.lower(), pin) != pin:
-                  raise SystemExit(f"conflicting floors for {name}: {pins[name.lower()]} vs {pin}")
-          Path("lowest-direct.txt").write_text("\n".join(pins.values()) + "\n")
+              floor = rest.split(",", 1)[0].strip()
+              # PEP 503: import_linter, Import.Linter and import-linter are one package.
+              key = re.sub(r"[-_.]+", "-", name).lower()
+              seen = pins.setdefault(key, (name, floor))
+              if seen[1] != floor:
+                  raise SystemExit(f"conflicting floors for {key}: {seen[0]}>={seen[1]} vs {req}")
+          lines = [f"{name}=={floor}" for name, floor in pins.values()]
+          Path("lowest-direct.txt").write_text("\n".join(lines) + "\n")
           print("lowest-direct pins:")
-          print("\n".join(pins.values()))
+          print("\n".join(lines))
           PY
             pip install -e ".[$NIGHTLY_EXTRAS]" -c lowest-direct.txt
           else
             pip install -e ".[$NIGHTLY_EXTRAS]"
           fi
 
+      # REC-062 S2: the extras must import, and psycopg must use the [binary] package's
+      # bundled libpq. Without [binary], psycopg falls back to the pure-Python wrapper
+      # (or fails to import if no system libpq), and nothing else in the nightly
+      # imports psycopg or pypdf, so this step is what makes a dropped [binary] loud.
+      - name: Extras import
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          python - <<'PY'
+          from importlib.metadata import version
+
+          import opentelemetry.trace  # noqa: F401
+          import psycopg
+          import pypdf
+
+          impl = psycopg.pq.__impl__
+          if impl != "binary":
+              raise SystemExit(f"psycopg pq implementation is {impl!r}, expected 'binary'")
+          print(
+              f"psycopg {psycopg.__version__} (pq {impl}, libpq {psycopg.pq.version()}), "
+              f"pypdf {pypdf.__version__}, opentelemetry-api {version('opentelemetry-api')}"
+          )
+          PY
+
+      # Runs even if the extras import failed; skipped if Install failed.
       - name: Import-all
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pytest -v tests/boundary/test_import_all_modules.py
 
       # Runs even if import-all failed, so both signals are kept; skipped if Install failed.
@@ -111,7 +148,9 @@ jobs:
   alert:
     name: alert on scheduled failure
     needs: import-all
-    if: ${{ (failure() || cancelled()) && github.event_name == 'schedule' }}
+    # REC-062 S3: any import-all result but success (failure, cancelled, which is also
+    # what a timeout-minutes hit reports, or skipped) alerts on a scheduled run.
+    if: ${{ always() && github.event_name == 'schedule' && needs.import-all.result != 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -138,6 +177,8 @@ jobs:
           body=$(printf '%s\n%s\n\n- workflow: %s\n- run: %s (run %s, attempt %s)\n- sha: %s\n- needs.import-all.result: %s\n- reported at: %s\n' \
             "$MARKER" "$RUN_KEY" "$WORKFLOW_NAME" "$run_url" "$RUN_NUMBER" "$RUN_ATTEMPT" \
             "$RUN_SHA" "$NEEDS_RESULT" "$stamp")
+          # gh fetches at most 100 open issues here and the first 100 comments in the view
+          # below; more than that on one tracking issue means it is time to close it.
           num=$(gh issue list --state open --author 'github-actions[bot]' --limit 100 \
             --json number,title,body \
             --jq '[.[] | select(.title == env.TITLE and (.body | contains(env.MARKER)))]
@@ -146,8 +187,13 @@ jobs:
             gh issue create --title "$TITLE" --body "$body"
             exit 0
           fi
+          # REC-062 S1: only the bot's own text counts. The issue body is the bot's (the
+          # list above filters on author); comments count only if GraphQL reports their
+          # author as "github-actions" (the bot's login there; no user account has it), so a
+          # visitor's comment that carries the run-id key cannot suppress this alert.
           seen=$(gh issue view "$num" --json body,comments \
-            --jq '[.body, .comments[].body] | map(select(contains(env.RUN_KEY))) | length')
+            --jq '[.body, (.comments[] | select(.author.login == "github-actions") | .body)]
+                  | map(select(contains(env.RUN_KEY))) | length')
           if [ "$seen" -gt 0 ]; then
             echo "run ${RUN_ID} is already reported on issue ${num}; not commenting again"
             exit 0
