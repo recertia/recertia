@@ -115,7 +115,7 @@ jobs:
           ./gitleaks git --redact --exit-code 1 --log-opts="$RANGE" .
 
       - name: Test suite (contracts, M0–M9, hardening, API, import boundary)
-        run: pytest -v
+        run: pytest -v -rs
 
   commit-emails:
     name: commit emails (PR or push range)
@@ -275,6 +275,9 @@ jobs:
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
       RECERTIA_NO_NETWORK: "1"
+      # The guard below fails the job unless at least this many root-lock tests pass.
+      # Raise it whenever a root-lock test is added (REC-058 MF-1).
+      ROOT_LOCK_MIN_PASSED: "2"
     defaults:
       run:
         shell: bash
@@ -292,23 +295,45 @@ jobs:
 
       # Selection: every test in tests/unit/persistence whose file or test name contains
       # `root_lock`; a new tests/unit/persistence/test_root_lock_*.py file is picked up as
-      # is. Real-Windows-only tests also carry the `windows` marker (pyproject.toml).
-      # `-o timeout_method=thread`: pyproject sets `signal`, and SIGALRM does not exist on
-      # Windows. The check after pytest fails the job when nothing passed (all skipped);
-      # pytest itself exits 5 when nothing is collected.
+      # is (the `windows` marker labels real-Windows tests but does not select them, so
+      # their file name must contain root_lock). `-o timeout_method=thread`: pyproject sets
+      # `signal`, and SIGALRM does not exist on Windows. pytest exits non-zero on a failure,
+      # an error or nothing collected; the guard then fails the job on any skipped test
+      # (xfail counts as skipped in JUnit), on fewer than ROOT_LOCK_MIN_PASSED passes, and
+      # on a missing or empty JUnit report. Every selected test must run here.
       - name: Root-lock tests (real Windows)
         run: |
           python --version
           python -m pytest tests/unit/persistence -k root_lock -rs -v \
             -o timeout_method=thread --junitxml=root-lock-windows.xml
           python - <<'PY'
+          import os
+          import sys
           import xml.etree.ElementTree as ET
+          from pathlib import Path
 
-          root = ET.parse("root-lock-windows.xml").getroot()
-          suite = root if root.tag == "testsuite" else root.find("testsuite")
-          counts = {k: int(suite.get(k, 0)) for k in ("tests", "skipped", "failures", "errors")}
-          passed = counts["tests"] - counts["skipped"] - counts["failures"] - counts["errors"]
-          print(f"root-lock tests on Windows: {passed} passed, {counts}")
-          if passed == 0:
-              raise SystemExit("no root-lock test passed on Windows (none collected or all skipped)")
+          report = Path("root-lock-windows.xml")
+          minimum = int(os.environ["ROOT_LOCK_MIN_PASSED"])
+          if not report.is_file():
+              sys.exit(f"guard: {report} is missing")
+          try:
+              root = ET.parse(report).getroot()
+          except ET.ParseError as exc:
+              sys.exit(f"guard: {report} is not valid JUnit XML: {exc}")
+          suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+          cases = [case for suite in suites for case in suite.iter("testcase")]
+          if not suites or not cases:
+              sys.exit(f"guard: {report} has no testsuite or no testcase results")
+          counts = {"passed": 0, "skipped": 0, "failure": 0, "error": 0}
+          for case in cases:
+              outcome = next(
+                  (tag for tag in ("skipped", "failure", "error") if case.find(tag) is not None),
+                  "passed",
+              )
+              counts[outcome] += 1
+          print(f"guard: {counts}, minimum passed {minimum}")
+          if counts["skipped"] or counts["failure"] or counts["error"]:
+              sys.exit("guard: a root-lock test was skipped, failed or errored on Windows")
+          if counts["passed"] < minimum:
+              sys.exit(f"guard: {counts['passed']} root-lock tests passed, fewer than {minimum}")
           PY
