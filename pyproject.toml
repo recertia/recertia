@@ -72,6 +72,8 @@ recertia = "recertia.cli.main:app"
 testpaths = ["tests"]
 timeout = 60
 timeout_method = "signal"
+# Unknown marker names are errors, not warnings (REC-058).
+addopts = ["--strict-markers"]
 # Native watchdog: dumps every thread's stack when a test runs past 60s even if the
 # main thread is blocked in C, where the signal method's handler cannot run (REC-017).
 faulthandler_timeout = 60
