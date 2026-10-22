@@ -196,6 +196,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Nightly runs the full suite (REC-051)** — both `nightly.yml` arms (py3.11 at the
+  lowest-direct floors, py3.13 at newest) now run `pytest -v` the way `ci.yml` does, with
+  the same env and the suite-wide pytest-timeout, after the import-all step. The job
+  timeout is 20 minutes.
+
 - **REL-3 runtime.db** — `open_run_persistence` imports leftover
   `checkpoints.db` / `operations.db` into `runtime.db` when
   `RECERTIA_RUNTIME_DB_MIGRATE=auto` (default), then copies the sources to
