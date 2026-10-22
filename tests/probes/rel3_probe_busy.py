@@ -1,7 +1,8 @@
-"""#90 lock-busy path: legacy state not yet imported while a writer is on runtime.db."""
+"""#90 lock-busy path. ADR-0022 (REL-3 R4): a busy open is typed RootBusy and writes nothing;
+after release the import keeps all legacy state exactly."""
 import sys, tempfile, sqlite3
 from pathlib import Path
-from tests.probes.rel3_probe import state, record, RESULTS, owned_root
+from tests.probes.rel3_probe import state, record, RESULTS, owned_root, busy_open
 from recertia.graph.persistence import open_run_persistence
 from recertia.persistence.root_lock import RootLock
 
@@ -9,20 +10,28 @@ with owned_root() as root:  # reaps the lock holder before removing the dir
     p0 = open_run_persistence(root, migrate="off")
     for s in (1, 2, 3): p0.checkpoints.save("legacy-run", s, f"n{s}", None, state("legacy-run"))
     p0.close()
+    EXPECTED = [(1, "n1"), (2, "n2"), (3, "n3")]
     lock = __import__("tests.probes.rel3_probe", fromlist=["subprocess_exclusive"]).subprocess_exclusive(root / ".lock")          # importer/backup busy
-    p2 = open_run_persistence(root)                                 # busy -> runtime.db, no import
-    seen = p2.checkpoints.latest_seq("legacy-run")
-    record("L legacy state visible while root lock busy", seen == 3, f"latest_seq('legacy-run') on busy-path process: {seen}")
-    # that process "resumes"/restarts the run from scratch and writes seq 1 (different content)
-    p2.checkpoints.save("legacy-run", 1, "n1-new", None, state("legacy-run")); p2.close()
-    lock.release()
-    # M: a later normal open must keep ALL state (legacy seq 1-3 plus the busy-path write)
+    busy_ok, busy = busy_open(root)                                 # ADR-0022: typed RootBusy, no write
+    c = sqlite3.connect(f"file:{root / 'checkpoints.db'}?mode=ro", uri=True)
     try:
-        p3 = open_run_persistence(root); latest = p3.checkpoints.latest_seq("legacy-run"); p3.close()
+        legacy = [(int(s), n) for s, n in c.execute(
+            "SELECT seq, node FROM checkpoints WHERE run_id='legacy-run' ORDER BY seq")]
+    finally:
+        c.close()
+    record("L busy open is typed RootBusy, writes nothing; legacy state intact", busy_ok and legacy == EXPECTED,
+           f"busy open: {busy}; leftover checkpoints.db rows={legacy}")
+    lock.release()
+    # M: the first normal open after release imports and must keep ALL legacy state exactly
+    try:
+        p3 = open_run_persistence(root)
+        hist = [(int(s), n) for s, n, *_ in p3.checkpoints.history("legacy-run")]; p3.close()
         files = sorted(x.name for x in root.iterdir() if "db" in x.name)
-        record("M later import after busy-path write keeps all state", latest == 3, f"latest_seq after import={latest}; files={files}")
+        record("M import after the refused busy open keeps all legacy state exactly", hist == EXPECTED,
+               f"history after import={hist}; files={files}")
     except Exception as exc:
-        record("M later import after busy-path write keeps all state", False, f"open_run_persistence raises {type(exc).__name__}: {exc}")
+        record("M import after the refused busy open keeps all legacy state exactly", False,
+               f"open_run_persistence raises {type(exc).__name__}: {exc}")
     # M2: recorded independently of M -- the root must open again on a second, fresh attempt
     try:
         p4 = open_run_persistence(root); again = p4.checkpoints.latest_seq("legacy-run"); p4.close()
