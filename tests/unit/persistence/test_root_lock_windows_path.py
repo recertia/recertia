@@ -20,6 +20,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -402,7 +403,7 @@ def test_windows_tenants_on_one_root_lock_apart_and_backup_is_refused(
     api_lock.release()
 
 
-# --- round 5 (CTO-rec review of #169): N-1 the refused fd is closed, N-3 non-busy errors ---
+# --- review of #169: N-1 the refused fd is closed, N-3 non-busy errors ---
 
 
 def _record_lock_fds(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, os.stat_result]]:
@@ -525,6 +526,46 @@ def test_root_lock_windows_error_other_than_33_is_oserror_not_busy(
     assert not isinstance(info.value, RootLockBusy)
     assert getattr(info.value, "winerror", None) == winerror
     assert info.value.errno not in root_lock._WIN_BUSY_ERRNOS
+    assert len([op for op, _h, _f in kernel32.calls if op == "lock"]) == 1  # no busy retry
+    assert [fd for fd, st in opened if _still_open(fd, st)] == []
+    assert lock._fd is None
+
+
+@pytest.mark.parametrize("call", ["blocking_shared", "bounded_shared", "try_exclusive"])
+def test_root_lock_windows_access_denied_with_busy_errno_is_oserror_not_busy(
+    tmp_path: Path,
+    kernel32: FakeKernel32,
+    monkeypatch: pytest.MonkeyPatch,
+    call: str,
+) -> None:
+    """N-3, the case that tells winerror and errno apart: ``ERROR_ACCESS_DENIED`` (5)
+    carries errno ``EACCES``, which is busy for an errno-only error. The ``winerror``
+    decides, so every entry point, the blocking typed path included, raises that
+    ``OSError`` once, never ``RootLockBusy``, and closes the fd. On Windows
+    ``ctypes.WinError(5)`` has errno ``EACCES``; off Windows the fake's error is given
+    the same errno so the case discriminates on Linux too."""
+
+    if sys.platform != "win32":
+
+        def win_error_with_eacces(code: int, what: str) -> OSError:
+            exc = OSError(errno.EACCES, f"{what} failed (winerror {code})")
+            exc.winerror = code  # type: ignore[attr-defined]
+            return exc
+
+        monkeypatch.setattr(root_lock, "_win_error", win_error_with_eacces)
+    _fail_lock_with(kernel32, monkeypatch, 5)  # ERROR_ACCESS_DENIED
+    opened = _record_lock_fds(monkeypatch)
+    lock = RootLock(tmp_path / ".lock")
+    with pytest.raises(OSError) as info:
+        if call == "blocking_shared":
+            lock.acquire_shared()
+        elif call == "bounded_shared":
+            lock.acquire_shared(timeout_s=0.05)
+        else:
+            lock.try_exclusive()
+    assert info.value.errno == errno.EACCES  # a busy errno: only the winerror says no
+    assert getattr(info.value, "winerror", None) == 5
+    assert not isinstance(info.value, RootLockBusy)
     assert len([op for op, _h, _f in kernel32.calls if op == "lock"]) == 1  # no busy retry
     assert [fd for fd, st in opened if _still_open(fd, st)] == []
     assert lock._fd is None
