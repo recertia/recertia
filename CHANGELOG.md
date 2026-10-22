@@ -34,9 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Negative-fixture API (REC-046)** — `recertia.validation.sensitivity.empty_negative_fixture`
   is removed; call `author_sensitivity_proof(criterion)` without `negative_workdir` (it owns
-  and removes the directory), or pass a directory you own. `propose_criteria` and
-  `refine_goal_criteria` (`recertia.validation.critic`) drop their unused `workdir`
-  keyword.
+  and removes the directory), or pass a directory you own. The critic's negative fixture
+  is now always created in the system temp dir (`tempfile.gettempdir()`, which honours
+  `TMPDIR`), never inside the task workdir, so that directory must be writable. For that
+  reason `propose_criteria` and `refine_goal_criteria` (`recertia.validation.critic`) no
+  longer take a `workdir` keyword: it only chose where the fixture was created.
 
 - **Promotion API, CLI and library (REC-009)** —
   - `PromotionError.failing_fixtures` is removed; use `refusal_kind`, `failing_count`
@@ -62,7 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tempfile.TemporaryDirectory(prefix="recertia-neg-")` that is removed before the call
   returns or raises. The critic (`intake`), the success and paper distillers and the mine
   worker now use it, so a full test run leaves 0 such directories instead of 73. The
-  critic's negative fixture is no longer created inside the task workdir.
+  critic's negative fixture now always lives in the system temp dir rather than the task
+  workdir, so it no longer ends up in workspace snapshots or diffs.
 
 - **REL-3 probe_b / probe_a2 hang (REC-017)** — `tests/probes/rel3_probe.py` now
   uses the multiprocessing `spawn` context, so a probe child never inherits
