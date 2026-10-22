@@ -248,8 +248,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   script drops a requirement's extras from its constraint and stops on a marker or a
   conflicting floor. `actions/checkout` runs with `persist-credentials: false`. A new
   `alert` job runs only when a scheduled run fails or is cancelled: it opens one issue
-  titled "nightly: scheduled run failing", or comments on it if it is already open. It
-  is the workflow's only write grant (job-scoped `issues: write` on `GITHUB_TOKEN`).
+  titled "nightly: scheduled run failing" (found by exact title, bot author and a marker
+  line), or comments on it if it is already open, and skips a run id it already reported.
+  The body is run metadata only. The job has no checkout and no `uses:` actions. It is the
+  workflow's only write grant (job-scoped `issues: write` on `GITHUB_TOKEN`); the
+  workflow-level `permissions` is now `{}`.
 
 - **REL-3 runtime.db** — `open_run_persistence` imports leftover
   `checkpoints.db` / `operations.db` into `runtime.db` when
