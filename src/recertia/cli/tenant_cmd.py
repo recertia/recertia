@@ -84,9 +84,11 @@ def tenant_export(
     if any(dest_r == tree or _under(dest_r, tree) for tree in source_dirs):
         _refuse("dest must not sit inside the source tenant tree")
 
+    # The runs roots' empty tenant lock files are locks, not tenant data (REC-065).
+    lock_files = {runs.tenant_lock, runs.jobs().tenant_lock}
     copied = 0
     for src in lines:
-        if not src.is_file():
+        if not src.is_file() or src in lock_files:
             continue
         try:
             rel = src.resolve().relative_to(root_r)
