@@ -114,35 +114,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     run-store db file is opened. Leftover files are re-checked once the lock is held: an
     open that waited out a restore which brought them back also raises `RootBusy`, and the
     retry imports them. Before, such an open served its pre-restore decision and could
-    lose a leftover checkpoint.
+    lose a leftover checkpoint. `migrate=off` re-checks too: an open that chose the
+    leftover files but finds the root imported once it holds the lock (a restore of a
+    post-import backup) raises `RootBusy`; before, its writes went to files no later open
+    reads, so they were lost.
+  - The API process's own tenant opens (`CheckpointReader`, used by
+    `GET /v1/runs/{id}/transcript`, and the run loader) pass `runtime_root` too, so API
+    and worker leftover imports on one tenant exclude each other. Before, they locked
+    different files; both could import at once and one could fail with an untyped
+    `sqlite3.IntegrityError`.
+  - `RootBusy` is retryable on the worker path. `recertia worker` and the API's embedded
+    queue worker return a refused claim to `queued` after a 2 s back-off without spending
+    an attempt (`error_code` `root_busy`); the run's event log records
+    `{"code": "root_busy", "retryable": true}`. Before, the claim was marked failed for
+    good, and another tenant's open handle was enough to cause it.
   - Backup and restore refuse while any handle is open. The `.lock` refusal now reads
     "an open run handle, worker or import holds the root lock".
   - `build_default_orchestrator` and `GraphOrchestrator` close a handle they opened when
     wiring fails, so the lock is not leaked.
   - On Windows the lock uses `LockFileEx`, which has a shared mode; with `msvcrt.locking`
     two handles on one root refused each other. Blocking calls keep msvcrt's 10 s retry
-    budget.
+    budget. A conflict maps to typed busy by platform: `ERROR_LOCK_VIOLATION` (33), or for
+    an errno-only error `EACCES`/`EDEADLOCK` on Windows and `EAGAIN`/`EWOULDBLOCK`/`EACCES`
+    on POSIX; any other lock error keeps its `winerror`. Before, a contended lock on
+    Windows raised an untyped `PermissionError` (errno 13), so the bounded wait was zero.
+    The lock file stays empty, and a failed `UnlockFileEx` is reported.
+  - Backup no longer archives the root's `.lock` and `api.lock`, and restore does not
+    extract them. Both are empty lock targets that backup and restore hold exclusively,
+    and Windows byte-range locks are mandatory, so reading or overwriting them failed.
 
   Known limits:
   - Stores opened directly rather than through a run handle are not guarded (worker queue,
-    skill index, lineage, eval and API stores); a worker opens some of them before it takes
-    the lock. Neither are processes that ignore the advisory lock, nor API-process readers
-    that open `<root>/runs/<tenant>` without `runtime_root` (the API is kept out by
-    `api.lock`).
-  - The lock is per runtime root, not per tenant. An open handle on one tenant, including
-    a long worker run, makes a pending leftover import on another tenant raise `RootBusy`
-    until it closes.
-  - `RootBusy` is not yet the retryable `root_busy` API/CLI error (#145), so a worker claim
-    refused with it is marked failed, not re-queued.
-  - The leftover path (`migrate=off` with pending files) still waits without a bound (#153)
-    and does not re-check its decision under the lock.
-  - The Windows path is tested on Linux through a fake `kernel32` only, not on a Windows
-    host.
+    skill index, lineage, eval, run-event and API stores; #159); a worker opens some of
+    them before it takes the lock. Neither are processes that ignore the advisory lock.
+  - The lock is per runtime root, not per tenant (#158). An open handle on one tenant,
+    including a long worker run, makes a pending leftover import on another tenant raise
+    `RootBusy` until it closes; on the worker path that claim is re-queued, not failed.
+  - `RootBusy` is not yet the `root_busy` API/CLI error (#145): the API returns a generic
+    error for it.
+  - The leftover path (`migrate=off` with pending files) still waits without a bound
+    (#153), and a blocking Windows wait ends in `OSError(EDEADLK)` after 10 s rather than
+    `RootBusy`.
+  - The operations-schema exclusive lock is unbounded and the faithfulness command's
+    orchestrator is not closed on every path (#160).
   - Worker imports on older releases lock `<root>/runs/<tenant>/.lock`, so mixed-version
     workers do not exclude each other.
 
   Tests: `tests/unit/persistence/test_root_lock_writers.py`,
-  `tests/unit/persistence/test_root_lock_windows_path.py`.
+  `tests/unit/persistence/test_root_lock_windows_path.py` (Linux, fake `kernel32`),
+  `tests/unit/persistence/test_root_lock_windows_real.py` (real `kernel32`, run by the
+  `root lock (windows-latest)` job).
 
 - **CLI tests read stderr at the click floor (REC-053)** — the `dev` extra gains
   `click>=8.2`. Six CLI tests read `result.stderr` from a default `CliRunner()`, and
