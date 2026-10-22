@@ -1,7 +1,8 @@
-"""R4 probes for 9b33b36's same-thread exclusive-holder exception. Each scenario uses a fresh root."""
+"""R4 probes for 9b33b36's same-thread exclusive-holder exception. Each scenario uses a fresh root.
+ADR-0022: there is no holder exception; T1/T2 assert typed RootBusy on the holder's own thread."""
 import sys, os, sqlite3, threading, asyncio, traceback, subprocess
 from pathlib import Path
-from tests.probes.rel3_probe import state, record, RESULTS, fresh_root
+from tests.probes.rel3_probe import state, record, RESULTS, fresh_root, busy_open
 from recertia.graph.persistence import open_run_persistence
 from recertia.persistence.root_lock import RootLock
 
@@ -27,19 +28,26 @@ def scen(f):
 def T1_same_thread_ops_double_run(root):
     eff = legacy(root, op=True)
     lk = RootLock(root / ".lock"); lk.try_exclusive()          # e.g. importer/backup in this thread
-    p = open_run_persistence(root)
-    p.operations.run_once("legacy-run", 1, "solve", 0, lambda: eff.append("same-thread-rerun") or {"v": 2}); p.close(); lk.release()
-    record("T1 same-thread holder: op done in legacy not re-executed", eff == ["legacy"], f"side effects={eff}")
+    try:
+        busy_ok, busy = busy_open(root)                         # ADR-0022: no holder exception
+    finally:
+        lk.release()
+    p = open_run_persistence(root)                              # imports
+    p.operations.run_once("legacy-run", 1, "solve", 0, lambda: eff.append("after-release-rerun") or {"v": 2}); p.close()
+    record("T1 same-thread holder: op done in legacy not re-executed", busy_ok and eff == ["legacy"],
+           f"busy open: {busy}; side effects={eff}")
 
 @fresh_root
 def T2_same_thread_ghost_write(root):
     legacy(root)
     lk = RootLock(root / ".lock"); lk.try_exclusive()
-    p = open_run_persistence(root)
-    r = tw(lambda: p.checkpoints.save("legacy-run", 1, "GHOST", None, state("legacy-run"))); p.close(); lk.release()
+    try:
+        busy_ok, busy = busy_open(root)                         # ADR-0022: the ghost write is refused with the open
+    finally:
+        lk.release()
     h = hist(root)
     record("T2 same-thread holder: write at a seq that exists in leftover is rejected, nothing lost",
-           r != "ACCEPTED" and h == [(1, "n1"), (2, "n2"), (3, "n3")], f"save={r}; history after import={h}")
+           busy_ok and h == [(1, "n1"), (2, "n2"), (3, "n3")], f"busy open: {busy}; history after import={h}")
 
 @fresh_root
 def T3_stale_holder_identity(root):

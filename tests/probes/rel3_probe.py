@@ -180,7 +180,7 @@ def _join_or_fail(label, procs, timeout=_JOIN_TIMEOUT_S):
 def subprocess_exclusive(path):
     """Hold exclusive flock in a child process until ``.release()``.
 
-    Used by probes I / L / M so the lock is a real other-process flock, not a
+    Used by probes I / L so the lock is a real other-process flock, not a
     same-thread identity bypass.
     """
     import subprocess
@@ -225,6 +225,37 @@ def subprocess_exclusive(path):
 
     return _Holder()
 
+
+# ADR-0022 (REL-3 R4): an open that finds the root lock held is typed RootBusy, never an overlay.
+BUSY_BOUND_S = 10.0   # RECERTIA_IMPORT_LOCK_TIMEOUT_S wait (tests/conftest.py: 0.25s; default 5s) + slack
+
+def db_snapshot(root):
+    """sha256 of every root-level file with "db" in its name (same notion as rel3_probe_r3)."""
+    import hashlib
+    return {x.name: hashlib.sha256(x.read_bytes()).hexdigest()[:16]
+            for x in sorted(Path(root).iterdir()) if x.is_file() and "db" in x.name}
+
+def busy_open(root):
+    """Open ``root`` while another holder has its exclusive root lock (ADR-0022).
+
+    Returns ``(ok, detail)``. ``ok`` is True only when the open raised the typed
+    RootBusy within BUSY_BOUND_S and no db file changed or appeared. A generic
+    error, or an open that succeeds, is a failure.
+    """
+    from recertia.persistence.root_lock import RootBusy
+    before = db_snapshot(root)
+    t0 = time.monotonic()
+    try:
+        p = open_run_persistence(root)
+    except RootBusy as exc:
+        dt = time.monotonic() - t0
+        after = db_snapshot(root)
+        ok = dt <= BUSY_BOUND_S and after == before
+        return ok, f"RootBusy after {dt:.2f}s; db files unchanged={after == before} ({sorted(after)}); {exc}"
+    except Exception as exc:
+        return False, f"generic {type(exc).__name__} instead of RootBusy: {exc}"
+    p.close()
+    return False, "open SUCCEEDED while the root lock was held (busy window not honoured)"
 
 def state(run_id):
     now = datetime.now(timezone.utc)
@@ -394,16 +425,17 @@ def scen_import_split_brain(root):
     # old-format state
     p0 = open_run_persistence(root, migrate="off"); p0.checkpoints.save("old-run", 1, "n", None, state("old-run")); p0.close()
     lock = subprocess_exclusive(root / ".lock")          # e.g. backup/another importer holds it
-    p2 = open_run_persistence(root)                                 # lock busy -> falls back to legacy files
+    busy_ok, busy = busy_open(root)                      # ADR-0022: p2 is refused (typed RootBusy), writes nothing
     lock.release()
     p1 = open_run_persistence(root)                                 # imports + retires legacy files
-    p2.checkpoints.save("p2-run", 1, "n", None, state("p2-run"))    # p2 still writing legacy handle
+    p2 = open_run_persistence(root)                                 # p2 retries after release, on runtime.db
+    p2.checkpoints.save("p2-run", 1, "n", None, state("p2-run"))
     p2.close(); p1.close()
     p3 = open_run_persistence(root)
     ids = sorted(p3.checkpoints.list_run_ids()) if hasattr(p3.checkpoints, "list_run_ids") else None
     p3.close()
-    record("I no state lost across concurrent import", ids is not None and "p2-run" in ids and "old-run" in ids,
-           f"runs visible after re-open: {ids}; files: {sorted(x.name for x in root.iterdir())}")
+    record("I no state lost across concurrent import", busy_ok and ids == ["old-run", "p2-run"],
+           f"busy open: {busy}; runs visible after re-open: {ids}; files: {sorted(x.name for x in root.iterdir())}")
 
 # --- J: import idempotent; crash after commit before retire; re-run ----------------------
 @fresh_root
