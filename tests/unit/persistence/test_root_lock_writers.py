@@ -1109,7 +1109,8 @@ def test_root_busy_requeue_backs_off_for_root_busy_retry_s(
                 worker.shutdown(wait=True)
         hi = datetime.now(timezone.utc)
         row = _queue_row(root, "tenant-b", "b-new")
-        assert (row.status, row.attempt, row.error_code) == ("queued", 0, "root_busy")  # type: ignore[attr-defined]
+        outcome = (row.status, row.attempt, row.error_code)  # type: ignore[attr-defined]
+        assert outcome == ("queued", 0, "root_busy")
         due = _queue_due(root, "tenant-b", "b-new")
         back_off = timedelta(seconds=ROOT_BUSY_RETRY_S)
         assert lo + back_off <= datetime.fromisoformat(due) <= hi + back_off
