@@ -1,7 +1,8 @@
 name: nightly
 
-# Not a required check. Python 3.11 at lowest-direct deps and 3.13 at newest,
-# plus the batched import-all test (bugs 12 and 13).
+# Not a required check. Python 3.11 at lowest-direct deps and 3.13 at newest:
+# the batched import-all test (bugs 12 and 13), then the full test suite the way
+# ci.yml runs it (REC-051).
 #
 # pip has no --resolution flag (that is uv). This repo's CI uses pip, so the
 # lowest arm pins each direct dependency at its pyproject.toml floor and lets
@@ -14,10 +15,17 @@ on:
 
 jobs:
   import-all:
-    name: import-all (py${{ matrix.python-version }} ${{ matrix.deps }})
+    name: import-all + suite (py${{ matrix.python-version }} ${{ matrix.deps }})
     runs-on: ubuntu-latest
+    # The full suite takes ~2.5 min on ci.yml's 3.12; leave room for 3.11/3.13.
+    timeout-minutes: 20
     permissions:
       contents: read
+    env:
+      # Same as ci.yml: no real provider credentials, no non-loopback network.
+      OPENAI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      RECERTIA_NO_NETWORK: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -34,6 +42,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
+        id: install
         env:
           DEPS: ${{ matrix.deps }}
         run: |
@@ -63,3 +72,8 @@ jobs:
 
       - name: Import-all
         run: pytest -v tests/boundary/test_import_all_modules.py
+
+      # Runs even if import-all failed, so both signals are kept; skipped if Install failed.
+      - name: Test suite (same as ci.yml)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pytest -v
