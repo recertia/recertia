@@ -31,7 +31,9 @@ api = [
     "httpx>=0.27",
 ]
 postgres = [
-    "psycopg[binary]>=3.2",
+    # 3.2.1, not 3.2: psycopg 3.2.0's [binary] extra requires psycopg-binary==3.2.0.dev1,
+    # which was never uploaded to PyPI, so psycopg[binary]==3.2.0 cannot install (REC-057).
+    "psycopg[binary]>=3.2.1",
 ]
 pdf = [
     "pypdf>=4",
