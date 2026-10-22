@@ -5,7 +5,8 @@ Each path given must:
 - be relative, with no ``..``, and sit under one of ``PUBLIC_ROOTS``;
 - never touch ``evals/heldout`` or any other private location;
 - resolve (symlinks followed) inside the same public root of this checkout;
-- contain only git-tracked files, so a dropped-in or decrypted private fixture fails.
+- contain only git-tracked files, so a dropped-in or decrypted private fixture fails;
+- match the index, so a decrypted file written over a tracked path fails too (CTO-rec N7).
 
 It also fails if any ``HELDOUT_*`` variable is set in the environment.
 
@@ -37,6 +38,20 @@ def _tracked(repo: Path, rel: str) -> set[str]:
     return {p for p in out.split("\0") if p}
 
 
+def _modified(repo: Path, rel: str) -> bool:
+    """True if any tracked file under ``rel`` differs from the index (content, mode or type)."""
+
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "diff", "--quiet", "--no-ext-diff", "--", rel],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode not in (0, 1):
+        raise subprocess.CalledProcessError(proc.returncode, proc.args)
+    return proc.returncode == 1
+
+
 def check_path(raw: str, repo: Path = REPO) -> str | None:
     """Return a fixed failure reason, or ``None`` if ``raw`` is a public eval path."""
 
@@ -66,6 +81,8 @@ def check_path(raw: str, repo: Path = REPO) -> str | None:
         return "untracked"
     if any(p.relative_to(repo).as_posix() not in tracked for p in files):
         return "untracked"
+    if _modified(repo, rel.as_posix()):
+        return "modified"
     return None
 
 

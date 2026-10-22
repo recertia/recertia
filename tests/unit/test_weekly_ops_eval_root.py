@@ -91,6 +91,18 @@ def test_untracked_file_in_public_root_is_refused(fake_repo: Path) -> None:
     assert _checker().check_path("evals/golden", fake_repo) == "untracked"
 
 
+def test_modified_tracked_file_in_public_root_is_refused(fake_repo: Path) -> None:
+    """CTO-rec N7: a decrypted file written over a tracked path is caught, not only new files."""
+
+    mod = _checker()
+    target = fake_repo / "evals/golden/repo-chore/t1/task.json"
+    target.write_text('{"private": true}\n')
+    assert mod.check_path("evals/golden", fake_repo) == "modified"
+    assert mod.check_path("evals/probes/p.json", fake_repo) is None
+    target.write_text("{}\n")
+    assert mod.check_path("evals/golden", fake_repo) is None
+
+
 def test_heldout_env_and_no_paths_are_refused() -> None:
     errors = _checker().check(list(PUBLIC.values()), {"HELDOUT_MANIFEST": "x"})
     assert errors == ["heldout_env_set count=1"]
