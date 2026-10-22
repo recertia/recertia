@@ -214,6 +214,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Windows root-lock CI job (REC-058)** — `ci.yml` gains a separate `root lock
+  (windows-latest)` job that installs the package on `windows-latest` (Python 3.12) and
+  runs `python -m pytest tests/unit/persistence -k root_lock -rs -v -o
+  timeout_method=thread`, so the root lock is exercised against the real `kernel32`. Any
+  `tests/unit/persistence/test_root_lock_*.py` file is picked up by name. A new `windows`
+  pytest marker labels tests that need real Windows. The job fails if no test passes
+  (nothing collected or all skipped). It has a read-only token, no secrets, `checkout`
+  with `persist-credentials: false`, and actions pinned to the same SHAs as
+  `weekly-ops.yml`. The `ci` job and the required check are unchanged.
+
 - **REC-011 C1 part 1 run resolution** — `EvalStore.append_run` records
   `resolution` (`decided` | `unresolved` | `invalid`), `exit_code`, and
   `reason`. Exit 124/126 on a required criterion is unresolved;
