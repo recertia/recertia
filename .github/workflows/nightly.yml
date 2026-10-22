@@ -17,6 +17,9 @@ on:
     - cron: "17 5 * * *"
   workflow_dispatch:
 
+# No workflow-level grant; each job states its own below.
+permissions: {}
+
 jobs:
   import-all:
     name: import-all + suite (py${{ matrix.python-version }} ${{ matrix.deps }})
@@ -24,7 +27,7 @@ jobs:
     # The full suite takes ~2.5 min on ci.yml's 3.12; leave room for 3.11/3.13.
     timeout-minutes: 20
     permissions:
-      contents: read
+      contents: read # checkout only
     env:
       # Same as ci.yml: no real provider credentials, no non-loopback network.
       OPENAI_API_KEY: ""
@@ -96,11 +99,15 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pytest -v
 
-  # REC-057 N5: a red scheduled nightly alerts someone. Opens one open issue titled
-  # "nightly: scheduled run failing", or comments on it if it is already open; closing
-  # it is a human step. Manual dispatches never alert. This job holds the workflow's
-  # only write grant, `issues: write` on the built-in GITHUB_TOKEN: no secret, no
-  # checkout, no repository code runs here.
+  # REC-057 N5: a red scheduled nightly alerts someone. The job keeps one open issue
+  # titled "nightly: scheduled run failing", created by github-actions[bot], with the
+  # MARKER line in its body. It opens that issue, or comments on it if it is already
+  # open, and skips a run id that is already reported (for example a re-run attempt).
+  # Closing the issue is a human step. Manual dispatches never alert.
+  # Hardening (CTO-rec rulings): schedule-only `if:`; no checkout and no `uses:` actions,
+  # only the runner's `gh` CLI; every `${{ }}` value enters through `env:` and the body
+  # holds run metadata only. This job holds the workflow's only write grant: job-scoped
+  # `issues: write` on the built-in GITHUB_TOKEN. No secret is used.
   alert:
     name: alert on scheduled failure
     needs: import-all
@@ -108,21 +115,41 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      issues: write
+      issues: write # find, open or comment on the one tracking issue
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      SERVER_URL: ${{ github.server_url }}
+      WORKFLOW_NAME: ${{ github.workflow }}
+      RUN_ID: ${{ github.run_id }}
+      RUN_NUMBER: ${{ github.run_number }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
       RUN_SHA: ${{ github.sha }}
+      NEEDS_RESULT: ${{ needs.import-all.result }}
       TITLE: "nightly: scheduled run failing"
+      MARKER: "<!-- recertia-nightly-alert -->"
     steps:
       - name: Open or update the tracking issue
         run: |
-          body="Scheduled nightly did not pass at ${RUN_SHA}: ${RUN_URL}"
-          num=$(gh issue list --state open --limit 200 --json number,title \
-            --jq '.[] | select(.title == env.TITLE) | .number' | head -n 1)
-          if [ -n "$num" ]; then
-            gh issue comment "$num" --body "$body"
-          else
+          set -euo pipefail
+          export RUN_KEY="<!-- run-id: ${RUN_ID} -->"
+          run_url="${SERVER_URL}/${GH_REPO}/actions/runs/${RUN_ID}"
+          stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          body=$(printf '%s\n%s\n\n- workflow: %s\n- run: %s (run %s, attempt %s)\n- sha: %s\n- needs.import-all.result: %s\n- reported at: %s\n' \
+            "$MARKER" "$RUN_KEY" "$WORKFLOW_NAME" "$run_url" "$RUN_NUMBER" "$RUN_ATTEMPT" \
+            "$RUN_SHA" "$NEEDS_RESULT" "$stamp")
+          num=$(gh issue list --state open --author 'github-actions[bot]' --limit 100 \
+            --json number,title,body \
+            --jq '[.[] | select(.title == env.TITLE and (.body | contains(env.MARKER)))]
+                  | sort_by(.number) | .[0].number // empty')
+          if [ -z "$num" ]; then
             gh issue create --title "$TITLE" --body "$body"
+            exit 0
           fi
+          seen=$(gh issue view "$num" --json body,comments \
+            --jq '[.body, .comments[].body] | map(select(contains(env.RUN_KEY))) | length')
+          if [ "$seen" -gt 0 ]; then
+            echo "run ${RUN_ID} is already reported on issue ${num}; not commenting again"
+            exit 0
+          fi
+          gh issue comment "$num" --body "$body"
