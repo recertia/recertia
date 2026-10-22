@@ -23,6 +23,7 @@ import pytest
 from recertia.evals import heldout
 from recertia.evals import heldout_manifest as wo06
 from recertia.evals.heldout_manifest import HeldoutManifest, HeldoutManifestError
+from recertia.ports.execution import SandboxLimits
 
 REPO = Path(__file__).resolve().parents[3]
 FIXTURE_IDS = ("zz-secret-fixture-alpha", "zz-secret-fixture-bravo")
@@ -111,10 +112,12 @@ class _Spy:
         from recertia.solver import container
 
         if self.backend == "container":
-            container._container_run("docker", "true", workdir=run_dir, spec=None, timeout_s=1)
+            container._container_run(
+                "docker", "true", workdir=run_dir, spec=container.ContainerSpec(), timeout_s=1
+            )
         elif self.backend == "local":
             try:
-                container._local_run("true", workdir=run_dir)
+                container._local_run("true", workdir=run_dir, limits=SandboxLimits(), timeout_s=1)
             except Exception:  # noqa: BLE001 - a swallowed refusal must still fail the run
                 pass
         return True
