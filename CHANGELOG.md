@@ -50,6 +50,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Leaked `recertia-neg-*` temp dirs (REC-046)** — `author_sensitivity_proof` now takes
+  `negative_workdir` as optional. When it is omitted, the criterion runs in an empty
+  `tempfile.TemporaryDirectory(prefix="recertia-neg-")` that is removed before the call
+  returns or raises. `empty_negative_fixture` is unchanged and still leaves its directory to
+  the caller; existing callers that pass `negative_workdir=empty_negative_fixture()` keep
+  leaking until they drop the argument (follow-up).
+
 - **REL-3 probe_b / probe_a2 hang (REC-017)** — `tests/probes/rel3_probe.py` now
   uses the multiprocessing `spawn` context, so a probe child never inherits
   threads or locks from the pytest process (a fork while a `recertia-queue`

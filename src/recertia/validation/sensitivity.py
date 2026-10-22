@@ -49,11 +49,18 @@ def workspace_fingerprint(workdir: Path) -> str:
 def author_sensitivity_proof(
     criterion: TaskCriterion | SkillCertificationCriterion,
     *,
-    negative_workdir: Path,
+    negative_workdir: Path | None = None,
     runner: Callable[[TaskCriterion | SkillCertificationCriterion, Path], bool] | None = None,
 ) -> SensitivityProof:
-    """Run ``criterion`` against ``negative_workdir``; a vacuous criterion will not reject."""
+    """Run ``criterion`` against ``negative_workdir``; a vacuous criterion will not reject.
 
+    Without ``negative_workdir`` the criterion runs in an empty ``recertia-neg-*``
+    temporary directory that is removed before this returns or raises.
+    """
+
+    if negative_workdir is None:
+        with tempfile.TemporaryDirectory(prefix="recertia-neg-") as tmp:
+            return author_sensitivity_proof(criterion, negative_workdir=Path(tmp), runner=runner)
     runner = runner or _default_runner
     rejected = not runner(criterion, negative_workdir)
     negative_fingerprint = workspace_fingerprint(negative_workdir)
@@ -68,7 +75,10 @@ def author_sensitivity_proof(
 
 
 def empty_negative_fixture(parent: Path | None = None) -> Path:
-    """Create an empty temporary workspace used as the default negative fixture."""
+    """Create an empty temporary workspace; the caller must remove it.
+
+    Prefer ``author_sensitivity_proof`` without ``negative_workdir``, which cleans up.
+    """
 
     return Path(tempfile.mkdtemp(prefix="recertia-neg-", dir=parent))
 
