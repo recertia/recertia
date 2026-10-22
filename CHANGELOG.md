@@ -67,6 +67,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **psycopg floor (REC-057)** — the `postgres` extra's floor is now `psycopg[binary]>=3.2.1`.
+  psycopg 3.2.0's `binary` extra requires `psycopg-binary==3.2.0.dev1`, which was never
+  uploaded to PyPI, so `psycopg[binary]==3.2.0` cannot be installed. 3.2.1 (published the
+  next day) requires `psycopg-binary==3.2.1`. Found once the nightly lowest arm started
+  pinning the `postgres` floor. No other floor changes.
+
 - **CLI tests read stderr at the click floor (REC-053)** — the `dev` extra gains
   `click>=8.2`. Six CLI tests read `result.stderr` from a default `CliRunner()`, and
   before click 8.2 that runner mixes stderr into stdout, so the read raised
@@ -264,6 +270,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lowest-direct floors, py3.13 at newest) now run `pytest -v` the way `ci.yml` does, with
   the same env and the suite-wide pytest-timeout, after the import-all step. The job
   timeout is 20 minutes.
+
+- **Nightly extras, checkout token, failure alert (REC-057)** — both `nightly.yml` arms
+  now install the `postgres`, `pdf` and `otel` extras along with `dev`, and the lowest
+  arm pins their floors too (psycopg 3.2.1, pypdf 4, opentelemetry-api 1.20). The pin
+  script drops a requirement's extras from its constraint and stops on a marker or a
+  conflicting floor. `actions/checkout` runs with `persist-credentials: false`. A new
+  `alert` job runs only when a scheduled run fails or is cancelled: it opens one issue
+  titled "nightly: scheduled run failing", or comments on it if it is already open. It
+  is the workflow's only write grant (job-scoped `issues: write` on `GITHUB_TOKEN`).
 
 - **REL-3 runtime.db** — `open_run_persistence` imports leftover
   `checkpoints.db` / `operations.db` into `runtime.db` when

@@ -6,7 +6,11 @@ name: nightly
 #
 # pip has no --resolution flag (that is uv). This repo's CI uses pip, so the
 # lowest arm pins each direct dependency at its pyproject.toml floor and lets
-# pip resolve remaining (transitive) deps.
+# pip resolve remaining (transitive) deps. Both arms install the runtime deps plus
+# the extras in NIGHTLY_EXTRAS (REC-057: postgres, pdf and otel too, not only dev).
+#
+# A failed or cancelled *scheduled* run opens (or comments on) one tracking issue,
+# "nightly: scheduled run failing", through the alert job (REC-057 N5).
 
 on:
   schedule:
@@ -26,6 +30,8 @@ jobs:
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
       RECERTIA_NO_NETWORK: "1"
+      # Extras both arms install; the lowest arm pins every one of their floors too.
+      NIGHTLY_EXTRAS: dev,postgres,pdf,otel
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +42,9 @@ jobs:
             deps: newest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The suite runs PyPI code; keep the job token out of .git/config (REC-057 N2).
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -49,25 +58,34 @@ jobs:
           python -m pip install --upgrade pip
           if [ "$DEPS" = "lowest" ]; then
             python - <<'PY'
+          import os
           import tomllib
           from pathlib import Path
 
           data = tomllib.loads(Path("pyproject.toml").read_text())
+          optional = data["project"]["optional-dependencies"]
           reqs = list(data["project"]["dependencies"])
-          reqs += data["project"]["optional-dependencies"]["dev"]
-          pins = []
+          for extra in os.environ["NIGHTLY_EXTRAS"].split(","):
+              reqs += optional[extra]
+          pins = {}
           for req in reqs:
+              if ";" in req:
+                  raise SystemExit(f"environment markers are not supported here: {req}")
               head, ge, rest = req.partition(">=")
               if not ge:
                   raise SystemExit(f"direct dep has no >= floor: {req}")
-              pins.append(f"{head.strip()}=={rest.split(',', 1)[0].strip()}")
-          Path("lowest-direct.txt").write_text("\n".join(pins) + "\n")
+              # A constraint cannot carry extras: psycopg[binary]>=3.2 pins psycopg==3.2.
+              name = head.split("[", 1)[0].strip()
+              pin = f"{name}=={rest.split(',', 1)[0].strip()}"
+              if pins.setdefault(name.lower(), pin) != pin:
+                  raise SystemExit(f"conflicting floors for {name}: {pins[name.lower()]} vs {pin}")
+          Path("lowest-direct.txt").write_text("\n".join(pins.values()) + "\n")
           print("lowest-direct pins:")
-          print("\n".join(pins))
+          print("\n".join(pins.values()))
           PY
-            pip install -e ".[dev]" -c lowest-direct.txt
+            pip install -e ".[$NIGHTLY_EXTRAS]" -c lowest-direct.txt
           else
-            pip install -e ".[dev]"
+            pip install -e ".[$NIGHTLY_EXTRAS]"
           fi
 
       - name: Import-all
@@ -77,3 +95,34 @@ jobs:
       - name: Test suite (same as ci.yml)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pytest -v
+
+  # REC-057 N5: a red scheduled nightly alerts someone. Opens one open issue titled
+  # "nightly: scheduled run failing", or comments on it if it is already open; closing
+  # it is a human step. Manual dispatches never alert. This job holds the workflow's
+  # only write grant, `issues: write` on the built-in GITHUB_TOKEN: no secret, no
+  # checkout, no repository code runs here.
+  alert:
+    name: alert on scheduled failure
+    needs: import-all
+    if: ${{ (failure() || cancelled()) && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      RUN_SHA: ${{ github.sha }}
+      TITLE: "nightly: scheduled run failing"
+    steps:
+      - name: Open or update the tracking issue
+        run: |
+          body="Scheduled nightly did not pass at ${RUN_SHA}: ${RUN_URL}"
+          num=$(gh issue list --state open --limit 200 --json number,title \
+            --jq '.[] | select(.title == env.TITLE) | .number' | head -n 1)
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi
