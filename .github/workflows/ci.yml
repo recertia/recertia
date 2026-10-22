@@ -340,11 +340,12 @@ jobs:
                   "passed",
               )
               counts[outcome] += 1
-          print(f"guard: {counts}, minimum passed {minimum}")
+          summary = {"report": report.name, **counts, "minimum_passed": minimum}
           if counts["skipped"] or counts["failure"] or counts["error"]:
-              sys.exit("guard: a root-lock test was skipped, failed or errored on Windows")
+              sys.exit(f"guard: a root-lock test was skipped, failed or errored on Windows: {summary}")
           if counts["passed"] < minimum:
-              sys.exit(f"guard: {counts['passed']} root-lock tests passed, fewer than {minimum}")
+              sys.exit(f"guard: {counts['passed']} root-lock tests passed, fewer than {minimum}: {summary}")
+          print(f"guard: {summary}")
           PY
 
       # Selected by marker, not name: every `windows`-marked test must pass here too.
@@ -374,9 +375,19 @@ jobs:
               sys.exit(f"guard: {report} is not valid JUnit XML: {exc}")
           suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
           cases = [case for suite in suites for case in suite.iter("testcase")]
-          bad = [c for c in cases if any(c.find(t) is not None for t in ("skipped", "failure", "error"))]
-          passed = len(cases) - len(bad)
-          print(f"guard: {passed} passed, {len(bad)} skipped/failed/errored, minimum passed {minimum}")
-          if not cases or bad or passed < minimum:
-              sys.exit("guard: windows-marked tests did not all pass, or fewer than the minimum")
+          if not suites or not cases:
+              sys.exit(f"guard: {report} has no testsuite or no testcase results")
+          counts = {"passed": 0, "skipped": 0, "failure": 0, "error": 0}
+          for case in cases:
+              outcome = next(
+                  (tag for tag in ("skipped", "failure", "error") if case.find(tag) is not None),
+                  "passed",
+              )
+              counts[outcome] += 1
+          summary = {"report": report.name, **counts, "minimum_passed": minimum}
+          if counts["skipped"] or counts["failure"] or counts["error"]:
+              sys.exit(f"guard: a windows-marked test was skipped, failed or errored: {summary}")
+          if counts["passed"] < minimum:
+              sys.exit(f"guard: {counts['passed']} windows-marked tests passed, fewer than {minimum}: {summary}")
+          print(f"guard: {summary}")
           PY
