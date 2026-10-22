@@ -761,3 +761,94 @@ def test_api_transcript_route_takes_the_runtime_root_lock(
     ok = client.get("/v1/runs/r/transcript", headers={"X-API-Key": issued.secret})
     assert ok.status_code == 200, ok.text
     _assert_imported_once(root, tdir)
+
+
+# --- MF-B (round 3): migrate=off re-checks its decision under the lock ---
+
+
+def _start_slow_restore_of(
+    archive: Path, target: Path, monkeypatch: pytest.MonkeyPatch
+) -> threading.Thread:
+    """Restore ``archive`` over ``target`` slowly; return once restore holds the lock."""
+
+    real_extract = tarfile.TarFile.extractall
+    extracting = threading.Event()
+
+    def slow_extract(self: tarfile.TarFile, *args: object, **kwargs: object) -> None:
+        extracting.set()
+        time.sleep(0.5)
+        real_extract(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(tarfile.TarFile, "extractall", slow_extract)
+    restore = threading.Thread(target=restore_tree, args=(archive, target), kwargs={"overwrite": True})
+    restore.start()
+    assert extracting.wait(_JOIN_BOUND_S)
+    return restore
+
+
+@pytest.mark.parametrize("target_kind", ["empty", "pending"])
+def test_migrate_off_open_racing_post_import_restore_does_not_lose_a_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target_kind: str
+) -> None:
+    """An off-mode open decides "leftover files", then waits while a restore brings back
+    an imported runtime.db. Before MF-B it wrote seq 3 to the leftover checkpoints.db,
+    which every later open ignores, so seq 3 was lost."""
+
+    src = tmp_path / "src"
+    _pending_root(src, "r")
+    open_run_persistence(src).close()  # imported; leftover files kept for rollback
+    assert legacy_import_complete(RuntimeLayout(src).local_runs().runtime_db)
+    archive = tmp_path / "post-import.tar.gz"
+    backup_tree(src, archive)
+    target = tmp_path / "target"
+    if target_kind == "pending":
+        _pending_root(target, "other")
+    else:
+        target.mkdir()
+    restore = _start_slow_restore_of(archive, target, monkeypatch)
+    try:
+        try:
+            p = open_run_persistence(target, migrate="off")  # decided before the restore
+        except RootBusy as exc:
+            assert "imported while waiting for the root lock" in str(exc)
+            restore.join(_JOIN_BOUND_S)
+            p = open_run_persistence(target, migrate="off")  # the caller's retry
+    finally:
+        restore.join(_JOIN_BOUND_S)
+    assert not restore.is_alive()
+    try:
+        p.checkpoints.save("r", 3, "n3", None, _state("r"))
+    finally:
+        p.close()
+    for mode in ("off", "auto"):
+        q = open_run_persistence(target, migrate=mode)  # type: ignore[arg-type]
+        try:
+            assert _hist(q, "r") == [(1, "n1"), (2, "n2"), (3, "n3")], mode
+        finally:
+            q.close()
+
+
+def test_migrate_off_open_refused_by_recheck_leaves_the_lock_free(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The re-check releases the shared lock it took before raising."""
+
+    import recertia.graph.persistence as gp
+
+    root = tmp_path / "runs"
+    _pending_root(root, "r")
+    real = gp._resolve_runtime_db
+    calls: list[str] = []
+
+    def flip(layout: object, mode: str) -> tuple[bool, Path | None]:
+        calls.append(mode)
+        if len(calls) == 1:
+            return False, None  # the pre-lock decision: leftover files
+        return True, None  # under the lock: the root is now imported
+
+    monkeypatch.setattr(gp, "_resolve_runtime_db", flip)
+    with pytest.raises(RootBusy, match="imported while waiting"):
+        open_run_persistence(root, migrate="off")
+    monkeypatch.setattr(gp, "_resolve_runtime_db", real)
+    assert calls == ["off", "off"]
+    assert _backup_locks_free(root)

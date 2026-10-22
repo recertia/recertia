@@ -121,7 +121,10 @@ def open_run_persistence(
     ``RECERTIA_IMPORT_LOCK_TIMEOUT_S``, then raises ``RootBusy`` before any
     db file is opened or written. Leftover files are re-checked once the lock
     is held: if a restore brought some back while this open waited, it raises
-    ``RootBusy`` too, and the retry imports them.
+    ``RootBusy`` too, and the retry imports them. ``migrate=off`` re-checks too:
+    if it chose the leftover files but the root was imported while it waited (a
+    restore of a post-import backup), it raises ``RootBusy`` rather than write to
+    files no later open reads.
 
     A bare path is its own runtime root (the CLI layout), so its ``.lock`` is
     ``<path>/.lock``. Pass ``runtime_root`` when ``root`` is a tenant runs
@@ -161,6 +164,15 @@ def open_run_persistence(
             )
     else:
         shared.acquire_shared()
+        if _resolve_runtime_db(layout, "off")[0]:
+            # migrate=off decided "leftover files" before the lock. A restore that ran
+            # meanwhile may have brought back an imported runtime.db, which every later
+            # open treats as the source of truth; a write to the leftover files would
+            # be lost (REC-058 MF-B). Fail closed; the retry reads runtime.db.
+            shared.release()
+            raise RootBusy(
+                f"the runtime root was imported while waiting for the root lock: {shared.path}"
+            )
     handle_lock: RootLock | None = shared
     try:
         if use_runtime:
