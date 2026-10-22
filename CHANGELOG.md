@@ -66,13 +66,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   child writing into the dir, so `rmtree` failed with `OSError: Directory not empty`, the dir
   leaked and the OSError replaced the timeout. The scenario's own exception now always
   propagates; a removal failure is attached to it as a note. SIGKILL, SIGTERM with no handler
-  and `os._exit` still leak the dir by design (documented in `fresh_root`). The
+  and `os._exit` still leak the dir by design. Only the scenario's own children, started
+  after entry, are reaped (no grandchildren, no process-group kill), and a second interrupt
+  during cleanup replaces the first; `fresh_root`'s docstring documents all of this. The
   `subprocess_exclusive` holder now closes its stdout/stderr pipes, and the r3 busy scenarios
   read and append their `.effects` journal with closed files, so the probe tests emit no
   ResourceWarning (16 before). `tests/unit/graph/test_rel3_probe_tmp_cleanup.py` adds
   KeyboardInterrupt and pytest-timeout (BaseException) cases, a still-writing-child case in
-  process and under a real pytest-timeout, a static guard that fails on any `mkdtemp(` call in
-  `tests/probes/`, and a ResourceWarning check, and is now `ruff format`ted.
+  process and under a real pytest-timeout, the one-retry path, the reap scope, a static guard
+  that fails on any reference to `mkdtemp` in `tests/probes/` (calls, aliases such as
+  `from tempfile import mkdtemp as m` or `mk = tempfile.mkdtemp`, and
+  `getattr(tempfile, "mkdtemp")`), and a ResourceWarning check, and is now `ruff format`ted.
 
 - **Exit-code test at the typer floor (REC-050)** — `tests/unit/cli/test_exit_codes.py`
   imported `typer.exceptions`, a module that first ships in typer 0.27.2, so it failed

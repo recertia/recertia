@@ -35,9 +35,19 @@ def fresh_root(fn):
     removal failure added to it as a note, and a removal failure after a normal return is
     raised rather than hidden.
 
-    Not covered, by design: SIGKILL, SIGTERM with no handler installed (``timeout(1)``, a
-    CI cancel, pytest-timeout's ``thread`` method) and ``os._exit`` end the process
-    before any cleanup can run, so they still leak the dir.
+    Only children started while the scenario ran are reaped: children already alive when
+    it was entered are left alone, as are other processes on the box.
+
+    Not covered, by design:
+    - SIGKILL, SIGTERM with no handler installed (``timeout(1)``, a CI cancel,
+      pytest-timeout's ``thread`` method) and ``os._exit`` end the process before any
+      cleanup can run, so they still leak the dir.
+    - Grandchildren (children of a reaped child) are not reaped: there is no process-group
+      kill, so nothing outside this process's own children is ever signalled. One that
+      keeps writing makes the removal fail, which then takes the note path above.
+    - A second interrupt (KeyboardInterrupt, pytest-timeout) that lands during the reap or
+      the retry's sleep replaces the first: it propagates with the first as its
+      ``__context__``, and that dir may be left behind.
     """
     @functools.wraps(fn)
     def run(*args, **kwargs):
