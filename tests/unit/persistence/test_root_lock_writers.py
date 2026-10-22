@@ -1012,6 +1012,60 @@ def test_embedded_worker_requeues_a_root_busy_claim_from_another_tenant(
         worker.shutdown(wait=True)
 
 
+@pytest.mark.parametrize("action", ["start", "resume"])
+def test_embedded_worker_requeues_a_root_busy_raised_mid_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    """REC-058 S-2: ``RootBusy`` raised during ``start``/``resume``, after the orchestrator
+    was built, is retryable too. ``AsyncRunWorker._run`` records ``root_busy`` and
+    re-raises, and the embedded queue worker re-queues the claim. Without that ``except``
+    the error fell into ``run_failed`` (mutant C3), and no other test noticed."""
+
+    from dataclasses import replace
+
+    from recertia.api.events import RunEventLog
+    from recertia.graph.engine import GraphOrchestrator
+    from recertia.workers.embedded import EmbeddedQueueWorker
+    from recertia.workers.queue import open_run_queue
+    from recertia.workers.run_worker import AsyncRunWorker, dump_async_request
+
+    calls: list[str] = []
+
+    def root_busy_mid_run(self: object, run_id: str, *args: object, **kwargs: object) -> object:
+        calls.append(run_id)
+        raise RootBusy("the runtime root lock was taken during the run")
+
+    monkeypatch.setattr(GraphOrchestrator, action, root_busy_mid_run)
+    root = tmp_path / "rt"
+    req = replace(_async_request(root, "tenant-b", "b-new"), action=action)  # type: ignore[type-var]
+    _enqueue(root, "tenant-b", "b-new", dump_async_request(req))  # type: ignore[arg-type]
+    events = RunEventLog(root)
+    worker = AsyncRunWorker(events=events)
+    queue = open_run_queue(root)
+    embedded = EmbeddedQueueWorker(worker, queue, worker_id="embedded-test")
+    try:
+        claims = queue.claim("embedded-test", limit=1)
+        assert len(claims) == 1
+        embedded._execute(claims[0])
+        assert calls == ["b-new"]  # raised mid-run, not while building the orchestrator
+        row = queue.get("tenant-b", "b-new")
+        assert row is not None
+        assert (row.status, row.attempt, row.error_code) == ("queued", 0, "root_busy")
+        log = events.list_after("tenant-b", "b-new")
+        payloads = [e["payload"] for e in log if e.get("type") == "error"]
+        assert any(p.get("code") == "root_busy" and p.get("retryable") is True for p in payloads), log
+        assert not any(p.get("code") == "run_failed" for p in payloads), log
+        assert [e for e in log if e.get("type") == "run.finished"] == []
+        with pytest.raises(RootBusy):  # the worker itself re-raises it to the queue
+            worker._run(req)  # type: ignore[arg-type]
+        api_lock, lock = _exclusive_root_locks(root, action="backup")  # the bundle was closed
+        lock.release()
+        api_lock.release()
+    finally:
+        queue.close()
+        worker.shutdown(wait=True)
+
+
 # --- MF-D (round 3): backup/restore leave the root's own lock files alone ---
 
 
