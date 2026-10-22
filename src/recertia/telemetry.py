@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -28,6 +29,11 @@ REQUIRED_EVENTS = frozenset(
     }
 )
 
+# In-process buffer caps (REC-056a). Telemetry is process-local, so an unbounded list
+# grows for the process lifetime; keep the newest entries and drop the oldest.
+_TELEMETRY_MAX_SPANS = 1024
+_TELEMETRY_MAX_EVENTS = 1024
+
 
 @dataclass
 class SpanEvent:
@@ -47,11 +53,17 @@ class SpanRecord:
 
 
 class Telemetry:
-    """Process-local span/event recorder (OTel-compatible surface)."""
+    """Process-local span/event recorder (OTel-compatible surface).
+
+    ``spans`` and ``events`` are bounded deques: once full, recording a new entry drops the
+    oldest one. Exporters still see every span and event as it is recorded. The window is
+    process-wide (all tenants), so ``missing_required`` and the dashboard only see the
+    newest 1024 events.
+    """
 
     def __init__(self) -> None:
-        self.spans: list[SpanRecord] = []
-        self.events: list[SpanEvent] = []
+        self.spans: deque[SpanRecord] = deque(maxlen=_TELEMETRY_MAX_SPANS)
+        self.events: deque[SpanEvent] = deque(maxlen=_TELEMETRY_MAX_EVENTS)
         self._otel = None
         self._exporters: list[Any] = []
         try:

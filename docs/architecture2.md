@@ -1311,6 +1311,51 @@ opt in.
 Cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` except in `dev`. The session
 token is not returned in JSON and is not stored in `localStorage`.
 
+Pending OIDC login starts are unauthenticated, so they are capped in process: 16 per
+client, and 1024 in total as a backstop. The per-client check runs first: a client at its
+limit loses only its own oldest start (it is not rejected, and no other client's entry is
+touched), so one client's flood cannot evict or block another client's login. Only a start
+from a client under its limit can meet a full table; it evicts the globally oldest pending
+start and is accepted.
+
+The client is the socket peer address. `X-Forwarded-For` is read only when the peer is
+inside `RECERTIA_TRUSTED_PROXIES` (comma-separated CIDRs, empty by default); then every
+`X-Forwarded-For` line is joined in order and the client is the rightmost hop that is not
+itself a trusted proxy. A missing header, a malformed hop (anything but a bare IP, such as
+an empty element or `ip:port`), or a chain made only of trusted proxies falls back to the
+peer. `Forwarded` is never read, even from a trusted peer. IPv4-mapped IPv6 addresses
+(`::ffff:a.b.c.d`) count as the IPv4 address, and IPv6 clients are keyed by their /64. A
+Unix-socket listener (`--uds`) has no peer address, so every login start through it shares
+the fixed key `unknown` (one 16-slot limit). The per-client limit must stay below the global
+cap; the module refuses to load otherwise.
+
+**`RECERTIA_TRUSTED_PROXIES` is required for any proxied deployment.** Without it the app
+sees only the proxy's address, so every user behind the proxy shares one client key and
+one 16-slot limit: one user can then keep everyone else's logins failing. List only your
+proxies' own addresses; `0.0.0.0/0` and `::/0` are refused at startup. The proxy must
+append the address it received the connection from to `X-Forwarded-For` (for example,
+nginx `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`), and must not pass a
+client's header through unchanged as the only value. When `X-Forwarded-For` arrives from a
+peer outside `RECERTIA_TRUSTED_PROXIES`, the header is ignored and a warning naming
+`RECERTIA_TRUSTED_PROXIES` is logged once per process.
+
+**Always start uvicorn with `--no-proxy-headers`** (as in the launch command below), or with
+an empty `FORWARDED_ALLOW_IPS`.
+uvicorn's default `--proxy-headers` trusts `X-Forwarded-For` from `FORWARDED_ALLOW_IPS`
+(loopback by default; `--forwarded-allow-ips '*'` trusts everyone) and replaces the peer
+address before the app runs. The app detects that rewrite: uvicorn leaves the header in
+place, so a peer that equals one of its hops, or a peer that is not an IP address at all,
+means something rewrote it. Such starts fail closed: they all share the fixed key
+`proxy-headers-rewritten` (one 16-slot limit), so forged hops cannot mint new keys or evict
+another client's login, and a warning naming `--no-proxy-headers` is logged once per
+process. Logins through that path then share one small limit, so fix the launch flags.
+
+Telemetry keeps only the newest 1024 spans and 1024 events in memory, process-wide across
+tenants; exporters still receive every record. In-memory readers (the telemetry dashboard,
+its `missing_required` list, and `ops` snapshots without a spans file) see only that
+window, so on a busy process an older required event can drop out and be reported missing.
+Use an exporter or a spans file for a complete record.
+
 Promote and improvement jobs require the `promote` / `jobs` API-key scopes (or
 `admin`), or a console reviewer session. A `runs` key cannot approve skills.
 
@@ -1355,7 +1400,7 @@ Prefer the product console for day-to-day operator chores once the API is up:
 
 ```bash
 # From a configured environment with RECERTIA_* model credentials as above:
-python -m uvicorn recertia.api.app:app --host 127.0.0.1 --port 8080
+python -m uvicorn recertia.api.app:app --host 127.0.0.1 --port 8080 --no-proxy-headers
 # Open http://127.0.0.1:8080/console
 ```
 
