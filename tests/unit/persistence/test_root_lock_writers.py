@@ -1219,3 +1219,279 @@ def test_keyboard_interrupt_in_orchestrator_init_releases_its_own_handle(
     with pytest.raises(KeyboardInterrupt):
         engine.GraphOrchestrator(root)
     assert _backup_locks_free(root)
+
+
+# --- REC-065 (#158): per-tenant locks under the shared root lock ---
+
+
+def _assert_opens_imported(root: Path, tdir: Path) -> None:
+    """A later open sees the leftover seqs exactly once, importing them if still pending."""
+
+    assert _worker_shaped_open(root, tdir) == [(1, "n1"), (2, "n2")]
+    _assert_imported_once(root, tdir)
+
+
+def _hold_tenant(monkeypatch: pytest.MonkeyPatch, root: Path, tdir: Path, holder: str) -> object:
+    """Make ``tdir``'s tenant hold its lock; returns a callable that lets go of it.
+
+    ``import``: a worker-shaped open whose leftover import is paused inside the
+    import (root ``.lock`` shared, tenant lock exclusive), via ``_gate_import``.
+    ``handle``: a live ``migrate=off`` handle (root ``.lock`` shared, tenant lock
+    shared), which keeps the leftover files pending.
+    """
+
+    if holder == "handle":
+        p = open_run_persistence(tdir, runtime_root=root, migrate="off")
+        return p.close
+    gate = _gate_import(monkeypatch)
+    thread, box = _in_thread(lambda: _worker_shaped_open(root, tdir))
+    assert gate["inside"].wait(_JOIN_BOUND_S)  # type: ignore[attr-defined]
+
+    def release() -> None:
+        gate["release"].set()  # type: ignore[attr-defined]
+        thread.join(_JOIN_BOUND_S)
+        assert not thread.is_alive()
+        assert box.get("result") == [(1, "n1"), (2, "n2")], box
+
+    return release
+
+
+@pytest.mark.parametrize("b_state", ["pending", "imported"])
+@pytest.mark.parametrize("holder", ["import", "handle"])
+def test_two_tenants_on_one_root_hold_locks_concurrently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holder: str, b_state: str
+) -> None:
+    """Done-when 1: tenant-a holds its tenant lock (an import, or a live handle) and
+    tenant-b's open, with its own leftover import when ``pending``, goes ahead. The
+    lock timeout is 0, so any wait at all would raise RootBusy."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0")
+    root = tmp_path / "rt"
+    tdir_a = _tenant_pending(root, "tenant-a", "r")
+    tdir_b = _tenant_pending(root, "tenant-b", "r")
+    if b_state == "imported":
+        assert _worker_shaped_open(root, tdir_b) == [(1, "n1"), (2, "n2")]
+    release_a = _hold_tenant(monkeypatch, root, tdir_a, holder)
+    try:
+        pb = open_run_persistence(tdir_b, runtime_root=root)
+        try:
+            pb.checkpoints.save("b-new", 1, "b1", None, _state("b-new"))
+            assert _hist(pb, "r") == [(1, "n1"), (2, "n2")]
+            assert set(pb.checkpoints.list_run_ids()) == {"r", "b-new"}
+            assert not _backup_locks_free(root)  # both tenants still keep backup out
+        finally:
+            pb.close()
+        assert legacy_import_complete(RuntimeLayout(root).tenant("tenant-b").runtime_db)
+        if holder == "handle":  # tenant-a's leftover files are untouched by tenant-b
+            assert legacy_sqlite_pending(RuntimeLayout(root).tenant("tenant-a"))
+        assert not _backup_locks_free(root)
+    finally:
+        release_a()  # type: ignore[operator]
+    assert _backup_locks_free(root)
+    _assert_opens_imported(root, tdir_a)
+    pb = open_run_persistence(tdir_b, runtime_root=root)
+    try:
+        assert set(pb.checkpoints.list_run_ids()) == {"r", "b-new"}  # nothing of tenant-a
+    finally:
+        pb.close()
+
+
+def test_two_tenant_imports_on_one_root_overlap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both tenants' leftover imports are inside ``_import_under_lock`` at once
+    (before REC-065 the root lock kept every import on the root one at a time)."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0")
+    root = tmp_path / "rt"
+    tdir_a = _tenant_pending(root, "tenant-a", "r")
+    tdir_b = _tenant_pending(root, "tenant-b", "r")
+    gate = _gate_import(monkeypatch)
+    thread_a, box_a = _in_thread(lambda: _worker_shaped_open(root, tdir_a))
+    try:
+        assert gate["inside"].wait(_JOIN_BOUND_S)  # type: ignore[attr-defined]
+        assert _worker_shaped_open(root, tdir_b) == [(1, "n1"), (2, "n2")]
+    finally:
+        gate["release"].set()  # type: ignore[attr-defined]
+        thread_a.join(_JOIN_BOUND_S)
+    assert not thread_a.is_alive()
+    assert box_a.get("result") == [(1, "n1"), (2, "n2")], box_a
+    assert gate["entries"] == 2 and gate["max_active"] == 2, gate
+    _assert_opens_imported(root, tdir_a)
+    _assert_opens_imported(root, tdir_b)
+
+
+@pytest.mark.parametrize("holder", ["import", "handle"])
+def test_same_tenant_still_excluded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holder: str) -> None:
+    """Done-when 2: while tenant-a holds its tenant lock (an import, or a live handle
+    that keeps its leftover files pending), a second open of tenant-a that must import
+    waits out the bound, then raises typed RootBusy, and writes nothing."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.3")
+    root = tmp_path / "rt"
+    tdir_a = _tenant_pending(root, "tenant-a", "r")
+    layout_a = RuntimeLayout(root).tenant("tenant-a")
+    release_a = _hold_tenant(monkeypatch, root, tdir_a, holder)
+    try:
+        before = _run_store_snapshot(tdir_a)
+        started = time.monotonic()
+        with pytest.raises(RootBusy, match="tenant lock is held"):
+            open_run_persistence(tdir_a, runtime_root=root)
+        waited = time.monotonic() - started
+        assert 0.25 <= waited <= _JOIN_BOUND_S, waited
+        assert _run_store_snapshot(tdir_a) == before
+        assert legacy_sqlite_pending(layout_a)
+        assert not legacy_import_complete(layout_a.runtime_db)
+    finally:
+        release_a()  # type: ignore[operator]
+    _assert_opens_imported(root, tdir_a)
+
+
+def test_same_tenant_import_refuses_a_second_import_without_a_root_lock_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An import holds the root ``.lock`` only shared: a refused same-tenant open names
+    the tenant lock, and another tenant's handle can still be opened meanwhile."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0")
+    root = tmp_path / "rt"
+    tdir_a = _tenant_pending(root, "tenant-a", "r")
+    release_a = _hold_tenant(monkeypatch, root, tdir_a, "import")
+    try:
+        with pytest.raises(RootBusy) as busy:
+            open_run_persistence(tdir_a, runtime_root=root)
+        layout_a = RuntimeLayout(root).tenant("tenant-a")
+        assert str(layout_a.tenant_lock) in str(busy.value)
+        assert "root lock is held" not in str(busy.value)
+        p = open_run_persistence(root / "runs" / "tenant-c", runtime_root=root)
+        p.close()
+    finally:
+        release_a()  # type: ignore[operator]
+
+
+@pytest.mark.parametrize("action", ["backup", "restore"])
+@pytest.mark.parametrize("holder", ["import", "handle"])
+def test_backup_and_restore_refused_while_a_tenant_holds_its_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holder: str, action: str
+) -> None:
+    """Done-when 3: backup/restore take the root ``.lock`` exclusively, so they still
+    refuse while any one tenant holds its tenant lock, and change nothing."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.3")
+    root = tmp_path / "rt"
+    tdir_a = _tenant_pending(root, "tenant-a", "r")
+    tdir_b = _tenant_pending(root, "tenant-b", "r")
+    _worker_shaped_open(root, tdir_b)  # tenant-b imported and idle
+    archive = tmp_path / "before.tar.gz"
+    backup_tree(root, archive)
+    out = tmp_path / "during.tar.gz"
+    release_a = _hold_tenant(monkeypatch, root, tdir_a, holder)
+    try:
+        before = {t.name: _run_store_snapshot(t) for t in (tdir_a, tdir_b)}
+        with pytest.raises(BackupError, match=f"{action} refused: an open run handle, worker or import"):
+            if action == "backup":
+                backup_tree(root, out)
+            else:
+                restore_tree(archive, root, overwrite=True)
+        assert not out.exists()
+        assert {t.name: _run_store_snapshot(t) for t in (tdir_a, tdir_b)} == before
+    finally:
+        release_a()  # type: ignore[operator]
+    if action == "backup":
+        assert backup_tree(root, out) == out.resolve()
+    else:
+        assert restore_tree(archive, root, overwrite=True) == root.resolve()
+    _assert_opens_imported(root, tdir_a)
+    _assert_opens_imported(root, tdir_b)
+
+
+def test_queue_worker_claim_runs_while_another_tenant_handle_is_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``recertia worker`` claims tenant-b's run, importing tenant-b's leftover files,
+    while a tenant-a handle is open: no RootBusy, no requeue (REC-058 requeued it)."""
+
+    import recertia.workers.serve as serve
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0")
+    root = tmp_path / "rt"
+    tdir = _tenant_pending(root, "tenant-b", "b-old")
+    _enqueue(root, "tenant-b", "b-new", {"request": "b-new", "budget": {"max_attempts": 1}})
+    release = _hold_root(root, "other_tenant_handle")
+    try:
+        assert serve.run_once(root, worker="w1") == 1
+        row = _queue_row(root, "tenant-b", "b-new")
+        assert (row.status, row.attempt) == ("succeeded", 0)  # type: ignore[attr-defined]
+    finally:
+        release()  # type: ignore[operator]
+    p = open_run_persistence(tdir, runtime_root=root)
+    try:
+        assert set(p.checkpoints.list_run_ids()) == {"b-new", "b-old"}
+        assert _hist(p, "b-old") == [(1, "n1"), (2, "n2")]
+    finally:
+        p.close()
+
+
+def test_tenant_lock_refused_on_the_tenant_lock_holds_nothing(tmp_path: Path) -> None:
+    """``TenantLock``: a refused tenant wait gives the root lock back, waits once within
+    the bound (one deadline for both locks), and release frees both for backup."""
+
+    from recertia.persistence.root_lock import RootLockBusy
+
+    root = tmp_path / "rt"
+    layout = RuntimeLayout(root).tenant("tenant-a")
+    layout.runs_root.mkdir(parents=True)
+    first = TenantLock(RuntimeLayout(root).root_lock, layout.tenant_lock)
+    first.acquire(exclusive=True, timeout_s=0)
+    try:
+        second = TenantLock(RuntimeLayout(root).root_lock, layout.tenant_lock)
+        for exclusive in (True, False):
+            started = time.monotonic()
+            with pytest.raises(RootLockBusy):
+                second.acquire(exclusive=exclusive, timeout_s=0.2)
+            assert time.monotonic() - started <= _JOIN_BOUND_S
+            assert second.refused == f"tenant lock is held: {layout.tenant_lock}"
+            assert second.root._fd is None and second.tenant._fd is None
+        with pytest.raises(ValueError):
+            second.acquire(exclusive=True, timeout_s=None)
+        assert second.root._fd is None and second.tenant._fd is None
+    finally:
+        first.release()
+    assert _backup_locks_free(root)
+    other = TenantLock(RuntimeLayout(root).root_lock, RuntimeLayout(root).tenant("tenant-b").tenant_lock)
+    api_lock, lock = _exclusive_root_locks(root, action="backup")
+    try:
+        with pytest.raises(RootLockBusy):
+            other.acquire(exclusive=False, timeout_s=0)
+        assert other.refused == f"root lock is held: {RuntimeLayout(root).root_lock}"
+        assert other.root._fd is None and other.tenant._fd is None
+    finally:
+        lock.release()
+        api_lock.release()
+
+
+def test_backup_leaves_out_tenant_lock_files_and_restore_skips_them(tmp_path: Path) -> None:
+    """``.tenant.lock`` files are locks only, like ``.lock``: not archived, not restored."""
+
+    import io
+
+    root = tmp_path / "rt"
+    tdir = _tenant_pending(root, "tenant-a", "r")
+    _worker_shaped_open(root, tdir)
+    tenant_lock = RuntimeLayout(root).tenant("tenant-a").tenant_lock
+    assert tenant_lock.is_file()
+    archive = tmp_path / "b.tar.gz"
+    backup_tree(root, archive)
+    with tarfile.open(archive) as tar:
+        names = set(tar.getnames())
+    assert not any(name.endswith(".tenant.lock") for name in names), sorted(names)
+    crafted = tmp_path / "crafted.tar.gz"
+    with tarfile.open(archive) as old, tarfile.open(crafted, "w:gz") as new:
+        for member in old.getmembers():
+            new.addfile(member, old.extractfile(member) if member.isfile() else None)
+        info = tarfile.TarInfo("runs/tenant-a/.tenant.lock")
+        info.size = 1
+        new.addfile(info, io.BytesIO(b"x"))
+    target = tmp_path / "target"
+    restore_tree(crafted, target)
+    restored = RuntimeLayout(target).tenant("tenant-a").tenant_lock
+    assert not restored.exists() or restored.stat().st_size == 0
+    _assert_imported_once(target, target / "runs" / "tenant-a")

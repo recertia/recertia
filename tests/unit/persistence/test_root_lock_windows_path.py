@@ -356,3 +356,47 @@ def test_windows_migrate_off_blocking_wait_raises_root_busy(
     finally:
         p.close()
     assert kernel32.held == {}
+
+
+# --- REC-065 (#158): per-tenant locks through the Windows branch ---
+
+
+def test_windows_tenants_on_one_root_lock_apart_and_backup_is_refused(
+    tmp_path: Path, kernel32: FakeKernel32, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tenant-a's import holds its tenant lock exclusively (LockFileEx with the
+    exclusive flag) under a shared root lock; tenant-b opens at once, a second tenant-a
+    import gets ``RootBusy`` and backup is refused. Nothing stays held."""
+
+    from recertia.persistence.root_lock import TenantLock
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0")
+    root = tmp_path / "rt"
+    layout = RuntimeLayout(root)
+    for tenant in ("tenant-a", "tenant-b"):
+        layout.tenant(tenant).runs_root.mkdir(parents=True)
+    import_a = TenantLock(layout.root_lock, layout.tenant("tenant-a").tenant_lock)
+    import_a.acquire(exclusive=True, timeout_s=0)
+    try:
+        assert sorted(kernel32.held.values()) == ["exclusive", "shared"]
+        pb = open_run_persistence(layout.tenant("tenant-b").runs_root, runtime_root=root)
+        try:
+            pb.checkpoints.save("b", 1, "n1", None, _state("b"))
+        finally:
+            pb.close()
+        second_a = TenantLock(layout.root_lock, layout.tenant("tenant-a").tenant_lock)
+        with pytest.raises(RootLockBusy):
+            second_a.acquire(exclusive=True, timeout_s=0.1)
+        assert second_a.refused.startswith("tenant lock is held")
+        with pytest.raises(RootBusy):
+            open_run_persistence(layout.tenant("tenant-a").runs_root, runtime_root=root)
+        with pytest.raises(BackupError, match="backup refused"):
+            _exclusive_root_locks(root, action="backup")
+        assert sorted(kernel32.held.values()) == ["exclusive", "shared"]
+    finally:
+        import_a.release()
+    assert kernel32.held == {}
+    api_lock, lock = _exclusive_root_locks(root, action="backup")
+    lock.release()
+    api_lock.release()
+    assert kernel32.held == {}

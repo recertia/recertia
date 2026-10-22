@@ -313,3 +313,96 @@ def test_migrate_off_blocking_wait_raises_root_busy(tmp_path: Path, monkeypatch:
         assert _hist(p, "old") == [(1, "n1"), (2, "n2")]
     finally:
         p.close()
+
+
+# --- REC-065 (#158): per-tenant locks against a real cross-process holder ---
+
+_TENANT_HOLDER = textwrap.dedent(
+    """
+    import sys
+    from pathlib import Path
+    from recertia.persistence.root_lock import TenantLock
+
+    lock = TenantLock(Path(sys.argv[1]), Path(sys.argv[2]))
+    lock.acquire(exclusive=sys.argv[3] == "exclusive", timeout_s=1.0)
+    print("held", flush=True)
+    sys.stdin.read()
+    lock.release()
+    """
+)
+
+
+class _TenantHolder(_Holder):
+    """A child process holding ``<root>/.lock`` shared and one tenant lock until stopped:
+    ``exclusive`` is what a leftover import holds, ``shared`` what a run handle holds."""
+
+    def __init__(self, root: Path, tenant: str, mode: str) -> None:
+        layout = RuntimeLayout(root)
+        self.proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _TENANT_HOLDER,
+                str(layout.root_lock),
+                str(layout.tenant(tenant).tenant_lock),
+                mode,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        assert self.proc.stdout is not None
+        line = self.proc.stdout.readline()
+        assert line.strip() == "held", line
+
+
+@pytest.mark.parametrize("mode", ["exclusive", "shared"])
+def test_cross_process_tenant_holder_lets_another_tenant_open_and_keeps_backup_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    """Tenant-a's import (``exclusive``) or handle (``shared``) in another process; a
+    tenant-b open needs no wait (timeout 0), and backup is refused until it stops."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0")
+    root = tmp_path / "rt"
+    tdir_a, tdir_b = root / "runs" / "tenant-a", root / "runs" / "tenant-b"
+    for tdir in (tdir_a, tdir_b):
+        open_run_persistence(tdir, runtime_root=root).close()
+    holder = _TenantHolder(root, "tenant-a", mode)
+    try:
+        p = open_run_persistence(tdir_b, runtime_root=root)
+        try:
+            p.checkpoints.save("b", 1, "n1", None, _state("b"))
+        finally:
+            p.close()
+        with pytest.raises(BackupError, match="backup refused"):
+            backup_tree(root, tmp_path / "refused.tar.gz")
+    finally:
+        holder.stop()
+    assert backup_tree(root, tmp_path / "ok.tar.gz") == (tmp_path / "ok.tar.gz").resolve()
+
+
+def test_cross_process_tenant_import_makes_a_same_tenant_open_root_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tenant-a's import in another process holds its tenant lock exclusively; a tenant-a
+    open waits within the bound, then raises typed ``RootBusy`` naming the tenant lock."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.3")
+    root = tmp_path / "rt"
+    tdir_a = root / "runs" / "tenant-a"
+    open_run_persistence(tdir_a, runtime_root=root).close()
+    holder = _TenantHolder(root, "tenant-a", "exclusive")
+    try:
+        started = time.monotonic()
+        with pytest.raises(RootBusy, match="tenant lock is held"):
+            open_run_persistence(tdir_a, runtime_root=root)
+        assert 0.3 <= time.monotonic() - started <= _BOUND_S
+    finally:
+        holder.stop()
+    p = open_run_persistence(tdir_a, runtime_root=root)
+    try:
+        p.checkpoints.save("a", 1, "n1", None, _state("a"))
+        assert _hist(p, "a") == [(1, "n1")]
+    finally:
+        p.close()
