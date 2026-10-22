@@ -8,13 +8,22 @@ evals/golden/_promotion_logs, skills/, or .recertia/.
 the gate exposes no replay or retry count, so every row records ``"attempts": null`` with
 ``"attempts_measured": false``. The T2 harness must measure attempts (and first-attempt and
 final outcomes) itself; nothing in this file is evidence of an attempt count.
+
+The frozen results are path-independent: the scratch root (a random ``mkdtemp`` directory)
+is written as ``<scratch>`` in every message, and each row carries the structured
+``refusal_kind``, ``failing_fixtures`` and ``failing_count`` so no consumer has to parse
+free text. Since REC-009 a refusal is decision-only (no fixture ids in the message), so on
+such a gate ``failing_fixtures`` is null and ``failing_count`` comes from the error.
 """
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import inspect
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +38,16 @@ SET_DIR = Path(__file__).resolve().parent
 GOLDEN_ROOT = ROOT / "evals" / "golden"
 SKILLS_ROOT = ROOT / "skills"
 ALLOWED_KINDS = frozenset({"golden_gate", "predecessor_non_regression"})
+SCRATCH_PREFIX = "recertia-t2-prefreeze-"
+SCRATCH_PLACEHOLDER = "<scratch>"
+_SCRATCH_RE = re.compile(
+    r"(?:/private)?(?:/var/folders/[^\s'\"]+?|/var/tmp|/tmp)/" + re.escape(SCRATCH_PREFIX) + r"[A-Za-z0-9_]+"
+)
+SCRATCH_PATHS_NOTE = (
+    "the per-run mkdtemp scratch root is written as <scratch>; the frozen results "
+    "contain no absolute temp paths"
+)
+_FAILING_RE = re.compile(r"failing fixtures=(\[[^\]]*\])")
 CASES = (
     "add-editorconfig",
     "add-gitignore-entry",
@@ -110,6 +129,52 @@ def _refusal_kind(message: str) -> str:
     return "other"
 
 
+def mask_scratch_paths(text: str, scratch: Path | None = None) -> str:
+    """Replace the random scratch root (and any prefreeze scratch dir) with ``<scratch>``."""
+
+    if scratch is not None:
+        text = text.replace(str(scratch), SCRATCH_PLACEHOLDER)
+    return _SCRATCH_RE.sub(SCRATCH_PLACEHOLDER, text)
+
+
+def refusal_from_error(exc: BaseException) -> dict[str, Any]:
+    """Structured refusal: kind, failing fixture ids (when the gate names them), count.
+
+    Uses the error's own ``refusal_kind`` / ``failing_count`` when it has them (REC-009
+    decision-only errors) and falls back to the pre-REC-009 message text otherwise.
+    """
+
+    message = str(exc)
+    structured_kind = getattr(exc, "refusal_kind", None)
+    kind = structured_kind if isinstance(structured_kind, str) else _refusal_kind(message)
+    failing: list[str] | None = None
+    match = _FAILING_RE.search(message)
+    if match:
+        failing = [str(item) for item in ast.literal_eval(match.group(1))]
+    count: int | None = None
+    if failing is not None:
+        count = len(failing)
+    elif kind in ALLOWED_KINDS and isinstance(getattr(exc, "failing_count", None), int):
+        count = int(getattr(exc, "failing_count"))
+    return {"refusal_kind": kind, "failing_fixtures": failing, "failing_count": count}
+
+
+def promote_kwargs(scratch: Path) -> dict[str, Any]:
+    """Extra ``promote_to_approved`` kwargs for the gate in this checkout.
+
+    Since REC-009 the gate requires an operator audit sink (``audit=``) outside any
+    checkout; before it there is no such parameter.
+    """
+
+    from recertia.memory.procedural.promote import promote_to_approved
+
+    if "audit" not in inspect.signature(promote_to_approved).parameters:
+        return {}
+    from recertia.review.promotion_audit import OperatorAuditStore  # type: ignore[import-not-found,unused-ignore]
+
+    return {"audit": OperatorAuditStore(scratch / "operator-audit")}
+
+
 def case_row(
     *,
     skill_id: str,
@@ -120,6 +185,8 @@ def case_row(
     code_sha: str,
     date_pt: str,
     message: str,
+    failing_fixtures: list[str] | None = None,
+    failing_count: int | None = None,
 ) -> dict[str, Any]:
     """One PREFREEZE-REFUSALS.json row. ``attempts`` is explicitly not measured (None)."""
 
@@ -127,6 +194,8 @@ def case_row(
         "id": skill_id,
         "edit_summary": EDIT_SUMMARIES[skill_id],
         "refusal_kind": refusal_kind,
+        "failing_fixtures": failing_fixtures,
+        "failing_count": failing_count,
         "backend_used": backend_used,
         "criteria_diff": criteria_diff,
         "executor_id": executor_id,
@@ -134,7 +203,7 @@ def case_row(
         "date_pt": date_pt,
         "attempts": None,
         "attempts_measured": False,
-        "message": message,
+        "message": mask_scratch_paths(message),
     }
     if skill_id == "add-editorconfig":
         row["note"] = (
@@ -164,6 +233,11 @@ def case_row_problems(row: dict[str, Any]) -> list[str]:
             problems.append(f"attempts={attempts!r} recorded without a measurement")
     else:
         problems.append("attempts_measured missing")
+    if _SCRATCH_RE.search(json.dumps(row)):
+        problems.append("row contains an unmasked scratch path")
+    failing = row.get("failing_fixtures")
+    if failing is not None and row.get("failing_count") != len(failing):
+        problems.append("failing_count does not match failing_fixtures")
     return problems
 
 
@@ -262,7 +336,11 @@ def prove() -> dict[str, Any]:
 
             store.write_candidate(SkillVersion.model_validate(v2))
             observed.clear()
-            kind = "other"
+            refusal: dict[str, Any] = {
+                "refusal_kind": "other",
+                "failing_fixtures": None,
+                "failing_count": None,
+            }
             message = ""
             try:
                 promote_to_approved(
@@ -275,17 +353,20 @@ def prove() -> dict[str, Any]:
                     log_dir=log_dir,
                     repo_root=ROOT,
                     factory=factory,
+                    **promote_kwargs(scratch),
                 )
                 message = "promote_to_approved returned success"
             except PromotionError as exc:
-                message = str(exc)
-                kind = _refusal_kind(message)
+                message = mask_scratch_paths(str(exc), scratch)
+                refusal = refusal_from_error(exc)
             backends = sorted(set(observed))
             backend_used = backends[0] if len(backends) == 1 else ",".join(backends) or "none"
             cases.append(
                 case_row(
                     skill_id=skill_id,
-                    refusal_kind=kind,
+                    refusal_kind=refusal["refusal_kind"],
+                    failing_fixtures=refusal["failing_fixtures"],
+                    failing_count=refusal["failing_count"],
                     backend_used=backend_used,
                     criteria_diff=_criteria_identical(skill_id),
                     executor_id=executor_id,
@@ -309,6 +390,7 @@ def prove() -> dict[str, Any]:
         "code_sha": code_sha,
         "date_pt": date_pt,
         "not_measured": {"attempts": ATTEMPTS_NOT_MEASURED_REASON},
+        "scratch_paths": SCRATCH_PATHS_NOTE,
         "cases": cases,
     }
     (SET_DIR / "PREFREEZE-REFUSALS.json").write_text(

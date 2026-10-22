@@ -8,11 +8,16 @@
   "not_measured": {
     "attempts": "not measured: prefreeze.py calls promote_to_approved once per case and the gate exposes no replay or retry count; the T2 harness must measure attempts and the first-attempt and final outcomes"
   },
+  "scratch_paths": "the per-run mkdtemp scratch root is written as <scratch>; the frozen results contain no absolute temp paths",
   "cases": [
     {
       "id": "add-editorconfig",
       "edit_summary": "omit the [*.py] section from .editorconfig",
       "refusal_kind": "predecessor_non_regression",
+      "failing_fixtures": [
+        "add-editorconfig"
+      ],
+      "failing_count": 1,
       "backend_used": "container",
       "criteria_diff": "identical",
       "executor_id": "recertia.solver.executor.ContainerExecutor",
@@ -20,13 +25,17 @@
       "date_pt": "2026-10-20",
       "attempts": null,
       "attempts_measured": false,
-      "message": "predecessor non-regression failed for add-editorconfig@v2: failing fixtures=['add-editorconfig'] (log: /tmp/recertia-t2-prefreeze-2pq0vc6h/promotion_logs/add-editorconfig-v2.json)",
+      "message": "predecessor non-regression failed for add-editorconfig@v2: failing fixtures=['add-editorconfig'] (log: <scratch>/promotion_logs/add-editorconfig-v2.json)",
       "note": "predecessor fixture is the same directory as the candidate's and is deduplicated; refusal is the candidate failing"
     },
     {
       "id": "add-gitignore-entry",
       "edit_summary": "append *.pyo instead of *.pyc",
       "refusal_kind": "predecessor_non_regression",
+      "failing_fixtures": [
+        "add-gitignore-entry"
+      ],
+      "failing_count": 1,
       "backend_used": "container",
       "criteria_diff": "identical",
       "executor_id": "recertia.solver.executor.ContainerExecutor",
@@ -34,12 +43,16 @@
       "date_pt": "2026-10-20",
       "attempts": null,
       "attempts_measured": false,
-      "message": "predecessor non-regression failed for add-gitignore-entry@v2: failing fixtures=['add-gitignore-entry'] (log: /tmp/recertia-t2-prefreeze-2pq0vc6h/promotion_logs/add-gitignore-entry-v2.json)"
+      "message": "predecessor non-regression failed for add-gitignore-entry@v2: failing fixtures=['add-gitignore-entry'] (log: <scratch>/promotion_logs/add-gitignore-entry-v2.json)"
     },
     {
       "id": "add-license-mit",
       "edit_summary": "write BSD License text instead of MIT License",
       "refusal_kind": "predecessor_non_regression",
+      "failing_fixtures": [
+        "add-license-mit"
+      ],
+      "failing_count": 1,
       "backend_used": "container",
       "criteria_diff": "identical",
       "executor_id": "recertia.solver.executor.ContainerExecutor",
@@ -47,12 +60,16 @@
       "date_pt": "2026-10-20",
       "attempts": null,
       "attempts_measured": false,
-      "message": "predecessor non-regression failed for add-license-mit@v2: failing fixtures=['add-license-mit'] (log: /tmp/recertia-t2-prefreeze-2pq0vc6h/promotion_logs/add-license-mit-v2.json)"
+      "message": "predecessor non-regression failed for add-license-mit@v2: failing fixtures=['add-license-mit'] (log: <scratch>/promotion_logs/add-license-mit-v2.json)"
     },
     {
       "id": "add-makefile-target",
       "edit_summary": "write a check: target instead of test:",
       "refusal_kind": "predecessor_non_regression",
+      "failing_fixtures": [
+        "add-makefile-target"
+      ],
+      "failing_count": 1,
       "backend_used": "container",
       "criteria_diff": "identical",
       "executor_id": "recertia.solver.executor.ContainerExecutor",
@@ -60,12 +77,16 @@
       "date_pt": "2026-10-20",
       "attempts": null,
       "attempts_measured": false,
-      "message": "predecessor non-regression failed for add-makefile-target@v2: failing fixtures=['add-makefile-target'] (log: /tmp/recertia-t2-prefreeze-2pq0vc6h/promotion_logs/add-makefile-target-v2.json)"
+      "message": "predecessor non-regression failed for add-makefile-target@v2: failing fixtures=['add-makefile-target'] (log: <scratch>/promotion_logs/add-makefile-target-v2.json)"
     },
     {
       "id": "add-pytest-config",
       "edit_summary": "write addopts instead of testpaths in pytest.ini",
       "refusal_kind": "predecessor_non_regression",
+      "failing_fixtures": [
+        "add-pytest-config"
+      ],
+      "failing_count": 1,
       "backend_used": "container",
       "criteria_diff": "identical",
       "executor_id": "recertia.solver.executor.ContainerExecutor",
@@ -73,12 +94,16 @@
       "date_pt": "2026-10-20",
       "attempts": null,
       "attempts_measured": false,
-      "message": "predecessor non-regression failed for add-pytest-config@v2: failing fixtures=['add-pytest-config'] (log: /tmp/recertia-t2-prefreeze-2pq0vc6h/promotion_logs/add-pytest-config-v2.json)"
+      "message": "predecessor non-regression failed for add-pytest-config@v2: failing fixtures=['add-pytest-config'] (log: <scratch>/promotion_logs/add-pytest-config-v2.json)"
     },
     {
       "id": "add-readme-section",
       "edit_summary": "append ## Setup instead of ## Installation",
       "refusal_kind": "predecessor_non_regression",
+      "failing_fixtures": [
+        "add-readme-section"
+      ],
+      "failing_count": 1,
       "backend_used": "container",
       "criteria_diff": "identical",
       "executor_id": "recertia.solver.executor.ContainerExecutor",
@@ -86,12 +111,16 @@
       "date_pt": "2026-10-20",
       "attempts": null,
       "attempts_measured": false,
-      "message": "predecessor non-regression failed for add-readme-section@v2: failing fixtures=['add-readme-section'] (log: /tmp/recertia-t2-prefreeze-2pq0vc6h/promotion_logs/add-readme-section-v2.json)"
+      "message": "predecessor non-regression failed for add-readme-section@v2: failing fixtures=['add-readme-section'] (log: <scratch>/promotion_logs/add-readme-section-v2.json)"
     },
     {
       "id": "bump-action-checkout",
       "edit_summary": "pin actions/checkout to v2 instead of v4",
       "refusal_kind": "predecessor_non_regression",
+      "failing_fixtures": [
+        "bump-action-checkout"
+      ],
+      "failing_count": 1,
       "backend_used": "container",
       "criteria_diff": "identical",
       "executor_id": "recertia.solver.executor.ContainerExecutor",
@@ -99,12 +128,16 @@
       "date_pt": "2026-10-20",
       "attempts": null,
       "attempts_measured": false,
-      "message": "predecessor non-regression failed for bump-action-checkout@v2: failing fixtures=['bump-action-checkout'] (log: /tmp/recertia-t2-prefreeze-2pq0vc6h/promotion_logs/bump-action-checkout-v2.json)"
+      "message": "predecessor non-regression failed for bump-action-checkout@v2: failing fixtures=['bump-action-checkout'] (log: <scratch>/promotion_logs/bump-action-checkout-v2.json)"
     },
     {
       "id": "ensure-src-layout",
       "edit_summary": "create src/other_pkg instead of src/demo_pkg",
       "refusal_kind": "predecessor_non_regression",
+      "failing_fixtures": [
+        "ensure-src-layout"
+      ],
+      "failing_count": 1,
       "backend_used": "container",
       "criteria_diff": "identical",
       "executor_id": "recertia.solver.executor.ContainerExecutor",
@@ -112,12 +145,16 @@
       "date_pt": "2026-10-20",
       "attempts": null,
       "attempts_measured": false,
-      "message": "predecessor non-regression failed for ensure-src-layout@v2: failing fixtures=['ensure-src-layout'] (log: /tmp/recertia-t2-prefreeze-2pq0vc6h/promotion_logs/ensure-src-layout-v2.json)"
+      "message": "predecessor non-regression failed for ensure-src-layout@v2: failing fixtures=['ensure-src-layout'] (log: <scratch>/promotion_logs/ensure-src-layout-v2.json)"
     },
     {
       "id": "pin-python-version",
       "edit_summary": "pin 3.11 instead of 3.12",
       "refusal_kind": "predecessor_non_regression",
+      "failing_fixtures": [
+        "pin-python-version"
+      ],
+      "failing_count": 1,
       "backend_used": "container",
       "criteria_diff": "identical",
       "executor_id": "recertia.solver.executor.ContainerExecutor",
@@ -125,12 +162,16 @@
       "date_pt": "2026-10-20",
       "attempts": null,
       "attempts_measured": false,
-      "message": "predecessor non-regression failed for pin-python-version@v2: failing fixtures=['pin-python-version'] (log: /tmp/recertia-t2-prefreeze-2pq0vc6h/promotion_logs/pin-python-version-v2.json)"
+      "message": "predecessor non-regression failed for pin-python-version@v2: failing fixtures=['pin-python-version'] (log: <scratch>/promotion_logs/pin-python-version-v2.json)"
     },
     {
       "id": "strip-trailing-whitespace",
       "edit_summary": "strip only trailing tabs, leaving trailing spaces",
       "refusal_kind": "predecessor_non_regression",
+      "failing_fixtures": [
+        "strip-trailing-whitespace"
+      ],
+      "failing_count": 1,
       "backend_used": "container",
       "criteria_diff": "identical",
       "executor_id": "recertia.solver.executor.ContainerExecutor",
@@ -138,7 +179,7 @@
       "date_pt": "2026-10-20",
       "attempts": null,
       "attempts_measured": false,
-      "message": "predecessor non-regression failed for strip-trailing-whitespace@v2: failing fixtures=['strip-trailing-whitespace'] (log: /tmp/recertia-t2-prefreeze-2pq0vc6h/promotion_logs/strip-trailing-whitespace-v2.json)"
+      "message": "predecessor non-regression failed for strip-trailing-whitespace@v2: failing fixtures=['strip-trailing-whitespace'] (log: <scratch>/promotion_logs/strip-trailing-whitespace-v2.json)"
     }
   ]
 }
