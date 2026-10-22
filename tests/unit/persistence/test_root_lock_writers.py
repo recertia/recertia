@@ -7,6 +7,7 @@ ADR-0022 baseline (N3 guard).
 from __future__ import annotations
 
 import hashlib
+import os
 import tarfile
 import threading
 import time
@@ -21,7 +22,7 @@ from recertia.graph.persistence import open_run_persistence
 from recertia.ops.backup import BackupError, _exclusive_root_locks, backup_tree, restore_tree
 from recertia.persistence.import_legacy import legacy_import_complete, legacy_sqlite_pending
 from recertia.persistence.layout import RuntimeLayout
-from recertia.persistence.root_lock import RootBusy, TenantLock
+from recertia.persistence.root_lock import RootBusy, RootLock, RootLockBusy, TenantLock
 
 
 def _state(run_id: str) -> RunState:
@@ -1387,11 +1388,14 @@ def test_backup_and_restore_refused_while_a_tenant_holds_its_lock(
     release_a = _hold_tenant(monkeypatch, root, tdir_a, holder)
     try:
         before = {t.name: _run_store_snapshot(t) for t in (tdir_a, tdir_b)}
+        started = time.monotonic()
         with pytest.raises(BackupError, match=f"{action} refused: an open run handle, worker or import"):
             if action == "backup":
                 backup_tree(root, out)
             else:
                 restore_tree(archive, root, overwrite=True)
+        # No wait (``try_exclusive``): well under the 0.3 s import lock bound set above.
+        assert time.monotonic() - started <= 0.1
         assert not out.exists()
         assert {t.name: _run_store_snapshot(t) for t in (tdir_a, tdir_b)} == before
     finally:
@@ -1431,17 +1435,21 @@ def test_queue_worker_claim_runs_while_another_tenant_handle_is_open(
         p.close()
 
 
-def test_tenant_lock_refused_on_the_tenant_lock_holds_nothing(tmp_path: Path) -> None:
+def test_tenant_lock_refused_on_the_tenant_lock_holds_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """``TenantLock``: a refused tenant wait gives the root lock back, waits once within
     the bound (one deadline for both locks), and release frees both for backup."""
-
-    from recertia.persistence.root_lock import RootLockBusy
 
     root = tmp_path / "rt"
     layout = RuntimeLayout(root).tenant("tenant-a")
     layout.runs_root.mkdir(parents=True)
     first = TenantLock(RuntimeLayout(root).root_lock, layout.tenant_lock)
     first.acquire(exclusive=True, timeout_s=0)
+    # #169 N-1 for TenantLock: a refused acquire closes the fds it opened at the OS level
+    # (``_fd is None`` also holds when an fd leaks). Checked right after each refusal,
+    # before a later open can reuse the fd number on the same file.
+    opened = _record_lock_fds(monkeypatch)
     try:
         second = TenantLock(RuntimeLayout(root).root_lock, layout.tenant_lock)
         for exclusive in (True, False):
@@ -1451,19 +1459,26 @@ def test_tenant_lock_refused_on_the_tenant_lock_holds_nothing(tmp_path: Path) ->
             assert time.monotonic() - started <= _JOIN_BOUND_S
             assert second.refused == f"tenant lock is held: {layout.tenant_lock}"
             assert second.root._fd is None and second.tenant._fd is None
+            assert len(opened) >= 2  # the root lock, then each try on the tenant lock
+            assert [fd for fd, st in opened if _still_open(fd, st)] == []
+            opened.clear()
         with pytest.raises(ValueError):
             second.acquire(exclusive=True, timeout_s=None)
         assert second.root._fd is None and second.tenant._fd is None
+        assert opened == []  # refused before opening anything
     finally:
         first.release()
     assert _backup_locks_free(root)
     other = TenantLock(RuntimeLayout(root).root_lock, RuntimeLayout(root).tenant("tenant-b").tenant_lock)
     api_lock, lock = _exclusive_root_locks(root, action="backup")
+    opened.clear()
     try:
         with pytest.raises(RootLockBusy):
             other.acquire(exclusive=False, timeout_s=0)
         assert other.refused == f"root lock is held: {RuntimeLayout(root).root_lock}"
         assert other.root._fd is None and other.tenant._fd is None
+        assert len(opened) == 1  # the root lock only; the tenant lock was never opened
+        assert [fd for fd, st in opened if _still_open(fd, st)] == []
     finally:
         lock.release()
         api_lock.release()
@@ -1496,3 +1511,65 @@ def test_backup_leaves_out_tenant_lock_files_and_restore_skips_them(tmp_path: Pa
     restored = RuntimeLayout(target).tenant("tenant-a").tenant_lock
     assert not restored.exists() or restored.stat().st_size == 0
     _assert_imported_once(target, target / "runs" / "tenant-a")
+
+
+# --- REC-058 follow-up to #169, carrying CTO-rec's review of #170 (SF-1) ---
+
+
+def _record_lock_fds(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, os.stat_result]]:
+    """Record every fd ``RootLock._open`` hands out, with the file it was opened on."""
+
+    opened: list[tuple[int, os.stat_result]] = []
+    original = RootLock._open
+
+    def recording_open(self: RootLock) -> int:
+        fd = original(self)
+        opened.append((fd, os.fstat(fd)))
+        return fd
+
+    monkeypatch.setattr(RootLock, "_open", recording_open)
+    return opened
+
+
+def _still_open(fd: int, opened_on: os.stat_result) -> bool:
+    """True if ``fd`` is still open on the same lock file (a reused fd number is not)."""
+
+    try:
+        now = os.fstat(fd)
+    except OSError:
+        return False
+    return os.path.samestat(now, opened_on)
+
+
+@pytest.mark.parametrize("exclusive", [True, False])
+def test_root_lock_tenant_lock_one_deadline_covers_both_waits(tmp_path: Path, exclusive: bool) -> None:
+    """SF-1: ``TenantLock.acquire(timeout_s=T)`` waits at most ``T`` in total. The root
+    lock is held exclusive for most of ``T`` (backup, released by a timer) and the tenant
+    lock is held throughout, so the tenant wait gets only what is left of ``T``. With a
+    fresh ``T`` for the tenant wait (mutant M7) the call takes about ``T`` + the root wait."""
+
+    root = tmp_path / "rt"
+    layout = RuntimeLayout(root).tenant("tenant-a")
+    layout.runs_root.mkdir(parents=True)
+    root_wait_s, timeout_s = 0.4, 0.6
+    tenant_holder = RootLock(layout.tenant_lock)  # the tenant lock alone, held throughout
+    tenant_holder.try_exclusive()
+    backup = RootLock(RuntimeLayout(root).root_lock)
+    backup.try_exclusive()
+    releaser = threading.Timer(root_wait_s, backup.release)
+    releaser.start()
+    waiter = TenantLock(RuntimeLayout(root).root_lock, layout.tenant_lock)
+    try:
+        started = time.monotonic()
+        with pytest.raises(RootLockBusy):
+            waiter.acquire(exclusive=exclusive, timeout_s=timeout_s)
+        waited = time.monotonic() - started
+    finally:
+        releaser.join(_JOIN_BOUND_S)
+        tenant_holder.release()
+    assert waiter.refused == f"tenant lock is held: {layout.tenant_lock}"  # it got past the root
+    # One deadline: about timeout_s. M7 would be about root_wait_s + timeout_s (1.0 s).
+    assert timeout_s - 0.05 <= waited < timeout_s + 0.25, waited
+    assert waiter.root._fd is None and waiter.tenant._fd is None
+    assert _backup_locks_free(root)
+
