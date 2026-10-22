@@ -8,12 +8,25 @@ from pathlib import Path
 
 from recertia.ports.identity import TenantId, tenant_id
 
+# Per-runs-root lock file name (REC-065). Not ``.lock``: the CLI layout's runs root is
+# the runtime root itself, whose ``.lock`` is the root lock.
+TENANT_LOCK_NAME = ".tenant.lock"
+
 
 @dataclass(frozen=True)
 class RunsRootLayout:
     parent: RuntimeLayout
     tenant: TenantId | None
     runs_root: Path
+
+    @property
+    def tenant_lock(self) -> Path:
+        """This runs root's own lock (REC-065), always taken after ``parent.root_lock``.
+
+        See :class:`recertia.persistence.root_lock.TenantLock` for the lock order.
+        """
+
+        return self.runs_root / TENANT_LOCK_NAME
 
     @property
     def runtime_db(self) -> Path:

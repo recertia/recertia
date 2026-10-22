@@ -1,7 +1,30 @@
-"""Shared/exclusive lock for one runtime root.
+"""Shared/exclusive lock for one runtime root, and per-tenant locks under it.
 
 The API holds a shared lock for its lifetime. Backup and restore take an
 exclusive lock and refuse when the shared lock is already held.
+
+Lock order (REC-065). Every runtime root has one root lock, ``<root>/.lock``,
+and every runs root under it (a tenant's ``<root>/runs/<tenant>``, or the CLI
+layout's root itself) has its own tenant lock, ``<runs_root>/.tenant.lock``.
+Locks are always taken in this order and released in reverse:
+
+1. ``api.lock`` (backup and restore only; the API holds it shared),
+2. the root ``.lock``,
+3. one tenant lock.
+
+- The leftover import takes the root lock SHARED, then its tenant lock
+  EXCLUSIVE, for the length of the import.
+- A run handle (``open_run_persistence``) takes the root lock SHARED, then its
+  tenant lock SHARED, for the life of the handle.
+- Backup and restore take the root lock EXCLUSIVE and no tenant lock. As every
+  tenant holder also holds the root lock shared, that excludes all tenants.
+
+So tenants on one root do not exclude each other, an import still excludes
+every other import and handle of its own tenant, and backup/restore still
+exclude every tenant. Nothing holds a tenant lock without the root lock, and
+nothing waits for the root lock while holding a tenant lock, so the order has
+no cycle. A tenant lock waits within the same bound as the root lock
+(:class:`TenantLock`).
 
 The lock file is a flock target only. It must not record pid/tid identity:
 a SIGKILLed holder leaves an empty file, and leftover text is never treated
@@ -141,8 +164,9 @@ class RootBusy(RootLockBusy):
     """Typed busy error: an open timed out waiting for the root lock.
 
     Raised by the leftover import and by ``open_run_persistence`` on an
-    already-imported root while another holder (backup, restore, an import)
-    has the exclusive lock.
+    already-imported root while another holder has an exclusive lock they need:
+    backup or restore (the root lock), or an import of the same tenant (its
+    tenant lock). An import also gets it while a handle of its own tenant is open.
 
     Callers must not write somewhere else. A generic ``Exception`` or a hang is
     not this error.
@@ -255,6 +279,63 @@ class RootLock:
             raise RuntimeError(f"root lock already held: {self.path}")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         return os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+
+
+class TenantLock:
+    """The root lock (always shared), then one tenant lock, in that order (REC-065).
+
+    ``acquire(exclusive=True)`` is the leftover import; ``exclusive=False`` is a
+    run handle. Backup and restore take the root lock exclusively instead, which
+    any holder of this lock keeps out. See the module docstring for the order.
+    """
+
+    def __init__(self, root_lock: Path, tenant_lock: Path) -> None:
+        self.root = RootLock(root_lock)
+        self.tenant = RootLock(tenant_lock)
+        # After a refused ``acquire``: which lock was held, for the caller's RootBusy.
+        self.refused = ""
+
+    @property
+    def path(self) -> Path:
+        return self.tenant.path
+
+    def acquire(self, *, exclusive: bool, timeout_s: float | None) -> None:
+        """Root lock shared, then the tenant lock. Raises ``RootLockBusy`` from either.
+
+        With a ``timeout_s`` both waits share one deadline, so the whole call
+        waits at most ``timeout_s``. ``None`` blocks on each lock like
+        ``RootLock.acquire_shared`` (shared only: an exclusive tenant lock is
+        always bounded). On a refusal nothing is held.
+        """
+
+        if exclusive and timeout_s is None:
+            raise ValueError("an exclusive tenant lock needs a timeout")
+        deadline = None if timeout_s is None else time.monotonic() + max(0.0, timeout_s)
+        self.refused = ""
+        try:
+            self.root.acquire_shared(timeout_s=timeout_s)
+        except RootLockBusy:
+            self.refused = f"root lock is held: {self.root.path}"
+            raise
+        try:
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            if exclusive:
+                self.tenant.acquire_exclusive(timeout_s=remaining)
+            else:
+                self.tenant.acquire_shared(timeout_s=remaining)
+        except BaseException as exc:
+            if isinstance(exc, RootLockBusy):
+                self.refused = f"tenant lock is held: {self.tenant.path}"
+            self.root.release()
+            raise
+
+    def release(self) -> None:
+        """Tenant lock first, then the root lock (the reverse of ``acquire``)."""
+
+        try:
+            self.tenant.release()
+        finally:
+            self.root.release()
 
 
 def _lock_shared(fd: int) -> None:
