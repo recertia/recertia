@@ -26,7 +26,7 @@ from recertia.ops.backup import BackupError, backup_tree, restore_tree, verify_a
 from recertia.persistence.layout import RuntimeLayout
 from recertia.persistence.root_lock import RootBusy, RootLock, RootLockBusy
 
-pytestmark = [pytest.mark.windows, pytest.mark.skipif(sys.platform != 'win32', reason='real Windows only')]
+pytestmark = [pytest.mark.windows, pytest.mark.skipif(sys.platform != "win32", reason="real Windows only")]
 
 _BOUND_S = 5.0
 _ERROR_NOT_LOCKED = 158

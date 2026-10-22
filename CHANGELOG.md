@@ -300,9 +300,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails when its minimum is below 1 or not an integer, and on success prints a
   `guard: {...}` summary. Markers are now strict (`addopts = ["--strict-markers"]`), and
   so are xfails (`xfail_strict = true`: an unexpected pass fails), and the
-  Linux `ci` job's pytest prints skip reasons (`-rs`). It has a read-only token, no secrets, `checkout`
-  with `persist-credentials: false`, and actions pinned to the same SHAs as
-  `weekly-ops.yml`. The `ci` job and the required check are unchanged.
+  Linux `ci` job's pytest prints skip reasons (`-rs`). It has a read-only token, no
+  secrets, `checkout` with `persist-credentials: false`, and actions pinned to the same
+  SHAs as `weekly-ops.yml`. The `ci` job and the required check are unchanged.
 
 - **REC-011 C1 part 1 run resolution** — `EvalStore.append_run` records
   `resolution` (`decided` | `unresolved` | `invalid`), `exit_code`, and
