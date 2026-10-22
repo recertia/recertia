@@ -408,7 +408,7 @@ def test_cross_process_tenant_import_makes_a_same_tenant_open_root_busy(
         p.close()
 
 
-# --- round 5 (CTO-rec review of #169): N-1 the refused handle is closed, N-3 non-busy errors ---
+# --- review of #169: N-1 the refused handle is closed, N-3 non-busy errors ---
 
 
 def _record_lock_fds(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, os.stat_result]]:

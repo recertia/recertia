@@ -177,8 +177,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Windows raised an untyped `PermissionError` (errno 13), so the bounded wait was zero.
     The lock file stays empty, and a failed `UnlockFileEx` is reported.
   - API startup on Windows (#168, #169): `create_app` takes `api.lock` shared through
-    `LockFileEx`, so several API processes on one root start. With `msvcrt.locking` that
-    lock was exclusive, and a second API process failed after 10 s with an untyped
+    `LockFileEx`, so several API processes on one root can start. With `msvcrt.locking`
+    that lock was exclusive, and a second API process failed after 10 s with an untyped
     `OSError`. While backup or restore holds `api.lock`, startup now waits out the 10 s
     budget and raises typed `RootLockBusy`. `api.lock` stays empty (no `\0` byte).
   - Backup no longer archives the root's `.lock` and `api.lock`, and restore does not
