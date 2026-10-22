@@ -12,11 +12,24 @@ from recertia.ports.identity import TenantId
 
 
 class CheckpointReader:
-    """Latest checkpoint, history, and AuditedTaskState. Does not write."""
+    """Latest checkpoint, history, and AuditedTaskState. Does not write.
 
-    def latest(self, tenant: TenantId | str, run_id: str, *, runs_root: Path) -> Any | None:
+    The API reads ``<root>/runs/<tenant>`` and passes ``runtime_root=<root>``, so
+    the handle locks ``<root>/.lock`` like workers, backup and restore. Without it
+    the handle locks ``<root>/runs/<tenant>/.lock``, and a leftover import it runs
+    does not exclude a worker's import on the same tenant (REC-058).
+    """
+
+    def latest(
+        self,
+        tenant: TenantId | str,
+        run_id: str,
+        *,
+        runs_root: Path,
+        runtime_root: Path | None = None,
+    ) -> Any | None:
         del tenant
-        persistence = open_run_persistence(runs_root)
+        persistence = open_run_persistence(runs_root, runtime_root=runtime_root)
         try:
             row = persistence.checkpoints.latest(run_id)
             if row is None:
@@ -26,20 +39,30 @@ class CheckpointReader:
             persistence.close()
 
     def latest_row(
-        self, tenant: TenantId | str, run_id: str, *, runs_root: Path
+        self,
+        tenant: TenantId | str,
+        run_id: str,
+        *,
+        runs_root: Path,
+        runtime_root: Path | None = None,
     ) -> tuple[int, str, str | None, Any] | None:
         del tenant
-        persistence = open_run_persistence(runs_root)
+        persistence = open_run_persistence(runs_root, runtime_root=runtime_root)
         try:
             return persistence.checkpoints.latest(run_id)
         finally:
             persistence.close()
 
     def history(
-        self, tenant: TenantId | str, run_id: str, *, runs_root: Path
+        self,
+        tenant: TenantId | str,
+        run_id: str,
+        *,
+        runs_root: Path,
+        runtime_root: Path | None = None,
     ) -> list[tuple[int, str, str | None]]:
         del tenant
-        persistence = open_run_persistence(runs_root)
+        persistence = open_run_persistence(runs_root, runtime_root=runtime_root)
         try:
             rows = persistence.checkpoints.history(run_id)
             return [(seq, node, nxt) for seq, node, nxt, _state in rows]
@@ -47,10 +70,15 @@ class CheckpointReader:
             persistence.close()
 
     def audited_state(
-        self, tenant: TenantId | str, run_id: str, *, runs_root: Path
+        self,
+        tenant: TenantId | str,
+        run_id: str,
+        *,
+        runs_root: Path,
+        runtime_root: Path | None = None,
     ) -> Mapping[str, object] | None:
         del tenant
-        persistence = open_run_persistence(runs_root)
+        persistence = open_run_persistence(runs_root, runtime_root=runtime_root)
         try:
             state = persistence.audited_states.load(run_id)
         finally:

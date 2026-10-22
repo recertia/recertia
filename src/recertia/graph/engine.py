@@ -108,10 +108,17 @@ class GraphOrchestrator:
         hooks: Sequence[HopHook] | None = None,
         state_hops: Sequence[StateHop] | None = None,
         capability_warn: bool = False,
+        runtime_root: Path | str | None = None,
     ) -> None:
         self.runs_root = Path(runs_root)
         self.runs_root.mkdir(parents=True, exist_ok=True)
-        self.persistence = persistence if persistence is not None else open_run_persistence(self.runs_root)
+        # runtime_root: see open_run_persistence. A tenant runs dir under a runtime
+        # root locks <runtime_root>/.lock, like workers, backup and restore (REC-058).
+        self.persistence = (
+            persistence
+            if persistence is not None
+            else open_run_persistence(self.runs_root, runtime_root=runtime_root)
+        )
         try:
             self.checkpoints = self.persistence.checkpoints
             self.ops = self.persistence.operations

@@ -532,7 +532,8 @@ def _record_from_state(
 
 
 def _load_from_checkpoints(root: Path, tenant_id: str, run_id: str) -> RunRecord | None:
-    orch = GraphOrchestrator(root / "runs" / tenant_id)
+    # runtime_root: lock <root>/.lock like workers, backup and restore (REC-058).
+    orch = GraphOrchestrator(root / "runs" / tenant_id, runtime_root=root)
     try:
         latest = orch.checkpoints.latest(run_id)
         if latest is None:

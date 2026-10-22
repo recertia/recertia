@@ -565,3 +565,199 @@ def test_cross_tenant_pending_import_is_root_busy_while_other_tenant_handle_open
         assert pa.checkpoints.list_run_ids() == ["a-run"]
     finally:
         pa.close()
+
+
+# --- MF-A (round 3): API-process run handles lock <root>/.lock like workers ---
+
+
+def _tenant_pending(root: Path, tenant: str, run_id: str) -> Path:
+    """``<root>/runs/<tenant>`` with leftover seqs 1-2 not yet imported."""
+
+    tdir = root / "runs" / tenant
+    _pending_root(tdir, run_id)
+    return tdir
+
+
+def _gate_import(monkeypatch: pytest.MonkeyPatch, *, hold_s: float | None = None) -> dict[str, object]:
+    """Wrap ``_import_under_lock``: count overlapping entries; the first one waits.
+
+    With ``hold_s`` every entry sleeps that long. Otherwise the first entry waits on
+    ``gate["release"]`` (bounded by ``_JOIN_BOUND_S``) after setting ``gate["inside"]``.
+    """
+
+    import recertia.persistence.import_legacy as il
+
+    real = il._import_under_lock
+    guard = threading.Lock()
+    gate: dict[str, object] = {
+        "inside": threading.Event(),
+        "release": threading.Event(),
+        "active": 0,
+        "max_active": 0,
+        "entries": 0,
+    }
+
+    def gated(layout: object) -> bool:
+        with guard:
+            gate["entries"] = int(gate["entries"]) + 1  # type: ignore[call-overload]
+            first = gate["entries"] == 1
+            gate["active"] = int(gate["active"]) + 1  # type: ignore[call-overload]
+            gate["max_active"] = max(int(gate["max_active"]), int(gate["active"]))  # type: ignore[call-overload]
+        try:
+            if hold_s is not None:
+                time.sleep(hold_s)
+            elif first:
+                gate["inside"].set()  # type: ignore[attr-defined]
+                gate["release"].wait(_JOIN_BOUND_S)  # type: ignore[attr-defined]
+            return real(layout)  # type: ignore[arg-type]
+        finally:
+            with guard:
+                gate["active"] = int(gate["active"]) - 1  # type: ignore[call-overload]
+
+    monkeypatch.setattr(il, "_import_under_lock", gated)
+    return gate
+
+
+def _in_thread(fn: object) -> tuple[threading.Thread, dict[str, object]]:
+    box: dict[str, object] = {}
+
+    def run() -> None:
+        try:
+            box["result"] = fn()  # type: ignore[operator]
+        except BaseException as exc:  # noqa: BLE001
+            box["error"] = exc
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread, box
+
+
+def _worker_shaped_open(root: Path, tdir: Path) -> list[tuple[int, str]]:
+    p = open_run_persistence(tdir, runtime_root=root)
+    try:
+        return _hist(p, "r")
+    finally:
+        p.close()
+
+
+def _assert_imported_once(root: Path, tdir: Path) -> None:
+    layout = RuntimeLayout(root).tenant(tdir.name)
+    assert legacy_import_complete(layout.runtime_db)
+    assert _worker_shaped_open(root, tdir) == [(1, "n1"), (2, "n2")]
+
+
+def test_worker_import_is_root_busy_while_api_reader_imports_same_tenant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """API ``_load_from_checkpoints`` holds the import lock; a worker open must wait it out."""
+
+    from recertia.api import _load_from_checkpoints
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.3")
+    root = tmp_path / "rt"
+    tdir = _tenant_pending(root, "acme", "r")
+    gate = _gate_import(monkeypatch)
+    api, box = _in_thread(lambda: _load_from_checkpoints(root, "acme", "r"))
+    try:
+        assert gate["inside"].wait(_JOIN_BOUND_S)  # type: ignore[attr-defined]
+        with pytest.raises(RootBusy):
+            _worker_shaped_open(root, tdir)
+    finally:
+        gate["release"].set()  # type: ignore[attr-defined]
+        api.join(_JOIN_BOUND_S)
+    assert not api.is_alive()
+    assert "error" not in box, box
+    assert getattr(box["result"], "run_id", None) == "r"
+    assert gate["max_active"] == 1
+    _assert_imported_once(root, tdir)
+
+
+def test_api_reader_import_is_root_busy_while_worker_imports_same_tenant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reverse: a worker import holds the lock; the API's open raises typed RootBusy."""
+
+    from recertia.api import _load_from_checkpoints
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.3")
+    root = tmp_path / "rt"
+    tdir = _tenant_pending(root, "acme", "r")
+    gate = _gate_import(monkeypatch)
+    worker, box = _in_thread(lambda: _worker_shaped_open(root, tdir))
+    try:
+        assert gate["inside"].wait(_JOIN_BOUND_S)  # type: ignore[attr-defined]
+        with pytest.raises(RootBusy):
+            _load_from_checkpoints(root, "acme", "r")
+    finally:
+        gate["release"].set()  # type: ignore[attr-defined]
+        worker.join(_JOIN_BOUND_S)
+    assert not worker.is_alive()
+    assert box.get("result") == [(1, "n1"), (2, "n2")], box
+    assert gate["max_active"] == 1
+    _assert_imported_once(root, tdir)
+
+
+def test_concurrent_api_and_worker_imports_on_one_tenant_exclude_each_other(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both start at once. Before MF-A both entered the import, and one could raise
+    ``sqlite3.IntegrityError`` (schema_migrations.version). Now one imports and the
+    other gets typed ``RootBusy`` or finds the import done."""
+
+    from recertia.api import _load_from_checkpoints
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.2")
+    root = tmp_path / "rt"
+    tdir = _tenant_pending(root, "acme", "r")
+    gate = _gate_import(monkeypatch, hold_s=0.6)
+    start = threading.Barrier(2)
+
+    def after_barrier(fn: object) -> object:
+        start.wait(_JOIN_BOUND_S)
+        return fn()  # type: ignore[operator]
+
+    api, api_box = _in_thread(lambda: after_barrier(lambda: _load_from_checkpoints(root, "acme", "r")))
+    worker, worker_box = _in_thread(lambda: after_barrier(lambda: _worker_shaped_open(root, tdir)))
+    for thread in (api, worker):
+        thread.join(_JOIN_BOUND_S * 2)
+        assert not thread.is_alive()
+    boxes = {"api": api_box, "worker": worker_box}
+    errors = {name: box["error"] for name, box in boxes.items() if "error" in box}
+    assert all(isinstance(exc, RootBusy) for exc in errors.values()), errors
+    assert len(errors) < 2, errors  # one of them imported
+    assert gate["max_active"] == 1, gate
+    assert gate["entries"] == 1, gate
+    _assert_imported_once(root, tdir)
+
+
+def test_api_transcript_route_takes_the_runtime_root_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``GET /v1/runs/{id}/transcript`` on a pending tenant, while a worker-shaped holder has
+    ``<root>/.lock``, raises typed RootBusy and imports nothing."""
+
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from recertia.api import create_app
+    from recertia.persistence.root_lock import RootLock
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    root = tmp_path / "rt"
+    tdir = _tenant_pending(root, "t1", "r")
+    app = create_app(root=root)
+    issued = app.state.api_keys.issue(tenant_id="t1", scopes={"runs"}, actor="test")
+    client = TestClient(app)
+    before = _run_store_snapshot(tdir)
+    held = RootLock(RuntimeLayout(root).root_lock)
+    held.try_exclusive()  # what a worker-shaped import (or backup) holds
+    try:
+        with pytest.raises(RootBusy):
+            client.get("/v1/runs/r/transcript", headers={"X-API-Key": issued.secret})
+        assert _run_store_snapshot(tdir) == before
+        assert legacy_sqlite_pending(RuntimeLayout(root).tenant("t1"))
+    finally:
+        held.release()
+    ok = client.get("/v1/runs/r/transcript", headers={"X-API-Key": issued.secret})
+    assert ok.status_code == 200, ok.text
+    _assert_imported_once(root, tdir)

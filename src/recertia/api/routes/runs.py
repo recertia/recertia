@@ -147,7 +147,10 @@ def register_runs_routes(app: FastAPI, rs: RouteState) -> None:
         run_id = ctx.validate_run_id(run_id)
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         latest = ctx.checkpoint_reader.latest_row(
-            tenant_id, run_id, runs_root=ctx.tenant_runs_root(tenant_id)
+            tenant_id,
+            run_id,
+            runs_root=ctx.tenant_runs_root(tenant_id),
+            runtime_root=ctx.root,
         )
         if latest is None:
             raise HTTPException(status_code=404, detail="run not found")
