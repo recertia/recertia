@@ -162,3 +162,121 @@ def test_windows_two_run_handles_share_a_root_and_backup_is_refused(
         lock.release()
         api_lock.release()
     assert kernel32.held == {}
+
+
+# --- round 3: busy mapping, no _win_prepare, UnlockFileEx result ---
+
+
+def _oserror(code: int, winerror: int | None = None) -> OSError:
+    exc = OSError(code, os.strerror(code))
+    if winerror is not None:
+        exc.winerror = winerror  # type: ignore[attr-defined]
+    return exc
+
+
+_EDEADLOCK = getattr(errno, "EDEADLOCK", errno.EDEADLK)
+
+
+@pytest.mark.parametrize(
+    ("exc", "busy"),
+    [
+        (_oserror(errno.EACCES, 33), True),  # LockFileEx ERROR_LOCK_VIOLATION as WinError(33)
+        (_oserror(errno.EIO, 33), True),
+        (_oserror(errno.EACCES), True),  # msvcrt LK_NBLCK contention: errno only
+        (_oserror(_EDEADLOCK), True),  # msvcrt LK_LOCK after 10 retries: errno only
+        (_oserror(errno.EACCES, 5), False),  # ERROR_ACCESS_DENIED keeps its winerror
+        (_oserror(errno.EINVAL, 87), False),  # ERROR_INVALID_PARAMETER
+        (_oserror(errno.EIO, 36), False),  # ERROR_SHARING_BUFFER_EXCEEDED is not a conflict
+        (_oserror(errno.EAGAIN), False),
+        (_oserror(errno.ENOENT), False),
+    ],
+)
+def test_windows_busy_mapping(monkeypatch: pytest.MonkeyPatch, exc: OSError, busy: bool) -> None:
+    monkeypatch.setattr(root_lock, "_IS_WINDOWS", True)
+    assert root_lock._is_busy(exc) is busy
+
+
+@pytest.mark.parametrize(
+    ("code", "busy"),
+    [
+        (errno.EAGAIN, True),
+        (errno.EWOULDBLOCK, True),
+        (errno.EACCES, True),  # fcntl/lockf may report a conflict as EACCES
+        (errno.EDEADLK, False),
+        (errno.EIO, False),
+        (errno.EBADF, False),
+    ],
+)
+def test_posix_busy_mapping(monkeypatch: pytest.MonkeyPatch, code: int, busy: bool) -> None:
+    monkeypatch.setattr(root_lock, "_IS_WINDOWS", False)
+    assert root_lock._is_busy(_oserror(code)) is busy
+
+
+def test_permission_denied_on_open_is_not_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the lock call maps to busy; an EACCES from ``os.open`` propagates as is."""
+
+    def denied(*args: object, **kwargs: object) -> int:
+        raise PermissionError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(root_lock.os, "open", denied)
+    for windows in (True, False):
+        monkeypatch.setattr(root_lock, "_IS_WINDOWS", windows)
+        lock = RootLock(tmp_path / ".lock")
+        with pytest.raises(PermissionError) as info:
+            lock.try_exclusive()
+        assert not isinstance(info.value, RootLockBusy)
+        with pytest.raises(PermissionError):
+            lock.acquire_shared(timeout_s=0.05)
+
+
+def test_windows_lock_file_stays_empty(tmp_path: Path, kernel32: FakeKernel32) -> None:
+    """No ``_win_prepare`` byte: LockFileEx may lock past end-of-file, and an empty file
+    has no locked byte for backup's read to trip over."""
+
+    path = tmp_path / ".lock"
+    a, b = RootLock(path), RootLock(path)
+    a.acquire_shared(timeout_s=0.1)
+    b.acquire_shared(timeout_s=0.1)
+    assert path.stat().st_size == 0
+    a.release()
+    b.release()
+    ex = RootLock(path)
+    ex.try_exclusive()
+    assert path.stat().st_size == 0
+    ex.release()
+
+
+def test_windows_lockfileex_error_other_than_33_keeps_its_winerror(
+    tmp_path: Path, kernel32: FakeKernel32, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing_lock(handle: int, flags: int) -> bool:
+        kernel32._last_error = 87  # ERROR_INVALID_PARAMETER
+        return False
+
+    monkeypatch.setattr(kernel32, "lock", failing_lock)
+    lock = RootLock(tmp_path / ".lock")
+    with pytest.raises(OSError) as info:
+        lock.try_exclusive()
+    assert not isinstance(info.value, RootLockBusy)
+    assert getattr(info.value, "winerror", None) == 87
+
+
+def test_windows_unlock_failure_is_reported_and_the_handle_still_closes(
+    tmp_path: Path, kernel32: FakeKernel32, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = RootLock(tmp_path / ".lock")
+    lock.try_exclusive()
+    fd = lock._fd
+    assert fd is not None
+
+    def failing_unlock(handle: int) -> bool:
+        kernel32._last_error = 158  # ERROR_NOT_LOCKED
+        return False
+
+    monkeypatch.setattr(kernel32, "unlock", failing_unlock)
+    with pytest.raises(OSError) as info:
+        lock.release()
+    assert getattr(info.value, "winerror", None) == 158
+    assert lock._fd is None
+    with pytest.raises(OSError):
+        os.fstat(fd)  # closed, so the OS drops the lock with the handle

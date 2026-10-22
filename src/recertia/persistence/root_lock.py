@@ -8,8 +8,10 @@ a SIGKILLed holder leaves an empty file, and leftover text is never treated
 as holding the lock.
 
 On Windows the same shared/exclusive modes use ``LockFileEx`` on byte 0
-(``msvcrt.locking`` has no shared mode). Blocking calls keep the old
-``msvcrt`` budget: they retry for ``_WIN_BLOCKING_RETRY_S`` and then raise.
+(``msvcrt.locking`` has no shared mode: its ``LK_LOCK`` is an exclusive byte
+lock). Locking past end-of-file is allowed, so the lock file stays empty.
+Blocking calls keep the old ``msvcrt`` budget: they retry for
+``_WIN_BLOCKING_RETRY_S`` and then raise.
 """
 
 from __future__ import annotations
@@ -91,6 +93,10 @@ if sys.platform == "win32":
         def last_error(self) -> int:
             return int(ctypes.get_last_error())
 
+    def _win_error(code: int, what: str) -> OSError:
+        del what
+        return ctypes.WinError(code)  # keeps .winerror
+
     _LOCK_SH = _LOCK_EX = _LOCK_NB = _LOCK_UN = 0
 
     def _flock(fd: int, op: int) -> None:
@@ -102,6 +108,12 @@ else:
 
     def _flock(fd: int, op: int) -> None:
         fcntl.flock(fd, op)
+
+    def _win_error(code: int, what: str) -> OSError:
+        # Only reached through the fake kernel32 in tests; real Windows uses ctypes.WinError.
+        exc = OSError(errno.EIO, f"{what} failed (winerror {code})")
+        exc.winerror = code  # type: ignore[attr-defined]
+        return exc
 
 _WIN_API: _WinLockApi | None = None
 
@@ -268,7 +280,9 @@ def _lock_exclusive(fd: int) -> None:
 def _unlock(fd: int) -> None:
     if _IS_WINDOWS:
         api = _win_api()
-        api.unlock(api.handle(fd))
+        if not api.unlock(api.handle(fd)):
+            # The caller still closes the handle, which drops the lock; report why.
+            raise _win_error(api.last_error(), "UnlockFileEx")
         return
     _flock(fd, _LOCK_UN)
 
@@ -276,7 +290,6 @@ def _unlock(fd: int) -> None:
 def _win_lock(fd: int, *, exclusive: bool, blocking: bool) -> None:
     """``LockFileEx`` on byte 0, always fail-immediately; blocking retries within a budget."""
 
-    _win_prepare(fd)
     api = _win_api()
     handle = api.handle(fd)
     flags = _LOCKFILE_FAIL_IMMEDIATELY | (_LOCKFILE_EXCLUSIVE_LOCK if exclusive else 0)
@@ -286,7 +299,7 @@ def _win_lock(fd: int, *, exclusive: bool, blocking: bool) -> None:
             return
         err = api.last_error()
         if err != _ERROR_LOCK_VIOLATION:
-            raise OSError(errno.EIO, f"LockFileEx failed (winerror {err})")
+            raise _win_error(err, "LockFileEx")  # not busy: keeps its winerror
         if not blocking:
             raise BlockingIOError(errno.EAGAIN, "root lock held (LockFileEx)")
         if time.monotonic() >= deadline:
@@ -294,11 +307,29 @@ def _win_lock(fd: int, *, exclusive: bool, blocking: bool) -> None:
         time.sleep(0.05)
 
 
-def _win_prepare(fd: int) -> None:
-    if os.fstat(fd).st_size == 0:
-        os.write(fd, b"\0")
-        os.lseek(fd, 0, os.SEEK_SET)
+_WIN_BUSY_ERRNOS = frozenset({errno.EACCES, getattr(errno, "EDEADLOCK", errno.EDEADLK)})
+_POSIX_BUSY_ERRNOS = frozenset({errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES})
 
 
 def _is_busy(exc: OSError) -> bool:
-    return getattr(exc, "winerror", None) in {33, 36} or exc.errno in {11, 35}
+    """True when an error raised by a lock call means "held by someone else".
+
+    Only lock-call errors reach this; ``_open`` is outside the ``try``, so an
+    ``EACCES`` from ``os.open`` is never read as busy.
+
+    - Windows: ``winerror`` 33 (``ERROR_LOCK_VIOLATION``, from ``LockFileEx``).
+      An error with any other ``winerror`` is not busy and propagates with it
+      (``ctypes.WinError`` maps e.g. ``ERROR_ACCESS_DENIED`` to ``EACCES``, which
+      must not read as busy). An errno-only error (``msvcrt.locking`` sets no
+      ``winerror``) is busy for ``EACCES`` (``LK_NBLCK`` contention) or
+      ``EDEADLOCK`` (``LK_LOCK`` after its 10 retries).
+    - POSIX: ``EAGAIN`` / ``EWOULDBLOCK`` / ``EACCES`` (``fcntl``/``lockf`` may
+      report a conflict as ``EACCES``).
+    """
+
+    if _IS_WINDOWS:
+        winerror = getattr(exc, "winerror", None)
+        if winerror is not None:
+            return bool(winerror == _ERROR_LOCK_VIOLATION)
+        return exc.errno in _WIN_BUSY_ERRNOS
+    return exc.errno in _POSIX_BUSY_ERRNOS
