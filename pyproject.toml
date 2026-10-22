@@ -66,6 +66,12 @@ timeout_method = "signal"
 # Native watchdog: dumps every thread's stack when a test runs past 60s even if the
 # main thread is blocked in C, where the signal method's handler cannot run (REC-017).
 faulthandler_timeout = 60
+# REC-017 (#96): the fork-with-threads DeprecationWarning as an error. CPython 3.12
+# clears a warning raised by os.fork() (the fork still succeeds), so under this filter
+# such a fork is silent rather than failing; see CHANGELOG.
+filterwarnings = [
+    "error:This process \\(pid=.*\\) is multi-threaded, use of fork\\(\\) may lead to deadlocks in the child.:DeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 110
