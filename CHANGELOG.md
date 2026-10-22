@@ -294,9 +294,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/unit/persistence/test_root_lock_*.py` file is picked up by name. A new `windows`
   pytest marker labels tests that need real Windows; a second step runs
   `pytest tests/unit/persistence -m windows` with its own minimum
-  (`WINDOWS_MARKED_MIN_PASSED`, 13), so a marked test outside the `root_lock` name
+  (`WINDOWS_MARKED_MIN_PASSED`, 14), so a marked test outside the `root_lock` name
   selection still runs. The job fails on any failed, errored or skipped test (xfail
-  included) in either step, on fewer passes than `ROOT_LOCK_MIN_PASSED` (67) or
+  included) in either step, on fewer passes than `ROOT_LOCK_MIN_PASSED` (73) or
   `WINDOWS_MARKED_MIN_PASSED`, and on a missing or empty JUnit report. Each guard also
   fails when its minimum is below 1 or not an integer, and on success prints a
   `guard: {...}` summary. Markers are now strict (`addopts = ["--strict-markers"]`), and
