@@ -58,6 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **pytest floor (REC-049)** — `tests/unit/test_faulthandler_backstop.py` reads the
+  `faulthandler_exit_on_timeout` ini option with `getini()`, and pytest added that option in
+  9.0.0. The `pytest>=8` floor let the nightly `import-all (py3.11 lowest)` job install
+  pytest 8.0.0, where the call raises `ValueError: unknown configuration value`. The dev
+  floor is now `pytest>=9.0`. No other floor changes.
+
 - **Nightly lowest-deps install (REC-048)** — `import-all (py3.11 lowest)` pins every
   direct dependency at its `pyproject.toml` floor, and the `pytest-timeout>=2.3.0` floor
   from #112 named a version that was never uploaded to PyPI (2.3.1 was the first 2.3.x
