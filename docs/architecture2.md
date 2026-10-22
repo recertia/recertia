@@ -1311,15 +1311,21 @@ opt in.
 Cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` except in `dev`. The session
 token is not returned in JSON and is not stored in `localStorage`.
 
-Pending OIDC login starts are unauthenticated, so they are capped in process: at most 1024
-in total and 16 per client, where the client is the peer address the login route sees
-(`request.client.host`). A client past its limit loses its own oldest start. When the map
-is full, the client holding the most starts loses its oldest, so one client's flood cannot
-evict or block another client's login. The app does not read `X-Forwarded-For`. Behind a
-reverse proxy, start uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy addresses>`
-so the server rewrites the peer address from the proxy's header; otherwise every user
-behind the proxy shares one client limit. Telemetry keeps the newest 1024 spans and 1024
-events in memory; exporters still receive every record.
+Pending OIDC login starts are unauthenticated, so they are capped in process: 16 per
+client, and 1024 in total as a backstop. A client past its limit loses its own oldest
+start, so one client's flood cannot evict or block another client's login. When the whole
+table is full, the oldest pending start is evicted and the new login is still accepted.
+
+The client is the socket peer address. `X-Forwarded-For` is read only when the peer is
+inside `RECERTIA_TRUSTED_PROXIES` (comma-separated CIDRs, empty by default); then the
+client is the rightmost hop that is not itself a trusted proxy. A malformed hop, or a chain
+made only of trusted proxies, falls back to the peer. `Forwarded` is never read. Behind a
+reverse proxy, list it in `RECERTIA_TRUSTED_PROXIES` and start uvicorn with
+`--no-proxy-headers`, so the app sees the real socket peer and does the forwarded-header
+handling itself. Without the setting, every user behind the proxy shares one client limit.
+
+Telemetry keeps the newest 1024 spans and 1024 events in memory; exporters still receive
+every record.
 
 Promote and improvement jobs require the `promote` / `jobs` API-key scopes (or
 `admin`), or a console reviewer session. A `runs` key cannot approve skills.

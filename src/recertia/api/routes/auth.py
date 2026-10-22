@@ -14,8 +14,10 @@ from recertia.api.console_auth import (
     dev_admin_enabled,
     dev_login_enabled,
     oidc_authorize_url,
+    oidc_client_key,
     oidc_configured,
     oidc_exchange_code,
+    parse_trusted_proxies,
     pkce_challenge,
     session_cookie_kwargs,
 )
@@ -59,6 +61,7 @@ def register_auth_routes(app: FastAPI, rs: RouteState) -> None:
     _resolve_tenant = rs.resolve_tenant
     _require_library_write = rs.require_library_write
     _public_user = rs.public_user
+    trusted_proxies = parse_trusted_proxies(getattr(ctx.settings, "trusted_proxies", ()))
 
     @app.get("/v1/me")
     def me(request: Request) -> dict[str, Any]:
@@ -134,10 +137,13 @@ def register_auth_routes(app: FastAPI, rs: RouteState) -> None:
         if auth_mode() != "oidc" or not oidc_configured():
             raise HTTPException(status_code=404, detail="oidc not configured")
         redirect = str(request.url_for("oidc_callback"))
-        # Client key for the per-client pending cap (REC-056a): the ASGI peer address only.
-        # Forwarded-for headers are never read here; behind a reverse proxy, run uvicorn with
-        # --proxy-headers --forwarded-allow-ips=<proxy ips> so the server rewrites the peer.
-        client_key = request.client.host if request.client else "unknown"
+        # Client key for the per-client pending cap (REC-056a): the socket peer, or the
+        # rightmost untrusted X-Forwarded-For hop when the peer is a trusted proxy.
+        client_key = oidc_client_key(
+            request.client.host if request.client else None,
+            request.headers.getlist("x-forwarded-for"),
+            trusted_proxies,
+        )
         state, verifier, nonce = ctx.sessions.begin_oidc(redirect_uri=redirect, client_key=client_key)
         return {
             "authorize_url": oidc_authorize_url(

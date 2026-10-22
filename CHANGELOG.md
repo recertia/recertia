@@ -11,13 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **In-process buffer caps (REC-056a, #131)** — `Telemetry.spans` and `Telemetry.events` are
   now bounded deques (`maxlen=1024`) that drop the oldest entry first. The pending OIDC
-  login map is capped at 1024 starts in total and 16 per client. A client is the peer
-  address `GET /v1/auth/oidc/login` sees (`request.client.host`); `SessionStore.begin_oidc`
-  takes a new `client_key` argument. Past its limit a client loses its own oldest start, and
-  a full map evicts the oldest start of the client holding the most, so one client's flood
-  cannot evict or block another client's pending login. The app never reads
-  `X-Forwarded-For`; run uvicorn with `--proxy-headers --forwarded-allow-ips` behind a
-  trusted proxy.
+  login map is capped at 16 starts per client, and at 1024 in total as a backstop.
+  `SessionStore.begin_oidc` takes a new `client_key` argument. Past its limit a client
+  loses its own oldest start, so one client's flood cannot evict or block another client's
+  pending login. A full table evicts the oldest start and still accepts the new login. The
+  client is the socket peer. The new `RECERTIA_TRUSTED_PROXIES` setting (`trusted_proxies`,
+  comma-separated CIDRs, empty by default) lets the login route read `X-Forwarded-For` only
+  from a peer inside those networks, taking the rightmost hop that is not a trusted proxy.
+  Malformed or all-proxy chains fall back to the peer, and `Forwarded` is never read.
 - **Gap A fixture-id leak (REC-009)** — a golden-gate refusal is now decision-only for
   proposers. `PromotionError` carries `refusal_kind` (`golden_gate` |
   `predecessor_non_regression` | `gate_error` | `audit_unavailable`), `failing_count` and an

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import secrets
@@ -18,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -32,10 +34,10 @@ Role = Literal["operator", "reviewer", "admin"]
 _VALID_ROLES = frozenset({"operator", "reviewer", "admin"})
 _OIDC_TTL_S = 600
 # Pending OIDC login starts are unauthenticated, so the map is bounded (REC-056a).
-# Fairness: each client (the login route's peer address) holds at most
-# _OIDC_PENDING_PER_CLIENT starts; past that its own oldest start is dropped. When the
-# whole map is full, the oldest start of the client holding the most starts is dropped,
-# so a flood never evicts a client that holds fewer starts than the flooder.
+# Fairness: each client (see oidc_client_key) holds at most _OIDC_PENDING_PER_CLIENT
+# starts; past that its own oldest start is dropped, so one client's flood cannot push
+# out another client's login. The global cap is a backstop: when the map is full, the
+# oldest pending start is evicted and the new one is accepted (never rejected).
 _OIDC_PENDING_MAX = 1024
 _OIDC_PENDING_PER_CLIENT = 16
 _OIDC_DEFAULT_CLIENT = "local"
@@ -346,19 +348,9 @@ class SessionStore:
             while len(mine) >= _OIDC_PENDING_PER_CLIENT:
                 self._oidc.pop(mine.pop(0), None)
             while len(self._oidc) >= _OIDC_PENDING_MAX:
-                self._evict_heaviest_oidc_locked()
+                del self._oidc[next(iter(self._oidc))]
             self._oidc[state] = OidcPending(verifier, redirect_uri, time.time(), nonce, client_key)
         return state, verifier, nonce
-
-    def _evict_heaviest_oidc_locked(self) -> None:
-        counts: dict[str, int] = {}
-        for pending in self._oidc.values():
-            counts[pending.client_key] = counts.get(pending.client_key, 0) + 1
-        heaviest = max(counts.values())
-        for key, pending in self._oidc.items():
-            if counts[pending.client_key] == heaviest:
-                del self._oidc[key]
-                return
 
     def claim_jti(self, jti: str) -> None:
         """Remember an OIDC ``jti``. A second claim is rejected."""
@@ -387,6 +379,47 @@ class SessionStore:
         expired = [k for k, v in self._oidc.items() if now - v.created_at > _OIDC_TTL_S]
         for key in expired:
             self._oidc.pop(key, None)
+
+
+IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+def parse_trusted_proxies(cidrs: Iterable[str]) -> tuple[IPNetwork, ...]:
+    """Parse ``Settings.trusted_proxies`` (already validated by load_settings)."""
+
+    return tuple(ipaddress.ip_network(c, strict=False) for c in cidrs)
+
+
+def _trusted(addr: str, trusted: Sequence[IPNetwork]) -> bool:
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    return any(ip in net for net in trusted)
+
+
+def oidc_client_key(peer: str | None, forwarded_for: Sequence[str], trusted: Sequence[IPNetwork]) -> str:
+    """Client identity for the per-client pending-login limit (REC-056a).
+
+    The socket peer is the client. ``X-Forwarded-For`` is read only when the peer is
+    inside a trusted proxy network; then the rightmost hop that is not itself a trusted
+    proxy is the client. A malformed hop, or a chain made only of trusted proxies, falls
+    back to the peer. ``Forwarded`` is never read.
+    """
+
+    if not peer:
+        return "unknown"
+    if not trusted or not _trusted(peer, trusted):
+        return peer
+    hops = [h.strip() for value in forwarded_for for h in value.split(",")]
+    for hop in reversed(hops):
+        try:
+            ip = ipaddress.ip_address(hop)
+        except ValueError:
+            return peer
+        if not any(ip in net for net in trusted):
+            return str(ip)
+    return peer
 
 
 def oidc_configured() -> bool:
