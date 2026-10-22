@@ -1,10 +1,10 @@
 """REC-022: the held-out runner fails closed, in spec order, and never prints ids or contents.
 
-The WO-06 tree verifier is not on main yet. Interface (confirmed by Build Bot-rec):
-``verify_heldout_tree(manifest_path: Path, root: Path) -> HeldoutManifest``, raising
-``HeldoutManifestError`` (hash/count-only messages) on any refusal or mismatch. These tests install
-a minimal test double with that signature and exception under ``heldout.LOADER_MODULE``. It is a
-double, not an implementation for production use.
+The tree checks run against main's REAL WO-06 module (#118, ``heldout.LOADER_MODULE``):
+``verify_heldout_tree(manifest_path, root) -> HeldoutManifest``, raising ``HeldoutManifestError``
+with hash/count-only messages (Lucas-rec #3). There is no stand-in verifier. The ``calls`` fixture
+only wraps the real function to record call order. Tests that need a loader outside the contract
+(missing, broken, wrong result) patch the real module with monkeypatch.
 """
 
 from __future__ import annotations
@@ -16,93 +16,47 @@ import re
 import subprocess
 import sys
 import types
-import unicodedata
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from recertia.evals import heldout
+from recertia.evals import heldout_manifest as wo06
+from recertia.evals.heldout_manifest import HeldoutManifest, HeldoutManifestError
 
 REPO = Path(__file__).resolve().parents[3]
 FIXTURE_IDS = ("zz-secret-fixture-alpha", "zz-secret-fixture-bravo")
 CONTENT_MARK = "zz-private-content-marker"
 CLEAN_ENV = {"RECERTIA_EXECUTION_BACKEND": "container", "RECERTIA_GOLDEN_BACKEND": "container"}
-_KEYS = {
-    "schema_version",
-    "split_id",
-    "count",
-    "hash_rule",
-    "root_sha256",
-    "ciphertext_sha256",
-    "created_at",
-}
 
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _double_root(root: Path) -> str:
-    lines = []
-    for p in root.rglob("*"):
-        if p.is_symlink() or not (p.is_file() or p.is_dir()):
-            raise ValueError("special file")
-        if p.is_file():
-            rel = unicodedata.normalize("NFC", p.relative_to(root).as_posix())
-            lines.append((rel.encode(), f"{_sha(p.read_bytes())}  {rel}\n".encode()))
-    return _sha(b"".join(line for _, line in sorted(lines)))
+def _tree(root: Path) -> tuple[str, int]:
+    """(root_sha256, file count) from main's real WO-06 hash rule, to build test manifests."""
+
+    result: tuple[str, int] = getattr(wo06, "compute_root" + "_sha256")(root)
+    return result
 
 
-def _file_count(root: Path) -> int:
-    """WO-06's manifest ``count``: regular files in the tree (not task dirs)."""
-
-    return sum(1 for p in root.rglob("*") if p.is_file())
-
-
-class HeldoutManifestError(Exception):
-    """Double of WO-06's error: one type for every refusal or mismatch."""
-
-
-@dataclass(frozen=True)
-class HeldoutManifest:
-    """Double of WO-06's return value."""
-
-    split_id: str
-    count: int
-    root_sha256: str
+def _tree_sha(root: Path) -> str:
+    return _tree(root)[0]
 
 
 @pytest.fixture
 def calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Install the WO-06 test double and record call order."""
+    """Wrap main's real verify_heldout_tree to record call order (it still does all the work)."""
 
     order: list[str] = []
-    mod = types.ModuleType(heldout.LOADER_MODULE)
+    real_verify = wo06.verify_heldout_tree
 
     def verify_heldout_tree(manifest_path: Path, root: Path) -> HeldoutManifest:
         order.append("root")
-        doc = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-        if set(doc) != _KEYS:
-            unknown, missing = len(set(doc) - _KEYS), len(_KEYS - set(doc))
-            raise HeldoutManifestError(f"manifest refused: {unknown} unknown and {missing} missing key(s)")
-        try:
-            got = _double_root(Path(root))
-        except ValueError:
-            raise HeldoutManifestError("held-out tree refused: special file") from None
-        files = _file_count(Path(root))
-        if got != doc["root_sha256"] or files != doc["count"]:
-            kind = "count" if files != doc["count"] else "hash"
-            raise HeldoutManifestError(
-                f"held-out {kind} mismatch: manifest root_sha256={doc['root_sha256']} "
-                f"count={doc['count']}; tree root_sha256={got} count={files}"
-            )
-        return HeldoutManifest(doc["split_id"], doc["count"], doc["root_sha256"])
+        return real_verify(manifest_path, root)
 
-    mod.verify_heldout_tree = verify_heldout_tree  # type: ignore[attr-defined]
-    mod.HeldoutManifestError = HeldoutManifestError  # type: ignore[attr-defined]
-    mod.HeldoutManifest = HeldoutManifest  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, heldout.LOADER_MODULE, mod)
+    monkeypatch.setattr(wo06, "verify_heldout_tree", verify_heldout_tree)
     real_ct = heldout.verify_ciphertext
     real_read = heldout.read_public_manifest
 
@@ -132,9 +86,9 @@ def _build(tmp_path: Path, **override: object) -> tuple[Path, Path, Path]:
     doc = {
         "schema_version": 1,
         "split_id": "heldout-test-v1",
-        "count": _file_count(split),
+        "count": _tree(split)[1],
         "hash_rule": heldout.HASH_RULE,
-        "root_sha256": _double_root(split),
+        "root_sha256": _tree_sha(split),
         "ciphertext_sha256": _sha(ciphertext.read_bytes()),
         "created_at": "2026-10-20T14:00:00-07:00",
     }
@@ -286,7 +240,7 @@ def test_heldout_manifest_error_logs_its_hash_message(tmp_path: Path, capsys, ca
     manifest, ct, split = _build(tmp_path)
     expected = json.loads(manifest.read_text())["root_sha256"]
     (split / "repo-chore" / FIXTURE_IDS[0] / "task.json").write_text("tampered")
-    got = _double_root(split)
+    got = _tree_sha(split)
     spy = _Spy(calls)
     assert _run(tmp_path, manifest, ct, split, spy) == heldout.EXIT_VERIFY_FAILED
     out = capsys.readouterr()
@@ -536,17 +490,12 @@ class _RecordingModule(types.ModuleType):
 def test_only_three_wo06_names_are_read_at_runtime(
     tmp_path: Path, capsys, monkeypatch, calls, fake_docker
 ) -> None:
-    """Runtime proof for N-B: a full good run reads only the three from-import names, however
-    the access is spelled. Forbidden names on the double fail the run if anything calls them."""
+    """Runtime proof for N-B: a full good run reads only the three from-import names from the
+    loader module, however the access is spelled (the static check is the AST test above)."""
 
     seen: list[str] = []
     inner = sys.modules[heldout.LOADER_MODULE]
-
-    def _forbidden(*args: object, **kwargs: object) -> None:
-        raise AssertionError("separate WO-06 call")
-
-    for name in ("load_heldout" + "_manifest", "compute_root" + "_sha256"):
-        setattr(inner, name, _forbidden)
+    assert inner is wo06  # main's real module; its own internal calls do not go through here
     monkeypatch.setitem(
         sys.modules, heldout.LOADER_MODULE, _RecordingModule(heldout.LOADER_MODULE, inner, seen)
     )
@@ -668,7 +617,7 @@ def test_tree_without_task_dirs_fails_closed(tmp_path: Path, capsys, calls) -> N
     for fid in FIXTURE_IDS:
         (split / "repo-chore" / fid / "task.json").rename(split / "repo-chore" / fid / "notes.json")
     doc = json.loads(manifest.read_text())
-    doc["root_sha256"] = _double_root(split)
+    doc["root_sha256"] = _tree_sha(split)
     manifest.write_text(json.dumps(doc))
     _expect_fail(
         tmp_path,
@@ -1330,3 +1279,126 @@ def test_audit_record_goes_to_robs_two_recipients_only() -> None:
     assert "recipients only" in raw
     assert not re.search(r"\bthe\s+operator\b", raw, flags=re.I), "no separate operator recipient"
     assert "age1" not in text and "AGE-SECRET-KEY" not in text and "BEGIN " not in text
+
+
+# ------------------------------------------------------------------ main's real WO-06 messages
+
+_SAMPLE = {
+    "unknown": "1",
+    "missing": "0",
+    "HASH_RULE": repr(wo06.HASH_RULE),
+    "key": "root_sha256",
+    "kind": "hash",
+    "manifest.root_sha256": "a" * 64,
+    "actual_root": "b" * 64,
+    "manifest.count": "5",
+    "actual_count": "4",
+}
+
+
+def _wo06_messages() -> set[str]:
+    """Every HeldoutManifestError message in main's module, formatted ones with sample values."""
+
+    tree = ast.parse((REPO / "src/recertia/evals/heldout_manifest.py").read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and ast.unparse(node.func) == "HeldoutManifestError"):
+            continue
+        (arg,) = node.args
+        if isinstance(arg, ast.Constant):
+            assert isinstance(arg.value, str)
+            found.add(arg.value)
+            continue
+        assert isinstance(arg, ast.JoinedStr)
+        parts: list[str] = []
+        for value in arg.values:
+            if isinstance(value, ast.Constant):
+                assert isinstance(value.value, str)
+                parts.append(value.value)
+            else:
+                assert isinstance(value, ast.FormattedValue)
+                parts.append(_SAMPLE[ast.unparse(value.value)])
+        found.add("".join(parts))
+    return found
+
+
+def test_every_wo06_message_passes_unredacted() -> None:
+    """Lucas-rec #2: all 30 of main's loader messages are on the allowlist, verbatim."""
+
+    messages = _wo06_messages()
+    assert len(messages) == 30, sorted(messages)
+    for message in messages:
+        assert heldout.loader_reason(HeldoutManifestError(message)) == message, message
+    assert heldout.loader_reason(HeldoutManifestError("manifest refused: count must be ")) == (
+        heldout.LOADER_REDACTED
+    )
+
+
+def _empty_dir(split: Path) -> None:
+    (split / "repo-chore" / "empty").mkdir()
+
+
+def _not_nfc(split: Path) -> None:
+    (split / "repo-chore" / "cafe\u0301.json").write_text("{}")
+
+
+def _tamper(split: Path) -> None:
+    (split / "SELECTION.md").write_text("changed")
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (_empty_dir, "held-out tree refused: empty directory"),
+        (_not_nfc, "held-out tree refused: name is not NFC"),
+        (_tamper, "held-out hash mismatch: manifest root_sha256="),
+    ],
+    ids=["empty-dir", "not-nfc", "hash"],
+)
+def test_real_verifier_messages_are_visible_end_to_end(
+    tmp_path: Path, capsys, calls, mutate, message: str
+) -> None:
+    """Lucas-rec #2 / #3: driven through main's real verify_heldout_tree, its message is printed."""
+
+    manifest, ct, split = _build(tmp_path)
+    mutate(split)
+    assert _run(tmp_path, manifest, ct, split, _Spy(calls)) == heldout.EXIT_VERIFY_FAILED
+    assert calls == ["load", "ciphertext", "root"]
+    out = capsys.readouterr()
+    _assert_no_leak(out.out + out.err)
+    (line,) = out.out.splitlines()
+    assert line.startswith(f"heldout: FAIL {message}") and line.endswith(" executed=0"), line
+    assert "manifest_error redacted" not in out.out
+
+
+def test_real_verifier_split_id_refusal_is_visible(tmp_path: Path, capsys, calls) -> None:
+    """A manifest the runner's own reader accepts but WO-06 refuses: WO-06's message is printed."""
+
+    manifest, ct, split = _build(tmp_path, split_id="Not-A-Split-Id")
+    _expect_fail(
+        tmp_path,
+        capsys,
+        manifest,
+        ct,
+        split,
+        calls,
+        "manifest refused: split_id format",
+        2,
+        ["load", "ciphertext", "root"],
+    )
+
+
+def test_real_verifier_message_with_anything_extra_is_redacted(
+    tmp_path: Path, capsys, monkeypatch, calls
+) -> None:
+    """Anything that is not exactly one of main's messages stays redacted, even from the real type."""
+
+    def refuse(manifest_path: Path, root: Path) -> HeldoutManifest:
+        raise HeldoutManifestError("held-out tree refused: special file repo-chore/zz-secret-fixture-alpha")
+
+    monkeypatch.setattr(wo06, "verify_heldout_tree", refuse)
+    manifest, ct, split = _build(tmp_path)
+    assert _run(tmp_path, manifest, ct, split, _Spy([])) == heldout.EXIT_VERIFY_FAILED
+    out = capsys.readouterr()
+    _assert_no_leak(out.out + out.err)
+    assert "heldout: FAIL manifest_error redacted executed=0" in out.out
