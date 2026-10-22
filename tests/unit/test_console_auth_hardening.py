@@ -63,7 +63,7 @@ def test_oidc_pkce_challenge_is_s256(monkeypatch: pytest.MonkeyPatch) -> None:
     assert challenge in url
     assert "nonce=n-1" in url
     store = SessionStore(secret="k" * 32)
-    state, ver, nonce = store.begin_oidc(redirect_uri="https://app.example/cb")
+    state, ver, nonce = store.begin_oidc(redirect_uri="https://app.example/cb", client_key="192.0.2.1")
     taken = store.take_oidc(state)
     assert taken is not None
     assert taken.verifier == ver

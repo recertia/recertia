@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **In-process buffer caps (REC-056a, #131)** — `Telemetry.spans` and `Telemetry.events` are
+  now bounded deques (`maxlen=1024`) that drop the oldest entry first. The pending OIDC
+  login map is capped at 16 starts per client, and at 1024 in total as a backstop.
+  `SessionStore.begin_oidc` takes a new `client_key` argument. The per-client check runs
+  first: past its limit a client loses only its own oldest start, so one client's flood
+  cannot evict or block another client's pending login. A start from a client under its
+  limit that meets a full table evicts the globally oldest start and is accepted. The
+  client is the socket peer. The new `RECERTIA_TRUSTED_PROXIES` setting (`trusted_proxies`,
+  comma-separated CIDRs, empty by default) lets the login route read `X-Forwarded-For` only
+  from a peer inside those networks, taking the rightmost hop that is not a trusted proxy.
+  A missing header, a malformed hop or an all-proxy chain falls back to the peer, and
+  `Forwarded` is never read. The per-client limit must stay below the global cap (checked
+  at import). All `X-Forwarded-For` lines are joined in order; IPv4-mapped addresses fold
+  to IPv4 and IPv6 clients are keyed by /64. `0.0.0.0/0` and `::/0` are refused. A peer
+  rewritten by uvicorn's proxy-headers layer (the peer equals an `X-Forwarded-For` hop, or
+  is not an IP) is detected and fails closed to one fixed shared key with a one-time
+  warning; a Unix-socket peer uses the fixed key `unknown`. `X-Forwarded-For` from an
+  untrusted peer logs a one-time warning naming `RECERTIA_TRUSTED_PROXIES`.
+  **Operators: `RECERTIA_TRUSTED_PROXIES` is required behind a reverse proxy** (otherwise
+  every user shares one 16-slot key), the proxy must append to `X-Forwarded-For`, and
+  uvicorn should run with `--no-proxy-headers` (the documented launch commands now pass
+  it). In-memory telemetry readers (dashboard, `missing_required`) see only the newest
+  1024 events, process-wide.
 - **Gap A fixture-id leak (REC-009)** — a golden-gate refusal is now decision-only for
   proposers. `PromotionError` carries `refusal_kind` (`golden_gate` |
   `predecessor_non_regression` | `gate_error` | `audit_unavailable`), `failing_count` and an

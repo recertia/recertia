@@ -10,7 +10,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -18,6 +20,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -28,9 +31,31 @@ from fastapi import Header, HTTPException, Request
 
 from recertia.api.auth import validate_tenant_id
 
+_log = logging.getLogger(__name__)
 Role = Literal["operator", "reviewer", "admin"]
 _VALID_ROLES = frozenset({"operator", "reviewer", "admin"})
 _OIDC_TTL_S = 600
+# Pending OIDC login starts are unauthenticated, so the map is bounded (REC-056a).
+# Order (CTO-rec ruling): the per-client check runs first. A client (see oidc_client_key)
+# at _OIDC_PENDING_PER_CLIENT evicts only its OWN oldest start and is never rejected; it
+# never touches another client's entries. Only a start from a client under its limit can
+# meet a full map; that start evicts the globally oldest entry and is accepted. So one
+# client's flood cannot push out another client's login.
+_OIDC_PENDING_MAX = 1024
+_OIDC_PENDING_PER_CLIENT = 16
+# Fixed client keys (see oidc_client_key). Fail-closed: one shared 16-slot bucket.
+_OIDC_UNKNOWN_CLIENT = "unknown"
+_OIDC_REWRITTEN_CLIENT = "proxy-headers-rewritten"
+
+
+def _validate_oidc_limits(per_client: int, total: int) -> None:
+    """Invariant: 0 < per-client limit < global cap (else one client could fill the map)."""
+
+    if not 0 < per_client < total:
+        raise ValueError(f"OIDC pending limits need 0 < per_client ({per_client}) < total ({total})")
+
+
+_validate_oidc_limits(_OIDC_PENDING_PER_CLIENT, _OIDC_PENDING_MAX)
 
 
 def auth_mode() -> str:
@@ -129,6 +154,7 @@ class OidcPending:
     redirect_uri: str
     created_at: float
     nonce: str
+    client_key: str
 
 
 def _checked_tenants(
@@ -323,13 +349,23 @@ class SessionStore:
             active_tenant=tenant_id,
         )
 
-    def begin_oidc(self, *, redirect_uri: str) -> tuple[str, str, str]:
+    def begin_oidc(self, *, redirect_uri: str, client_key: str) -> tuple[str, str, str]:
+        """Record a pending login start for ``client_key`` (see ``oidc_client_key``).
+
+        Expired starts are purged first, so they never count toward either limit.
+        """
+
         state = secrets.token_urlsafe(24)
         verifier = secrets.token_urlsafe(48)
         nonce = secrets.token_urlsafe(24)
         with self._oidc_lock:
             self._purge_oidc_locked()
-            self._oidc[state] = OidcPending(verifier, redirect_uri, time.time(), nonce)
+            mine = [k for k, v in self._oidc.items() if v.client_key == client_key]
+            while len(mine) >= _OIDC_PENDING_PER_CLIENT:
+                self._oidc.pop(mine.pop(0), None)
+            while len(self._oidc) >= _OIDC_PENDING_MAX:
+                del self._oidc[next(iter(self._oidc))]
+            self._oidc[state] = OidcPending(verifier, redirect_uri, time.time(), nonce, client_key)
         return state, verifier, nonce
 
     def claim_jti(self, jti: str) -> None:
@@ -359,6 +395,111 @@ class SessionStore:
         expired = [k for k, v in self._oidc.items() if now - v.created_at > _OIDC_TTL_S]
         for key in expired:
             self._oidc.pop(key, None)
+
+
+IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+def parse_trusted_proxies(cidrs: Iterable[str]) -> tuple[IPNetwork, ...]:
+    """Parse ``Settings.trusted_proxies`` (already validated by load_settings)."""
+
+    return tuple(ipaddress.ip_network(c, strict=False) for c in cidrs)
+
+
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+_OIDC_IPV6_KEY_PREFIX = 64
+_warned: set[str] = set()
+
+
+def _warn_once(kind: str, message: str) -> None:
+    if kind not in _warned:
+        _warned.add(kind)
+        _log.warning(message)
+
+
+def _ip(value: str) -> IPAddress | None:
+    """A bare IP address, with IPv4-mapped IPv6 (``::ffff:a.b.c.d``) folded to IPv4."""
+
+    try:
+        ip = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    return ip
+
+
+def _hop_ip_loose(hop: str) -> IPAddress | None:
+    """Like ``_ip`` but also accepts ``[v6]``, ``[v6]:port`` and ``v4:port`` (detection only)."""
+
+    h = hop.strip()
+    if h.startswith("["):
+        h = h[1:].split("]", 1)[0]
+    elif h.count(":") == 1:
+        h = h.split(":", 1)[0]
+    return _ip(h)
+
+
+def _key(ip: IPAddress) -> str:
+    """IPv4 keys are the address; IPv6 keys are the /64 (one host usually owns a /64)."""
+
+    if isinstance(ip, ipaddress.IPv6Address):
+        return str(ipaddress.ip_network((ip, _OIDC_IPV6_KEY_PREFIX), strict=False))
+    return str(ip)
+
+
+def _is_trusted(ip: IPAddress, trusted: Sequence[IPNetwork]) -> bool:
+    return any(ip in net for net in trusted)
+
+
+def oidc_client_key(peer: str | None, forwarded_for: Sequence[str], trusted: Sequence[IPNetwork]) -> str:
+    """Client identity for the per-client pending-login limit (REC-056a).
+
+    * ``peer`` is the ASGI peer host (``request.client.host``); ``forwarded_for`` is every
+      ``X-Forwarded-For`` header line, in order. ``Forwarded`` (RFC 7239) is never read.
+    * No peer (e.g. ``uvicorn --uds``): the fixed key ``"unknown"``, shared by everyone.
+    * Rewrite detection (fail closed): an outer proxy-headers layer (uvicorn's default
+      ``--proxy-headers``) replaces the peer with an XFF hop but leaves the header in place.
+      If the peer is not an IP, or equals one of the XFF hops, the key is the fixed
+      ``"proxy-headers-rewritten"`` bucket and a one-time warning names
+      ``--no-proxy-headers``. A spoofed XFF then cannot mint keys or evict other clients.
+    * Otherwise the socket peer is the client. ``X-Forwarded-For`` is used only when the
+      peer is inside ``trusted`` (IPv4-mapped peers are folded to IPv4 first): the client
+      is the rightmost hop that is not itself a trusted proxy. A missing header, a
+      malformed hop (not a bare IP, e.g. empty or ``ip:port``) or a chain made only of
+      trusted proxies falls back to the peer. XFF from an untrusted peer is ignored, with
+      a one-time warning naming ``RECERTIA_TRUSTED_PROXIES``.
+    * IPv6 keys are grouped by /64.
+    """
+
+    if not peer:
+        return _OIDC_UNKNOWN_CLIENT
+    hops = [h.strip() for value in forwarded_for for h in value.split(",")]
+    peer_ip = _ip(peer)
+    if peer_ip is None or (hops and (peer.strip() in hops or peer_ip in {_hop_ip_loose(h) for h in hops})):
+        _warn_once(
+            "rewrite",
+            "console OIDC login: the client address looks rewritten from X-Forwarded-For by an "
+            "outer proxy-headers layer; using one shared fail-closed client key. Start uvicorn "
+            "with --no-proxy-headers and list real proxies in RECERTIA_TRUSTED_PROXIES.",
+        )
+        return _OIDC_REWRITTEN_CLIENT
+    if not _is_trusted(peer_ip, trusted):
+        if hops:
+            _warn_once(
+                "untrusted-xff",
+                "console OIDC login: ignoring X-Forwarded-For from an untrusted peer. Behind a "
+                "reverse proxy, RECERTIA_TRUSTED_PROXIES is required, or every user shares the "
+                "proxy's single per-client limit.",
+            )
+        return _key(peer_ip)
+    for hop in reversed(hops):
+        ip = _ip(hop) if hop else None
+        if ip is None:
+            return _key(peer_ip)
+        if not _is_trusted(ip, trusted):
+            return _key(ip)
+    return _key(peer_ip)
 
 
 def oidc_configured() -> bool:

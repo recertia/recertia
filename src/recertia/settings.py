@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 from collections.abc import Callable, Mapping
@@ -101,6 +102,7 @@ KNOWN_ENV_KEYS = frozenset(
         "RECERTIA_OIDC_DEFAULT_TENANTS",
         "RECERTIA_OIDC_TOKEN_URL",
         "RECERTIA_OIDC_USERINFO_URL",
+        "RECERTIA_TRUSTED_PROXIES",
         "RECERTIA_TENANT_MAX_RUNS_PER_DAY",
         "RECERTIA_TENANT_MAX_COST_USD_PER_DAY",
         "RECERTIA_TENANT_MAX_IN_FLIGHT",
@@ -172,6 +174,27 @@ def _path_list(env: Mapping[str, str], key: str) -> tuple[str, ...]:
     if not raw:
         return ()
     return tuple(part.strip() for part in raw.split(os.pathsep) if part.strip())
+
+
+def _cidr_list(env: Mapping[str, str], key: str) -> tuple[str, ...]:
+    """Comma-separated IPv4/IPv6 networks (CIDR or bare address), normalised."""
+
+    raw = env.get(key, "").strip()
+    if not raw:
+        return ()
+    nets: list[str] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            net = ipaddress.ip_network(part, strict=False)
+        except ValueError as exc:
+            raise ConfigError(f"{key} entry {part!r} is not an IP network") from exc
+        if net.prefixlen == 0:
+            raise ConfigError(f"{key} entry {part!r} trusts every address; list only your proxies' addresses")
+        nets.append(str(net))
+    return tuple(nets)
 
 
 def _int(env: Mapping[str, str], key: str, default: int) -> int:
@@ -300,6 +323,9 @@ class Settings:
     console_dev_admin: bool = False
     console_cookie_secure: bool | None = None
     console_session_secret: str = ""
+    # REC-056a: reverse proxies whose X-Forwarded-For the console login trusts. Empty
+    # (default) means forwarded headers are never read and the socket peer is the client.
+    trusted_proxies: tuple[str, ...] = ()
     oidc_issuer: str = ""
     oidc_client_id: str = ""
     oidc_client_secret: str = ""
@@ -544,6 +570,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         console_dev_admin=_bool(env, "RECERTIA_CONSOLE_DEV_ADMIN"),
         console_cookie_secure=cookie,
         console_session_secret=_raw(env, "RECERTIA_CONSOLE_SESSION_SECRET").strip(),
+        trusted_proxies=_cidr_list(env, "RECERTIA_TRUSTED_PROXIES"),
         oidc_issuer=_raw(env, "RECERTIA_OIDC_ISSUER").strip(),
         oidc_client_id=_raw(env, "RECERTIA_OIDC_CLIENT_ID").strip(),
         oidc_client_secret=_raw(env, "RECERTIA_OIDC_CLIENT_SECRET").strip(),
