@@ -228,6 +228,12 @@ def open_run_persistence(
             handle_lock.release()
 
 
+MANUAL_MODE_PENDING_ACTION = (
+    "set RECERTIA_RUNTIME_DB_MIGRATE=auto (the default) and reopen; the first open"
+    " imports the pending files into runtime.db"
+)
+
+
 def _resolve_runtime_db(layout: RunsRootLayout, mode: MigrateMode) -> tuple[bool, Path | None]:
     if mode == "off":
         # After import, runtime.db is the source of truth even though leftover
@@ -243,9 +249,12 @@ def _resolve_runtime_db(layout: RunsRootLayout, mode: MigrateMode) -> tuple[bool
         return False, None
     if mode == "manual":
         if legacy_sqlite_pending(layout):
+            # No CLI subcommand runs this import yet (#172); the `auto` open is the
+            # import. A test checks that every `recertia ...` command named here exists.
             raise MigrationChecksumError(
-                "pending legacy runtime files; run recertia migrate apply",
-                details={"action": "recertia migrate apply"},
+                "pending legacy runtime files; reopen with RECERTIA_RUNTIME_DB_MIGRATE=auto"
+                " (the default) to import them",
+                details={"action": MANUAL_MODE_PENDING_ACTION},
             )
         return True, None
     imported = import_legacy_runtime(layout)

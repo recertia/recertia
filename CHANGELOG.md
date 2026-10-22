@@ -97,6 +97,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`manual` mode named a command that does not exist (REC-070, #172)** — with leftover
+  `checkpoints.db` / `operations.db` still pending, `RECERTIA_RUNTIME_DB_MIGRATE=manual`
+  refused to open with "run recertia migrate apply" (message and `details.action`), but
+  the CLI has no `migrate apply`; `recertia migrate` has only `run-events`. The error and
+  its `details.action` now give the real procedure: reopen with
+  `RECERTIA_RUNTIME_DB_MIGRATE=auto` (the default), whose first open imports the pending
+  files into `runtime.db`. The error type (`MigrationChecksumError`, `state_corrupt`) is
+  unchanged. Test: `test_manual_mode_error_names_only_registered_cli_commands` in
+  `tests/unit/persistence/test_import_legacy.py`.
+
 - **Per-tenant root locking: tenants on one root no longer exclude each other (REC-065,
   #158)** — each runs root gets its own lock file, `<runs_root>/.tenant.lock`
   (`RunsRootLayout.tenant_lock`), nested under the runtime root's `.lock`. Locks are taken
@@ -460,7 +470,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `off` keeps unused legacy files for one release; after an import has
   landed, `off` reads `runtime.db` so post-import writes cannot vanish.
   `manual` refuses to start while leftover files are still pending
-  (`state_corrupt`, action `recertia migrate apply`). Backup and restore
+  (`state_corrupt`; reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto` to import
+  them). Backup and restore
   take exclusive `api.lock` then `.lock`. Pending operation sentinels are
   dropped on import. Readers (list, tabletop, operator brief) prefer
   `runtime.db`.
