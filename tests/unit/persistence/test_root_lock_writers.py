@@ -1069,3 +1069,43 @@ def test_restore_does_not_extract_root_lock_files_from_an_older_archive(tmp_path
         assert opened.checkpoints.list_run_ids() == ["old-run"]
     finally:
         opened.close()
+
+
+# --- S-d (round 3): a KeyboardInterrupt during wiring still releases the lock ---
+
+
+def test_keyboard_interrupt_in_orchestrator_wiring_releases_root_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins ``except BaseException`` in build_default_orchestrator (not ``Exception``)."""
+
+    from recertia.bootstrap import build_default_orchestrator
+    from recertia.graph.engine import GraphOrchestrator
+
+    root = tmp_path / "runs"
+
+    def interrupted(self: GraphOrchestrator, *args: object, **kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(GraphOrchestrator, "__init__", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        build_default_orchestrator(root, skills_root=tmp_path / "skills", facts_root=tmp_path / "facts")
+    assert _backup_locks_free(root)
+
+
+def test_keyboard_interrupt_in_orchestrator_init_releases_its_own_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins ``except BaseException`` in GraphOrchestrator.__init__ (not ``Exception``)."""
+
+    import recertia.graph.engine as engine
+
+    root = tmp_path / "runs"
+
+    def interrupted() -> list[object]:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(engine, "default_hop_hooks", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        engine.GraphOrchestrator(root)
+    assert _backup_locks_free(root)
