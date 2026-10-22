@@ -175,6 +175,12 @@ def _import_lock_timeout_s() -> float:
         return 5.0
 
 
+def import_lock_timeout_s() -> float:
+    """Bounded root-lock wait, ``RECERTIA_IMPORT_LOCK_TIMEOUT_S`` (default 5 s)."""
+
+    return _import_lock_timeout_s()
+
+
 def import_legacy_runtime(
     layout: RunsRootLayout, *, timeout_s: float | None = None
 ) -> bool:

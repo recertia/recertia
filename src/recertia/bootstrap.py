@@ -118,6 +118,7 @@ def build_default_orchestrator(
     model_config: ModelConfig | None = None,
     model: "ModelClient | None" = None,
     verifier_model: "ModelClient | None" = None,
+    runtime_root: Path | str | None = None,
 ) -> OrchestratorBundle:
     """Wire SkillStore, Retriever, tools, applicator, episodic/facts/affordances.
 
@@ -128,6 +129,10 @@ def build_default_orchestrator(
     ``model_config`` (or env via :func:`load_model_config`) builds clients. Stub
     provider leaves model unset unless ``RECERTIA_ALLOW_STUB_MODEL=1``, so scratch
     fails loud instead of silently no-oping.
+
+    ``runtime_root``: set when ``runs_root`` is a tenant directory under a
+    runtime root (workers), so the run handle takes that root's ``.lock``, the
+    lock backup and restore hold. See ``open_run_persistence``.
     """
 
     from recertia.app.authz import PolicyDecisionPoint
@@ -195,53 +200,58 @@ def build_default_orchestrator(
         model=model,
         result_cache=tool_cache,
     )
-    persistence = open_run_persistence(runs_root)
-    workspaces = persistence.workspaces
-    transcripts = TranscriptStore(runs_root / "transcripts")
-    applicator = SkillApplicator(tools, workspaces)
+    persistence = open_run_persistence(runs_root, runtime_root=runtime_root)
+    try:
+        workspaces = persistence.workspaces
+        transcripts = TranscriptStore(runs_root / "transcripts")
+        applicator = SkillApplicator(tools, workspaces)
 
-    reviewer = None
-    if golden_root is not None:
-        reviewer = ReviewService(
-            runs_root / "review",
-            golden_root=Path(golden_root),
-            runs_root=runs_root / "review-runs",
-        )
+        reviewer = None
+        if golden_root is not None:
+            reviewer = ReviewService(
+                runs_root / "review",
+                golden_root=Path(golden_root),
+                runs_root=runs_root / "review-runs",
+            )
 
-    def _record_eval(state) -> None:
-        if state.terminal is None:
-            return
-        try:
-            from recertia.evals.outbox import drain_eval_outbox
-            from recertia.evals.store import EvalStore
-
-            eval_store = EvalStore(runs_root / "evals.db")
+        def _record_eval(state) -> None:
+            if state.terminal is None:
+                return
             try:
-                drain_eval_outbox(persistence.checkpoints, eval_store)
-            finally:
-                eval_store.close()
-        except Exception:  # noqa: BLE001 — eval recording must not fail runs
-            return
+                from recertia.evals.outbox import drain_eval_outbox
+                from recertia.evals.store import EvalStore
 
-    orch = GraphOrchestrator(
-        runs_root,
-        persistence=persistence,
-        store=store,
-        retriever=retriever,
-        tools=tools,
-        model=model,
-        verifier_model=verifier_model,
-        transcripts=transcripts,
-        applicator=applicator,
-        episodic=EpisodicStore(runs_root / "episodic"),
-        affordances=AffordanceStore(runs_root / "affordances.json"),
-        facts=FactStore(facts_root),
-        reviewer=reviewer,
-        # Empty fingerprint: only mismatch when both sides declare a tool.
-        env_fingerprint=env_fingerprint if env_fingerprint is not None else {},
-        policy=policy,
-        on_finalize=_record_eval,
-    )
+                eval_store = EvalStore(runs_root / "evals.db")
+                try:
+                    drain_eval_outbox(persistence.checkpoints, eval_store)
+                finally:
+                    eval_store.close()
+            except Exception:  # noqa: BLE001 — eval recording must not fail runs
+                return
+
+        orch = GraphOrchestrator(
+            runs_root,
+            persistence=persistence,
+            store=store,
+            retriever=retriever,
+            tools=tools,
+            model=model,
+            verifier_model=verifier_model,
+            transcripts=transcripts,
+            applicator=applicator,
+            episodic=EpisodicStore(runs_root / "episodic"),
+            affordances=AffordanceStore(runs_root / "affordances.json"),
+            facts=FactStore(facts_root),
+            reviewer=reviewer,
+            # Empty fingerprint: only mismatch when both sides declare a tool.
+            env_fingerprint=env_fingerprint if env_fingerprint is not None else {},
+            policy=policy,
+            on_finalize=_record_eval,
+        )
+    except BaseException:
+        # The handle holds the shared root lock; do not leak it on a wiring failure.
+        persistence.close()
+        raise
     return OrchestratorBundle(orchestrator=orch, index=index, model_config=cfg)
 
 

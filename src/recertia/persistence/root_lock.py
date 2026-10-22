@@ -6,19 +6,117 @@ exclusive lock and refuse when the shared lock is already held.
 The lock file is a flock target only. It must not record pid/tid identity:
 a SIGKILLed holder leaves an empty file, and leftover text is never treated
 as holding the lock.
+
+On Windows the same shared/exclusive modes use ``LockFileEx`` on byte 0
+(``msvcrt.locking`` has no shared mode). Blocking calls keep the old
+``msvcrt`` budget: they retry for ``_WIN_BLOCKING_RETRY_S`` and then raise.
 """
 
 from __future__ import annotations
 
+import errno
 import os
 import sys
 import time
 from pathlib import Path
+from typing import Protocol
+
+_IS_WINDOWS = sys.platform == "win32"
+
+# winbase.h / winerror.h
+_LOCKFILE_FAIL_IMMEDIATELY = 0x1
+_LOCKFILE_EXCLUSIVE_LOCK = 0x2
+_ERROR_LOCK_VIOLATION = 33
+_WIN_BLOCKING_RETRY_S = 10.0  # msvcrt LK_LOCK: 10 attempts, 1 s apart
+
+
+class _WinLockApi(Protocol):
+    """The ``kernel32`` calls the Windows lock path needs (one byte at offset 0)."""
+
+    def handle(self, fd: int) -> int: ...
+
+    def lock(self, handle: int, flags: int) -> bool: ...
+
+    def unlock(self, handle: int) -> bool: ...
+
+    def last_error(self) -> int: ...
+
 
 if sys.platform == "win32":
+    import ctypes
     import msvcrt
+    from ctypes import wintypes
+
+    class _Overlapped(ctypes.Structure):
+        _fields_ = [
+            ("Internal", ctypes.c_size_t),
+            ("InternalHigh", ctypes.c_size_t),
+            ("Offset", wintypes.DWORD),
+            ("OffsetHigh", wintypes.DWORD),
+            ("hEvent", wintypes.HANDLE),
+        ]
+
+    class _Kernel32LockApi:
+        def __init__(self) -> None:
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            self._lock = k32.LockFileEx
+            self._lock.argtypes = [
+                wintypes.HANDLE,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                ctypes.POINTER(_Overlapped),
+            ]
+            self._lock.restype = wintypes.BOOL
+            self._unlock = k32.UnlockFileEx
+            self._unlock.argtypes = [
+                wintypes.HANDLE,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                ctypes.POINTER(_Overlapped),
+            ]
+            self._unlock.restype = wintypes.BOOL
+
+        def handle(self, fd: int) -> int:
+            return int(msvcrt.get_osfhandle(fd))
+
+        def lock(self, handle: int, flags: int) -> bool:
+            return bool(self._lock(handle, flags, 0, 1, 0, ctypes.byref(_Overlapped())))
+
+        def unlock(self, handle: int) -> bool:
+            return bool(self._unlock(handle, 0, 1, 0, ctypes.byref(_Overlapped())))
+
+        def last_error(self) -> int:
+            return int(ctypes.get_last_error())
+
+    _LOCK_SH = _LOCK_EX = _LOCK_NB = _LOCK_UN = 0
+
+    def _flock(fd: int, op: int) -> None:
+        raise OSError(errno.ENOSYS, "flock is not available on Windows")
 else:
     import fcntl
+
+    _LOCK_SH, _LOCK_EX, _LOCK_NB, _LOCK_UN = fcntl.LOCK_SH, fcntl.LOCK_EX, fcntl.LOCK_NB, fcntl.LOCK_UN
+
+    def _flock(fd: int, op: int) -> None:
+        fcntl.flock(fd, op)
+
+_WIN_API: _WinLockApi | None = None
+
+
+def _win_api() -> _WinLockApi:
+    global _WIN_API
+    if _WIN_API is None:
+        _WIN_API = _load_win_api()
+    return _WIN_API
+
+
+def _load_win_api() -> _WinLockApi:
+    if sys.platform == "win32":
+        return _Kernel32LockApi()
+    raise OSError(errno.ENOSYS, "LockFileEx is only available on Windows")
 
 
 class RootLockBusy(RuntimeError):
@@ -140,46 +238,60 @@ class RootLock:
 
 
 def _lock_shared(fd: int) -> None:
-    if sys.platform == "win32":
-        _win_prepare(fd)
-        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+    if _IS_WINDOWS:
+        _win_lock(fd, exclusive=False, blocking=True)
         return
-    fcntl.flock(fd, fcntl.LOCK_SH)
+    _flock(fd, _LOCK_SH)
 
 
 def _lock_shared_nb(fd: int) -> None:
-    if sys.platform == "win32":
-        _win_prepare(fd)
-        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    if _IS_WINDOWS:
+        _win_lock(fd, exclusive=False, blocking=False)
         return
-    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    _flock(fd, _LOCK_SH | _LOCK_NB)
 
 
 def _lock_exclusive_nb(fd: int) -> None:
-    if sys.platform == "win32":
-        _win_prepare(fd)
-        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    if _IS_WINDOWS:
+        _win_lock(fd, exclusive=True, blocking=False)
         return
-    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    _flock(fd, _LOCK_EX | _LOCK_NB)
 
 
 def _lock_exclusive(fd: int) -> None:
-    if sys.platform == "win32":
-        _win_prepare(fd)
-        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+    if _IS_WINDOWS:
+        _win_lock(fd, exclusive=True, blocking=True)
         return
-    fcntl.flock(fd, fcntl.LOCK_EX)
+    _flock(fd, _LOCK_EX)
 
 
 def _unlock(fd: int) -> None:
-    if sys.platform == "win32":
-        try:
-            os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-        except OSError:
-            pass
+    if _IS_WINDOWS:
+        api = _win_api()
+        api.unlock(api.handle(fd))
         return
-    fcntl.flock(fd, fcntl.LOCK_UN)
+    _flock(fd, _LOCK_UN)
+
+
+def _win_lock(fd: int, *, exclusive: bool, blocking: bool) -> None:
+    """``LockFileEx`` on byte 0, always fail-immediately; blocking retries within a budget."""
+
+    _win_prepare(fd)
+    api = _win_api()
+    handle = api.handle(fd)
+    flags = _LOCKFILE_FAIL_IMMEDIATELY | (_LOCKFILE_EXCLUSIVE_LOCK if exclusive else 0)
+    deadline = time.monotonic() + (_WIN_BLOCKING_RETRY_S if blocking else 0.0)
+    while True:
+        if api.lock(handle, flags):
+            return
+        err = api.last_error()
+        if err != _ERROR_LOCK_VIOLATION:
+            raise OSError(errno.EIO, f"LockFileEx failed (winerror {err})")
+        if not blocking:
+            raise BlockingIOError(errno.EAGAIN, "root lock held (LockFileEx)")
+        if time.monotonic() >= deadline:
+            raise OSError(errno.EDEADLK, "root lock still held after the LockFileEx retry budget")
+        time.sleep(0.05)
 
 
 def _win_prepare(fd: int) -> None:
