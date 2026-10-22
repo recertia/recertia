@@ -50,7 +50,11 @@ def try_write(label, fn):
     except Exception as exc: return f"rejected({type(exc).__name__})"
 
 def scenario(mode):
-    root = Path(tempfile.mkdtemp()); run = f"d-{mode}"
+    with tempfile.TemporaryDirectory() as tmp:
+        _scenario(Path(tmp), mode)
+
+def _scenario(root, mode):
+    run = f"d-{mode}"
     persist = open_run_persistence(root)
     a = lease(root, run); ta = a.acquire(); inc_a = a.incarnation
     persist.checkpoints.save(run, 1, "n", None, state(run), fencing_token=ta)   # legit write

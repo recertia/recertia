@@ -74,6 +74,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   critic's negative fixture now always lives in the system temp dir rather than the task
   workdir, so it no longer ends up in workspace snapshots or diffs.
 
+- **Leaked `tmp*` dirs from the REL-3 probes (REC-047)** — the probes in `tests/probes/`
+  (`rel3_probe`, `_r3`, `_r4`, `_d`, `_api_busy`, `_busy`) created every scenario root with a
+  bare `tempfile.mkdtemp()` and never removed it, so a full test run left 29 `tmp*` dirs and
+  3 `tmp*.effects` files in the temp dir. Each scenario now runs in a
+  `tempfile.TemporaryDirectory` it owns (the `fresh_root` decorator in `rel3_probe.py`, or a
+  `with` block), removed when the scenario returns or raises; the busy scenarios' effects
+  journal lives in that directory too. A full run now leaves none.
+  `tests/unit/graph/test_rel3_probe_tmp_cleanup.py` runs every probe entry point against an
+  empty private temp dir and checks it is still empty afterwards.
+
 - **REL-3 probe_b / probe_a2 hang (REC-017)** — `tests/probes/rel3_probe.py` now
   uses the multiprocessing `spawn` context, so a probe child never inherits
   threads or locks from the pytest process (a fork while a `recertia-queue`

@@ -2,7 +2,7 @@
 open_run_persistence / import_legacy code. Each scenario prints PASS or FAIL(BUG)."""
 from __future__ import annotations
 import multiprocessing as mp, os, sqlite3, sys, tempfile, threading, time, traceback
-import faulthandler, signal
+import faulthandler, functools, signal
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,6 +22,14 @@ except ImportError:  # pre-#89 heads
 RESULTS: list[tuple[str, bool, str]] = []
 def record(name, ok, detail):
     RESULTS.append((name, ok, detail)); print(f"[{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
+
+def fresh_root(fn):
+    """Run ``fn(root, *args)`` in a new temp dir that is removed when ``fn`` returns or raises."""
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        with tempfile.TemporaryDirectory() as tmp:
+            return fn(Path(tmp), *args, **kwargs)
+    return run
 
 # Both stay below the suite-wide pytest-timeout (60s, pyproject.toml) so the
 # probe's own hang path (stack dumps, kill children) runs first, and children
@@ -156,8 +164,9 @@ def holder_then_crash(root, journal, run):
     os._exit(9)  # crash: flock freed by kernel, run_leases row left behind
 
 # --- A: crash then resume must not re-run an applied op --------------------------------
-def scen_crash_resume():
-    root = Path(tempfile.mkdtemp()); j = root / "journal"
+@fresh_root
+def scen_crash_resume(root):
+    j = root / "journal"
     ctx = _spawn(); p = ctx.Process(target=holder_then_crash, args=(str(root), str(j), "r1"), name="rel3-holder-r1", daemon=True); p.start(); _join_or_fail("scen_crash_resume", [p])
     l = mk_lease(root); tok = l.acquire()
     led = OperationLedger(root / "runtime.db")
@@ -170,8 +179,9 @@ def scen_crash_resume():
     record("A crash->resume op exactly-once", len(e) == 1, f"child exit={p.exitcode}; side effects={e}")
 
 # --- A2: steal(inc2) does work, releases cleanly, then resume gets inc1 again -------------
-def scen_incarnation_reset():
-    root = Path(tempfile.mkdtemp()); j = root / "journal"
+@fresh_root
+def scen_incarnation_reset(root):
+    j = root / "journal"
     ctx = _spawn(); p = ctx.Process(target=holder_then_crash, args=(str(root), str(j), "r2"), name="rel3-holder-r2", daemon=True); p.start(); _join_or_fail("scen_incarnation_reset", [p])
     l = mk_lease(root, "r2"); l.acquire(); inc_after_crash = l.incarnation; l.release()
     l3 = mk_lease(root, "r2"); l3.acquire(); inc_next = l3.incarnation; l3.release()
@@ -195,8 +205,9 @@ def racer(root, journal, run, barrier):
     with open(journal + ".hold", "a") as f: f.write(f"out {time.monotonic():.6f}\n")
     l.release()
 
-def scen_race():
-    root = Path(tempfile.mkdtemp()); j = root / "journal"; n = 8
+@fresh_root
+def scen_race(root):
+    j = root / "journal"; n = 8
     ctx = _spawn(); b = ctx.Barrier(n); ps = [ctx.Process(target=racer, args=(str(root), str(j), "r3", b), name=f"rel3-racer-{i}", daemon=True) for i in range(n)]
     [p.start() for p in ps]; _join_or_fail("scen_race", ps)
     ev = sorted((float(t), k) for k, t in (l.split() for l in effects(Path(str(j) + ".hold"))))
@@ -215,8 +226,8 @@ def b_holder(root, q, go):
     except RunBusy: q.put(("busy", None)); return
     go.wait(10); b.release()
 
-def scen_unlinked_lock():
-    root = Path(tempfile.mkdtemp())
+@fresh_root
+def scen_unlinked_lock(root):
     a = mk_lease(root, "r4"); ta = a.acquire()
     os.unlink(root / "locks" / "r4.lock")          # e.g. locks/ cleanup while a run is live
     ctx = mp.get_context("spawn"); q = ctx.Queue(); go = ctx.Event(); p = ctx.Process(target=b_holder, args=(str(root), q, go), name="rel3-b_holder", daemon=True); p.start()
@@ -239,8 +250,8 @@ def scen_unlinked_lock():
     go.set(); _join_or_fail("scen_unlinked_lock", [p]); a.release()
 
 # --- E: fencing TOCTOU (steal lands between check and write) ------------------------------
-def scen_toctou():
-    root = Path(tempfile.mkdtemp())
+@fresh_root
+def scen_toctou(root):
     a = mk_lease(root, "r5"); ta = a.acquire()
     store = CheckpointStore(root / "runtime.db", lease_db=root / "runtime.db", tenant_id="local")
     real = lease_mod.require_lease_token
@@ -258,8 +269,8 @@ def scen_toctou():
     a.release()
 
 # --- F: token reuse after clean release + lock dir wiped ----------------------------------
-def scen_token_reuse():
-    root = Path(tempfile.mkdtemp())
+@fresh_root
+def scen_token_reuse(root):
     toks = []
     for _ in range(3):
         l = mk_lease(root, "r6"); toks.append(l.acquire()); l.release()
@@ -268,16 +279,17 @@ def scen_token_reuse():
     record("F tokens strictly monotonic across restart", t > max(toks), f"tokens {toks} then after locks/ wipe: {t}")
 
 # --- G: fail-open when runtime.db/run_leases absent -------------------------------------
-def scen_fail_open():
-    root = Path(tempfile.mkdtemp())
+@fresh_root
+def scen_fail_open(root):
     store = CheckpointStore(root / "ck.db", lease_db=root / "missing-runtime.db", tenant_id="local")
     try: store.save("r7", 1, "n", None, state("r7"), fencing_token=999); res = "ACCEPTED"
     except LeaseLost: res = "rejected"
     record("G no lease row/db => write rejected", res == "rejected", f"bogus token 999 with no runtime.db: {res}")
 
 # --- H: operations table rebuild crash midway -------------------------------------------
-def scen_ops_rebuild_crash():
-    root = Path(tempfile.mkdtemp()); db = root / "operations.db"
+@fresh_root
+def scen_ops_rebuild_crash(root):
+    db = root / "operations.db"
     c = sqlite3.connect(db)
     c.execute("CREATE TABLE operations (run_id TEXT NOT NULL, attempt_no INTEGER NOT NULL, node TEXT NOT NULL, op_seq INTEGER NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY (run_id, attempt_no, node, op_seq))")
     c.execute("INSERT INTO operations VALUES ('old',1,'n',0,'{\"v\":1}')"); c.commit()
@@ -291,8 +303,8 @@ def scen_ops_rebuild_crash():
         record("H ops rebuild resumable after crash", False, f"restart raises {type(exc).__name__}: {exc}")
 
 # --- I: legacy import while another process still on legacy -> lost write ----------------
-def scen_import_split_brain():
-    root = Path(tempfile.mkdtemp())
+@fresh_root
+def scen_import_split_brain(root):
     # old-format state
     p0 = open_run_persistence(root, migrate="off"); p0.checkpoints.save("old-run", 1, "n", None, state("old-run")); p0.close()
     lock = subprocess_exclusive(root / ".lock")          # e.g. backup/another importer holds it
@@ -308,8 +320,8 @@ def scen_import_split_brain():
            f"runs visible after re-open: {ids}; files: {sorted(x.name for x in root.iterdir())}")
 
 # --- J: import idempotent; crash after commit before retire; re-run ----------------------
-def scen_import_idempotent():
-    root = Path(tempfile.mkdtemp())
+@fresh_root
+def scen_import_idempotent(root):
     p0 = open_run_persistence(root, migrate="off")
     for i in range(5): p0.checkpoints.save("legacy", i + 1, "n", None, state("legacy"))
     p0.operations.put("legacy", 1, "n", 0, {"v": 1}); p0.close()

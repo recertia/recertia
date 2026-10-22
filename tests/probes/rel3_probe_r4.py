@@ -1,7 +1,7 @@
 """R4 probes for 9b33b36's same-thread exclusive-holder exception. Each scenario uses a fresh root."""
-import sys, os, tempfile, sqlite3, threading, asyncio, traceback, subprocess
+import sys, os, sqlite3, threading, asyncio, traceback, subprocess
 from pathlib import Path
-from tests.probes.rel3_probe import state, record, RESULTS
+from tests.probes.rel3_probe import state, record, RESULTS, fresh_root
 from recertia.graph.persistence import open_run_persistence
 from recertia.persistence.root_lock import RootLock
 
@@ -23,15 +23,17 @@ def scen(f):
     try: f()
     except Exception as e: traceback.print_exc(); record(f.__name__, False, f"probe error {type(e).__name__}: {e}")
 
-def T1_same_thread_ops_double_run():
-    root = Path(tempfile.mkdtemp()); eff = legacy(root, op=True)
+@fresh_root
+def T1_same_thread_ops_double_run(root):
+    eff = legacy(root, op=True)
     lk = RootLock(root / ".lock"); lk.try_exclusive()          # e.g. importer/backup in this thread
     p = open_run_persistence(root)
     p.operations.run_once("legacy-run", 1, "solve", 0, lambda: eff.append("same-thread-rerun") or {"v": 2}); p.close(); lk.release()
     record("T1 same-thread holder: op done in legacy not re-executed", eff == ["legacy"], f"side effects={eff}")
 
-def T2_same_thread_ghost_write():
-    root = Path(tempfile.mkdtemp()); legacy(root)
+@fresh_root
+def T2_same_thread_ghost_write(root):
+    legacy(root)
     lk = RootLock(root / ".lock"); lk.try_exclusive()
     p = open_run_persistence(root)
     r = tw(lambda: p.checkpoints.save("legacy-run", 1, "GHOST", None, state("legacy-run"))); p.close(); lk.release()
@@ -39,11 +41,12 @@ def T2_same_thread_ghost_write():
     record("T2 same-thread holder: write at a seq that exists in leftover is rejected, nothing lost",
            r != "ACCEPTED" and h == [(1, "n1"), (2, "n2"), (3, "n3")], f"save={r}; history after import={h}")
 
-def T3_stale_holder_identity():
+@fresh_root
+def T3_stale_holder_identity(root):
     """Holder identity lives in the lock file text. A crashed holder (SIGKILL) leaves it behind;
     a later process with the same pid/thread-ident (PID 1 in a container, pthread ident reuse) is
     treated as the holder WITHOUT holding the flock."""
-    root = Path(tempfile.mkdtemp()); legacy(root)
+    legacy(root)
     (root / ".lock").write_text(f"{os.getpid()} {threading.get_ident()}\n")   # leftover text, no flock held
     from recertia.persistence.root_lock import exclusive_held_by_this_thread
     spoof = exclusive_held_by_this_thread(root / ".lock")
@@ -56,16 +59,17 @@ def _complete(root):
     from recertia.persistence.import_legacy import legacy_import_complete
     return legacy_import_complete(root / "runtime.db")
 
-def T3b_crash_leaves_identity():
-    root = Path(tempfile.mkdtemp())
+@fresh_root
+def T3b_crash_leaves_identity(root):
     code = f"import os,sys;sys.path.insert(0,{repr(str(Path.cwd()/'src'))});from recertia.persistence.root_lock import RootLock;l=RootLock(__import__('pathlib').Path({repr(str(root/'.lock'))}));l.try_exclusive();os.kill(os.getpid(),9)"
     subprocess.run([sys.executable, "-c", code])
     txt = (root / ".lock").read_text().strip()
     record("T3b SIGKILLed holder leaves no identity in .lock", txt == "", f".lock text after SIGKILL={txt!r}")
 
-def T4_asyncio_same_thread():
+@fresh_root
+def T4_asyncio_same_thread(root):
     """Backup/importer coroutine holds exclusive; another request coroutine on the SAME event-loop thread opens."""
-    root = Path(tempfile.mkdtemp()); legacy(root)
+    legacy(root)
     out = {}
     async def holder(ev, done):
         lk = RootLock(root / ".lock"); lk.try_exclusive(); ev.set(); await done.wait(); lk.release()
@@ -82,10 +86,11 @@ def T4_asyncio_same_thread():
     record("T4 asyncio: unrelated coroutine on the holder's thread gets RootBusy, not the holder exception",
            out.get("open", "").endswith("Busy"), f"{out}; history after={hist(root)}")
 
-def T5_threadpool_reuse():
+@fresh_root
+def T5_threadpool_reuse(root):
     """Worker thread in a pool holds exclusive for task A; task B scheduled on the same worker opens."""
     from concurrent.futures import ThreadPoolExecutor
-    root = Path(tempfile.mkdtemp()); legacy(root, op=True); eff = []
+    legacy(root, op=True); eff = []
     with ThreadPoolExecutor(max_workers=1) as ex:
         lk = ex.submit(lambda: (lambda l: (l.try_exclusive(), l)[1])(RootLock(root / ".lock"))).result()   # task A takes lock, returns w/o release
         def task_b():

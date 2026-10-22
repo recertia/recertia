@@ -1,8 +1,8 @@
 """R3 adversarial probes for #89 (fail-closed fencing) and #90 (busy overlay, api.lock, copy rollback).
 Every scenario runs in its own fresh root and records independently."""
-import sys, tempfile, sqlite3, traceback, typing
+import sys, sqlite3, traceback, typing
 from pathlib import Path
-from tests.probes.rel3_probe import state, record, RESULTS
+from tests.probes.rel3_probe import state, record, RESULTS, fresh_root
 from recertia.graph.persistence import open_run_persistence
 from recertia.graph.lease import RunLease
 try:
@@ -25,15 +25,17 @@ def scen(fn):
         traceback.print_exc(); record(fn.__name__, False, f"probe error {type(e).__name__}: {e}")
 
 # ---------- #89: fail-closed must not wedge legitimate runs ----------
-def P_fresh_run_no_lease():
-    root = Path(tempfile.mkdtemp()); p = open_run_persistence(root); run = "fresh"
+@fresh_root
+def P_fresh_run_no_lease(root):
+    p = open_run_persistence(root); run = "fresh"
     r = [tw(lambda: p.checkpoints.save(run, 1, "n", None, state(run))),
          tw(lambda: p.operations.run_once(run, 1, "solve", 0, lambda: 1)),
          tw(lambda: p.ledger.append(actor="x", action=ACT, target=run))]
     record("P fresh never-leased run, token-less writes allowed", r == ["ACCEPTED"]*3, f"ck/op/lg={r}")
 
-def P3_after_clean_release():
-    root = Path(tempfile.mkdtemp()); p = open_run_persistence(root); run = "done"
+@fresh_root
+def P3_after_clean_release(root):
+    p = open_run_persistence(root); run = "done"
     a = lease(root, run); t = a.acquire(); p.checkpoints.save(run, 1, "n", None, state(run), fencing_token=t); a.release()
     lg0 = tw(lambda: p.ledger.append(actor="reviewer", action=ACT, target=run))
     record("P3 token-less ledger append on a RELEASED run is rejected", lg0 != "ACCEPTED", f"token-less ledger={lg0}")
@@ -41,8 +43,9 @@ def P3_after_clean_release():
     ctl = tw(lambda: p.ledger.append(actor="reviewer", action=ACT, target="never-leased-run"))
     record("P3c control: token-less ledger append on a never-leased run allowed", ctl == "ACCEPTED", f"token-less ledger={ctl}")
 
-def P4_reacquire_after_release():
-    root = Path(tempfile.mkdtemp()); p = open_run_persistence(root); run = "again"
+@fresh_root
+def P4_reacquire_after_release(root):
+    p = open_run_persistence(root); run = "again"
     a = lease(root, run); t = a.acquire(); a.release()
     b = lease(root, run); t2 = b.acquire()
     r = tw(lambda: p.checkpoints.save(run, 1, "n", None, state(run), fencing_token=t2)); b.release()
@@ -118,9 +121,10 @@ def _busy_child(root, kind, effects_path, q):
         res.append(f"error {type(e).__name__}: {e}")
     q.put(("actions", res, None, time.monotonic() - t0, None))
 
-def _busy_scenario(kind):
+@fresh_root
+def _busy_scenario(tmp, kind):
     from recertia.persistence.root_lock import RootLock
-    root = Path(tempfile.mkdtemp()); effects = root.parent / f"{root.name}.effects"
+    root = tmp / "root"; root.mkdir(); effects = tmp / "root.effects"
     leg_eff = _legacy(root, op=(kind == "O"))
     with open(effects, "w") as f:
         for e in leg_eff: f.write(e + "\n")
@@ -189,8 +193,9 @@ def M3_full_restart_conflict():
 def M4_busy_write_overwritten():
     _busy_scenario("M4")
 
-def Q_off_after_import_sees_new_writes():
-    root = Path(tempfile.mkdtemp()); _legacy(root)
+@fresh_root
+def Q_off_after_import_sees_new_writes(root):
+    _legacy(root)
     p = open_run_persistence(root); p.checkpoints.save("legacy-run", 4, "post-import", None, state("legacy-run")); p.close()
     o = open_run_persistence(root, migrate="off"); s = o.checkpoints.latest_seq("legacy-run")
     o.checkpoints.save("legacy-run", 4, "off-write", None, state("legacy-run")) if s == 3 else None; o.close()
@@ -201,8 +206,9 @@ def Q_off_after_import_sees_new_writes():
         except Exception as e: r.append(f"{type(e).__name__}: {e}")
     record("Q2 roll forward again (auto) after off-mode writes", all(x.startswith("opens") for x in r), "; ".join(r))
 
-def R_reimport_every_open():
-    root = Path(tempfile.mkdtemp()); _legacy(root)
+@fresh_root
+def R_reimport_every_open(root):
+    _legacy(root)
     open_run_persistence(root).close()
     from recertia.persistence.import_legacy import legacy_sqlite_pending
     from recertia.persistence.layout import RuntimeLayout
@@ -210,15 +216,15 @@ def R_reimport_every_open():
     pend = legacy_sqlite_pending(lay) if lay else "n/a"
     record("R legacy not 'pending' after a completed import", pend is False, f"legacy_sqlite_pending after import={pend}; files={sorted(x.name for x in root.iterdir() if 'db' in x.name)}")
 
-def S_backup_refused_while_api_up():
+@fresh_root
+def S_backup_refused_while_api_up(tmp):
     from recertia.api import create_app
     from recertia.ops import backup
-    root = Path(tempfile.mkdtemp()) / "root"; app = create_app(root=root)
+    root = tmp / "root"; app = create_app(root=root)
     fn = getattr(backup, "backup_tree", None) or getattr(backup, "create_backup", None)
-    out = Path(tempfile.mkdtemp()) / "b.tgz"
+    out = tmp / "b.tgz"
     try: fn(root, out); r = "backup ALLOWED while API up"
     except Exception as e: r = f"refused: {e}"
-    rs = Path(tempfile.mkdtemp())
     try: backup.restore_tree(out, root, overwrite=True); r2 = "restore ALLOWED over live API root"
     except Exception as e: r2 = f"refused: {type(e).__name__}: {e}"
     record("S backup/restore still refused while API process is up", r.startswith("refused") and r2.startswith("refused"), f"{r}; {r2}")
