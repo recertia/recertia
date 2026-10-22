@@ -316,7 +316,13 @@ jobs:
           from pathlib import Path
 
           report = Path("root-lock-windows.xml")
-          minimum = int(os.environ["ROOT_LOCK_MIN_PASSED"])
+          raw_minimum = os.environ.get("ROOT_LOCK_MIN_PASSED", "")
+          try:
+              minimum = int(raw_minimum)
+          except ValueError:
+              sys.exit(f"guard: ROOT_LOCK_MIN_PASSED={raw_minimum!r} is not an integer")
+          if minimum < 1:
+              sys.exit(f"guard: ROOT_LOCK_MIN_PASSED={minimum} is below 1; a zero minimum passes nothing")
           if not report.is_file():
               sys.exit(f"guard: {report} is missing")
           try:
@@ -353,7 +359,13 @@ jobs:
           from pathlib import Path
 
           report = Path("windows-marked.xml")
-          minimum = int(os.environ["WINDOWS_MARKED_MIN_PASSED"])
+          raw_minimum = os.environ.get("WINDOWS_MARKED_MIN_PASSED", "")
+          try:
+              minimum = int(raw_minimum)
+          except ValueError:
+              sys.exit(f"guard: WINDOWS_MARKED_MIN_PASSED={raw_minimum!r} is not an integer")
+          if minimum < 1:
+              sys.exit(f"guard: WINDOWS_MARKED_MIN_PASSED={minimum} is below 1; a zero minimum passes nothing")
           if not report.is_file():
               sys.exit(f"guard: {report} is missing")
           try:
