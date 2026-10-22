@@ -67,6 +67,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Writers on an imported root honour backup/restore's root lock (REC-058, #144)** —
+  correction to the REL-3 runtime.db entry below, which read as if every opener honoured
+  `.lock`. Until now only the leftover-import path did: on a root whose import had already
+  completed, `open_run_persistence` took no root lock, so CLI and worker handles could
+  write while backup or restore held the exclusive `.lock` (the API was kept out only by
+  `api.lock`). Now every handle from `open_run_persistence` holds a shared `.lock` from
+  open until `close()`, on fresh, imported and leftover roots alike. On a fresh or
+  imported root, an open that finds the exclusive lock held waits at most
+  `RECERTIA_IMPORT_LOCK_TIMEOUT_S` (default 5 s), then raises typed `RootBusy` before any
+  db file is opened, so nothing is written; the caller retries after release. Backup and
+  restore refuse while any handle is open. What the lock does not guard: SQLite files in
+  the root that are opened directly rather than through an `open_run_persistence` handle
+  (for example the worker queue, eval and API stores), and any process that ignores the
+  advisory flock. The lock is per runtime root, not per tenant, so an open handle on one
+  tenant also makes a pending leftover import on another tenant of the same root raise
+  `RootBusy` until it closes. The leftover path's shared wait (`migrate=off` with pending
+  files) is still unbounded, and `RootBusy` is not yet the `root_busy` API/CLI error
+  (#145). Tests: `tests/unit/persistence/test_import_legacy.py`
+  (`test_write_on_imported_root_*`, `test_open_on_imported_root_*`,
+  `test_open_handle_on_imported_root_keeps_backup_out_until_close`).
+
 - **CLI tests read stderr at the click floor (REC-053)** — the `dev` extra gains
   `click>=8.2`. Six CLI tests read `result.stderr` from a default `CliRunner()`, and
   before click 8.2 that runner mixes stderr into stdout, so the read raised
