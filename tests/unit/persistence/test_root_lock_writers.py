@@ -1513,7 +1513,7 @@ def test_backup_leaves_out_tenant_lock_files_and_restore_skips_them(tmp_path: Pa
     _assert_imported_once(target, target / "runs" / "tenant-a")
 
 
-# --- REC-058 follow-up to #169, carrying the review of #170 (SF-1) ---
+# --- REC-058 follow-up to #169, carrying the review of #170 (SF-1, NIT-2) ---
 
 
 def _record_lock_fds(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, os.stat_result]]:
@@ -1573,3 +1573,32 @@ def test_root_lock_tenant_lock_one_deadline_covers_both_waits(tmp_path: Path, ex
     assert waiter.root._fd is None and waiter.tenant._fd is None
     assert _backup_locks_free(root)
 
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "snapshots/s1/.tenant.lock",
+        "workspaces/acme/w1/.tenant.lock",
+        "runs/acme/notes/.tenant.lock",
+        "blobs/acme/.tenant.lock",
+    ],
+)
+def test_root_lock_backup_keeps_a_tenant_lock_name_outside_a_runs_root(tmp_path: Path, rel: str) -> None:
+    """NIT-2: only a runs root's ``.tenant.lock`` is a lock file. A file of that name
+    anywhere else is user content: backup archives it and restore brings it back."""
+
+    root = tmp_path / "rt"
+    tdir = _tenant_pending(root, "tenant-a", "r")
+    _worker_shaped_open(root, tdir)
+    user_file = root / rel
+    user_file.parent.mkdir(parents=True, exist_ok=True)
+    user_file.write_bytes(b"user content")
+    archive = tmp_path / "b.tar.gz"
+    backup_tree(root, archive)
+    with tarfile.open(archive) as tar:
+        names = set(tar.getnames())
+    assert rel in names, sorted(names)
+    assert "runs/tenant-a/.tenant.lock" not in names  # the real tenant lock stays out
+    target = tmp_path / "target"
+    restore_tree(archive, target)
+    assert (target / rel).read_bytes() == b"user content"
