@@ -15,7 +15,8 @@ import weakref
 from dataclasses import replace
 from typing import ClassVar, Literal
 
-from recertia.workers.queue import Claim, RunQueue
+from recertia.persistence.root_lock import RootBusy
+from recertia.workers.queue import ROOT_BUSY_RETRY_S, Claim, RunQueue
 from recertia.workers.run_worker import AsyncRunWorker, load_async_request
 
 _log = logging.getLogger(__name__)
@@ -172,6 +173,10 @@ class EmbeddedQueueWorker:
         req.cancel_check = lambda: self.queue.cancel_requested(claim.tenant_id, claim.run_id)
         try:
             outcome = self.worker._run(req)
+        except RootBusy:
+            # Retryable (REC-058 MF-C): back to 'queued' without spending an attempt.
+            self.queue.requeue(claim, delay_s=ROOT_BUSY_RETRY_S, error_code="root_busy")
+            return
         except Exception:
             self.queue.finish(claim, status="failed", error_code="run_failed")
             return

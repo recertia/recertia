@@ -25,6 +25,9 @@ from recertia.ports.identity import tenant_id
 _MIGRATIONS = Path(__file__).resolve().parents[1] / "persistence" / "migrations" / "control"
 _CLAIM_COST = 1
 _TERMINAL = frozenset({"succeeded", "failed", "cancelled", "dead"})
+# A claim refused with RootBusy (backup, restore, an import or another tenant's open
+# handle holds the runtime root lock) goes back to 'queued' this long (REC-058).
+ROOT_BUSY_RETRY_S = 2.0
 QueueStatus = Literal["succeeded", "failed", "cancelled"]
 
 
@@ -214,6 +217,30 @@ class RunQueue:
             error_code=error_code,
             from_status=("claimed", "running"),
         )
+
+    def requeue(self, claim: Claim, *, delay_s: float, error_code: str) -> None:
+        """Return a claimed/running item to ``queued`` without spending an attempt.
+
+        For a refusal that says nothing about the run itself (``RootBusy``): the
+        item is claimable again after ``delay_s``. ``error_code`` records why.
+        """
+
+        due = (datetime.now(timezone.utc) + timedelta(seconds=max(0.0, delay_s))).isoformat()
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                UPDATE run_queue
+                SET status='queued', claimed_by=NULL, heartbeat_at=NULL, not_before=?,
+                    error_code=?
+                WHERE tenant_id=? AND run_id=? AND kind=? AND claim_token=?
+                  AND status IN ('claimed', 'running')
+                """,
+                (due, error_code, claim.tenant_id, claim.run_id, claim.kind, claim.claim_token),
+            )
+        if cur.rowcount != 1:
+            raise RuntimeError(
+                f"stale claim {(claim.tenant_id, claim.run_id, claim.kind)} token={claim.claim_token}"
+            )
 
     def wait(
         self,

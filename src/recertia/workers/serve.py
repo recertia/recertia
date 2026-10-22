@@ -11,8 +11,9 @@ from contracts.common import Arm
 from contracts.criteria import TaskCriterion
 from contracts.run import Task
 from recertia.graph.hooks import CancelHopHook, RunCancelled
+from recertia.persistence.root_lock import RootBusy
 from recertia.ports.identity import Principal
-from recertia.workers.queue import Claim, RunQueue, open_run_queue
+from recertia.workers.queue import ROOT_BUSY_RETRY_S, Claim, RunQueue, open_run_queue
 
 
 def _arm(value: object) -> Arm:
@@ -130,7 +131,11 @@ def execute_claim(root: Path, claim: Claim, *, queue: RunQueue | None = None) ->
 
 
 def run_once(root: Path, *, worker: str, capacity: int = 1) -> int:
-    """Claim and execute a single due item. Returns 1 when an item ran, else 0."""
+    """Claim and execute a single due item. Returns 1 when an item ran, else 0.
+
+    A claim refused with ``RootBusy`` is retryable: it goes back to ``queued``
+    after ``ROOT_BUSY_RETRY_S`` without spending an attempt, and this returns 0.
+    """
 
     queue = open_run_queue(root)
     claim: Claim | None = None
@@ -151,6 +156,11 @@ def run_once(root: Path, *, worker: str, capacity: int = 1) -> int:
         except RunCancelled:
             queue.finish(claim, status="cancelled")
             return 1
+        except RootBusy:
+            # Backup, restore, an import or another tenant's open handle holds the
+            # runtime root lock. Nothing ran; the run is not at fault (REC-058 MF-C).
+            queue.requeue(claim, delay_s=ROOT_BUSY_RETRY_S, error_code="root_busy")
+            return 0
         except Exception:
             queue.finish(claim, status="failed", error_code="run_failed")
             raise

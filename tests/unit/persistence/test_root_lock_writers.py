@@ -852,3 +852,167 @@ def test_migrate_off_open_refused_by_recheck_leaves_the_lock_free(
     monkeypatch.setattr(gp, "_resolve_runtime_db", real)
     assert calls == ["off", "off"]
     assert _backup_locks_free(root)
+
+
+# --- MF-C (round 3): a RootBusy claim is re-queued, not failed ---
+
+
+def _enqueue(root: Path, tenant: str, run_id: str, payload: dict[str, object]) -> None:
+    from recertia.workers.queue import QueueItem, open_run_queue
+
+    queue = open_run_queue(root)
+    try:
+        queue.enqueue(QueueItem(tenant_id=tenant, run_id=run_id, kind="run", payload=payload))
+    finally:
+        queue.close()
+
+
+def _queue_row(root: Path, tenant: str, run_id: str) -> object:
+    from recertia.workers.queue import open_run_queue
+
+    queue = open_run_queue(root)
+    try:
+        return queue.get(tenant, run_id)
+    finally:
+        queue.close()
+
+
+def _queue_due(root: Path, tenant: str, run_id: str) -> str:
+    import sqlite3
+
+    conn = sqlite3.connect(RuntimeLayout(root).control_db)
+    try:
+        row = conn.execute(
+            "SELECT not_before FROM run_queue WHERE tenant_id=? AND run_id=?", (tenant, run_id)
+        ).fetchone()
+    finally:
+        conn.close()
+    return str(row[0])
+
+
+def _hold_root(root: Path, holder: str) -> object:
+    """Something else holds ``<root>/.lock``: another tenant's open handle, or backup."""
+
+    if holder == "other_tenant_handle":
+        p = open_run_persistence(root / "runs" / "tenant-a", runtime_root=root)
+        return p.close
+    api_lock, lock = _exclusive_root_locks(root, action="backup")
+
+    def release() -> None:
+        lock.release()
+        api_lock.release()
+
+    return release
+
+
+@pytest.mark.parametrize("holder", ["other_tenant_handle", "backup"])
+def test_queue_worker_requeues_a_root_busy_claim_without_spending_an_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holder: str
+) -> None:
+    """``recertia worker`` (serve.run_once): RootBusy is retryable (ruling condition 1).
+
+    With ``other_tenant_handle``, tenant-b has a pending leftover import and a
+    tenant-a handle holds the shared root lock, so tenant-b's import is refused.
+    """
+
+    import recertia.workers.serve as serve
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    root = tmp_path / "rt"
+    tdir = _tenant_pending(root, "tenant-b", "b-old")
+    _enqueue(root, "tenant-b", "b-new", {"request": "b-new", "budget": {"max_attempts": 1}})
+    before = _run_store_snapshot(tdir)
+    release = _hold_root(root, holder)
+    try:
+        started = datetime.now(timezone.utc).isoformat()
+        assert serve.run_once(root, worker="w1") == 0
+        row = _queue_row(root, "tenant-b", "b-new")
+        assert (row.status, row.attempt, row.error_code) == ("queued", 0, "root_busy")  # type: ignore[attr-defined]
+        assert _queue_due(root, "tenant-b", "b-new") > started  # backed off
+        assert serve.run_once(root, worker="w1") == 0  # not due yet: nothing claimed
+        assert _run_store_snapshot(tdir) == before
+        assert legacy_sqlite_pending(RuntimeLayout(root).tenant("tenant-b"))
+    finally:
+        release()  # type: ignore[operator]
+    import sqlite3
+
+    conn = sqlite3.connect(RuntimeLayout(root).control_db)
+    try:  # skip the back-off instead of sleeping through it
+        conn.execute("UPDATE run_queue SET not_before=? WHERE run_id='b-new'", (started,))
+        conn.commit()
+    finally:
+        conn.close()
+    assert serve.run_once(root, worker="w1") == 1
+    row = _queue_row(root, "tenant-b", "b-new")
+    assert (row.status, row.attempt) == ("succeeded", 0)  # type: ignore[attr-defined]
+    p = open_run_persistence(tdir, runtime_root=root)
+    try:
+        assert set(p.checkpoints.list_run_ids()) == {"b-new", "b-old"}
+        assert _hist(p, "b-old") == [(1, "n1"), (2, "n2")]
+    finally:
+        p.close()
+
+
+def _async_request(root: Path, tenant: str, run_id: str) -> object:
+    from recertia.workers.run_worker import load_async_request
+
+    tdir = root / "runs" / tenant
+    req = load_async_request(
+        {
+            "run_id": run_id,
+            "tenant_id": tenant,
+            "request": run_id,
+            "budget": {"max_attempts": 1},
+            "workdir": str(root / "workspaces" / tenant / run_id),
+            "skills_root": str(root / "skills"),
+            "facts_root": str(root / "facts"),
+            "runs_root": str(tdir),
+            "index_path": str(tdir / "skill_index.db"),
+        }
+    )
+    req.workdir.mkdir(parents=True, exist_ok=True)
+    return req
+
+
+def test_embedded_worker_requeues_a_root_busy_claim_from_another_tenant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The API's embedded queue worker: RootBusy -> 'queued', and the run's events say
+    ``retryable: True`` (they said ``run_failed`` / ``retryable: False`` before)."""
+
+    from recertia.api.events import RunEventLog
+    from recertia.workers.embedded import EmbeddedQueueWorker
+    from recertia.workers.queue import open_run_queue
+    from recertia.workers.run_worker import AsyncRunWorker, dump_async_request
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    root = tmp_path / "rt"
+    tdir = _tenant_pending(root, "tenant-b", "b-old")
+    req = _async_request(root, "tenant-b", "b-new")
+    _enqueue(root, "tenant-b", "b-new", dump_async_request(req))  # type: ignore[arg-type]
+    events = RunEventLog(root)
+    worker = AsyncRunWorker(events=events)
+    queue = open_run_queue(root)
+    embedded = EmbeddedQueueWorker(worker, queue, worker_id="embedded-test")
+    try:
+        before = _run_store_snapshot(tdir)
+        release = _hold_root(root, "other_tenant_handle")
+        try:
+            claims = queue.claim("embedded-test", limit=1)
+            assert len(claims) == 1
+            embedded._execute(claims[0])
+            row = queue.get("tenant-b", "b-new")
+            assert row is not None
+            assert (row.status, row.attempt, row.error_code) == ("queued", 0, "root_busy")
+            assert _run_store_snapshot(tdir) == before
+        finally:
+            release()  # type: ignore[operator]
+        errors = [e for e in events.list_after("tenant-b", "b-new") if e.get("type") == "error"]
+        payloads = [e["payload"] for e in errors]
+        assert any(p.get("code") == "root_busy" and p.get("retryable") is True for p in payloads), errors
+        assert not any(p.get("code") == "run_failed" for p in payloads), errors
+        finished = [e for e in events.list_after("tenant-b", "b-new") if e.get("type") == "run.finished"]
+        assert finished == []
+    finally:
+        queue.close()
+        worker.shutdown(wait=True)

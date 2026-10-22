@@ -25,6 +25,7 @@ from recertia.bootstrap import build_default_orchestrator, resolve_task_class
 from recertia.config import ModelConfig
 from recertia.graph.hooks import RunCancelled
 from recertia.graph.lease import RunBusy
+from recertia.persistence.root_lock import RootBusy
 from recertia.ports.identity import Principal
 from recertia.runtime.errors import WorkspaceBusy
 
@@ -259,17 +260,21 @@ class AsyncRunWorker:
         worker_principal = Principal.from_api_key(
             key_id="async-worker", tenant_id=req.tenant_id, scopes=scopes
         )
-        bundle = build_default_orchestrator(
-            req.runs_root,
-            skills_root=skills,
-            facts_root=req.facts_root,
-            index_path=req.index_path,
-            approve_default_tools=req.approve_tools,
-            principal=worker_principal,
-            surface="worker",
-            model_config=req.model_config,
-            runtime_root=req.runs_root.parent.parent,
-        )
+        try:
+            bundle = build_default_orchestrator(
+                req.runs_root,
+                skills_root=skills,
+                facts_root=req.facts_root,
+                index_path=req.index_path,
+                approve_default_tools=req.approve_tools,
+                principal=worker_principal,
+                surface="worker",
+                model_config=req.model_config,
+                runtime_root=req.runs_root.parent.parent,
+            )
+        except RootBusy as exc:
+            self._root_busy(req, exc)
+            raise
         ws_handle = None
         try:
             bundle.orchestrator.max_criterion_timeout_s = req.max_criterion_timeout_s
@@ -334,6 +339,9 @@ class AsyncRunWorker:
             return "run_busy"
         except WorkspaceBusy:
             return "workspace_busy"
+        except RootBusy as exc:
+            self._root_busy(req, exc)
+            raise
         except Exception as exc:  # noqa: BLE001
             self.events.append(
                 req.tenant_id,
@@ -353,6 +361,16 @@ class AsyncRunWorker:
             if ws_handle is not None:
                 ws_handle.release()
             bundle.close()
+
+    def _root_busy(self, req: AsyncRunRequest, exc: RootBusy) -> None:
+        """Record a retryable refusal. The caller re-raises; the queue re-queues the claim."""
+
+        self.events.append(
+            req.tenant_id,
+            req.run_id,
+            "error",
+            {"code": "root_busy", "message": str(exc)[:500], "retryable": True},
+        )
 
     def _cancel_flag(self, req: AsyncRunRequest) -> bool:
         if req.cancel_check is None:
