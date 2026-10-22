@@ -277,7 +277,7 @@ jobs:
       RECERTIA_NO_NETWORK: "1"
       # The guard below fails the job unless at least this many root-lock tests pass.
       # Raise it whenever a root-lock test is added (REC-058 MF-1).
-      ROOT_LOCK_MIN_PASSED: "108"
+      ROOT_LOCK_MIN_PASSED: "114"
       # Same rule for the `-m windows` run (test_root_lock_windows_real.py), so a
       # real-Windows test cannot drop out of the selection unnoticed.
       WINDOWS_MARKED_MIN_PASSED: "20"
