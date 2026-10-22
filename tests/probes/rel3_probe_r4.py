@@ -45,15 +45,15 @@ def T2_same_thread_ghost_write(root):
 def T3_stale_holder_identity(root):
     """Holder identity lives in the lock file text. A crashed holder (SIGKILL) leaves it behind;
     a later process with the same pid/thread-ident (PID 1 in a container, pthread ident reuse) is
-    treated as the holder WITHOUT holding the flock."""
+    treated as the holder WITHOUT holding the flock.
+    REC-056b1: root_lock no longer has a pid/tid helper to ask, so the probe checks behaviour only:
+    with that text in .lock and no flock held, the open must import the leftover normally."""
     legacy(root)
     (root / ".lock").write_text(f"{os.getpid()} {threading.get_ident()}\n")   # leftover text, no flock held
-    from recertia.persistence.root_lock import exclusive_held_by_this_thread
-    spoof = exclusive_held_by_this_thread(root / ".lock")
     p = open_run_persistence(root); imported = not (root / "checkpoints.db").is_file() or _complete(root)
     p.checkpoints.save("legacy-run", 4, "n4", None, state("legacy-run")); p.close()
-    record("T3 identity text without the flock is not treated as holder", not spoof and imported,
-           f"exclusive_held_by_this_thread={spoof}; import ran={imported}")
+    record("T3 identity text without the flock is not treated as holder", imported,
+           f"import ran={imported}")
 
 def _complete(root):
     from recertia.persistence.import_legacy import legacy_import_complete
