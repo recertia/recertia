@@ -58,6 +58,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **REL-3 probe temp-dir cleanup hardening (REC-052)** — follows REC-047. `fresh_root` in
+  `tests/probes/rel3_probe.py` (now built on an `owned_root()` context manager, also used by
+  `rel3_probe_d` and `rel3_probe_busy`) kills and reaps every child the scenario started
+  (multiprocessing children and `subprocess_exclusive` lock holders) before it removes the
+  dir, and retries the removal once. Before, a pytest-timeout that fired mid-`join()` left a
+  child writing into the dir, so `rmtree` failed with `OSError: Directory not empty`, the dir
+  leaked and the OSError replaced the timeout. The scenario's own exception now always
+  propagates; a removal failure is attached to it as a note. SIGKILL, SIGTERM with no handler
+  and `os._exit` still leak the dir by design (documented in `fresh_root`). The
+  `subprocess_exclusive` holder now closes its stdout/stderr pipes, and the r3 busy scenarios
+  read and append their `.effects` journal with closed files, so the probe tests emit no
+  ResourceWarning (16 before). `tests/unit/graph/test_rel3_probe_tmp_cleanup.py` adds
+  KeyboardInterrupt and pytest-timeout (BaseException) cases, a still-writing-child case in
+  process and under a real pytest-timeout, a static guard that fails on any `mkdtemp(` call in
+  `tests/probes/`, and a ResourceWarning check, and is now `ruff format`ted.
+
 - **Exit-code test at the typer floor (REC-050)** — `tests/unit/cli/test_exit_codes.py`
   imported `typer.exceptions`, a module that first ships in typer 0.27.2, so it failed
   with `ModuleNotFoundError` at the declared `typer>=0.13` floor. It now catches the

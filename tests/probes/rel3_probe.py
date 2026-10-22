@@ -2,7 +2,7 @@
 open_run_persistence / import_legacy code. Each scenario prints PASS or FAIL(BUG)."""
 from __future__ import annotations
 import multiprocessing as mp, os, sqlite3, sys, tempfile, threading, time, traceback
-import faulthandler, functools, signal
+import contextlib, faulthandler, functools, signal
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,12 +24,89 @@ def record(name, ok, detail):
     RESULTS.append((name, ok, detail)); print(f"[{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
 
 def fresh_root(fn):
-    """Run ``fn(root, *args)`` in a new temp dir that is removed when ``fn`` returns or raises."""
+    """Run ``fn(root, *args)`` in a new temp dir that is removed when ``fn`` returns or raises.
+
+    Cleanup runs on any ``BaseException``, not just ``Exception`` (#112): KeyboardInterrupt
+    and pytest-timeout's ``signal``-method failure, which can land mid-``join()``, are
+    cleaned up too. Before the dir is removed, every child the scenario started that is
+    still alive (multiprocessing children and ``subprocess_exclusive`` holders) is killed
+    and reaped, so none can keep writing into the dir while it is removed. If the removal
+    still fails it is retried once; the scenario's own exception always propagates, with a
+    removal failure added to it as a note, and a removal failure after a normal return is
+    raised rather than hidden.
+
+    Not covered, by design: SIGKILL, SIGTERM with no handler installed (``timeout(1)``, a
+    CI cancel, pytest-timeout's ``thread`` method) and ``os._exit`` end the process
+    before any cleanup can run, so they still leak the dir.
+    """
     @functools.wraps(fn)
     def run(*args, **kwargs):
-        with tempfile.TemporaryDirectory() as tmp:
-            return fn(Path(tmp), *args, **kwargs)
+        with owned_root() as root:
+            return fn(root, *args, **kwargs)
     return run
+
+@contextlib.contextmanager
+def owned_root():
+    """``with owned_root() as root:`` gives the cleanup ``fresh_root`` does to a code block."""
+    before = _live_children()
+    tmp = tempfile.TemporaryDirectory()
+    try:
+        yield Path(tmp.name)
+    except BaseException as exc:
+        _release_root(tmp, before, exc)
+        raise
+    _release_root(tmp, before, None)
+
+def _release_root(tmp, before, exc):
+    """Reap the children started since ``before``, then remove ``tmp`` (one retry).
+
+    With ``exc`` set (the scenario raised) nothing here may replace it: a failure is
+    attached to ``exc`` as a note and the caller re-raises ``exc``.
+    """
+    try:
+        _reap_children(before)
+    except Exception as err:
+        if exc is None:
+            raise
+        exc.add_note(f"fresh_root: reaping children failed: {err!r}")
+    for attempt in (1, 2):
+        try:
+            tmp.cleanup()
+            return
+        except OSError as err:
+            if attempt == 1:
+                time.sleep(0.2)
+                continue
+            if exc is None:
+                raise
+            exc.add_note(f"fresh_root: could not remove {tmp.name}: {err!r}")
+
+_HOLDERS: set = set()  # live subprocess_exclusive children, reaped by owned_root
+
+def _live_children():
+    return set(mp.active_children()) | set(_HOLDERS)
+
+def _reap_children(before):
+    new = [p for p in mp.active_children() if p not in before]
+    _kill_children(new)
+    for proc in [p for p in _HOLDERS if p not in before]:
+        _stop_holder(proc)
+
+def _stop_holder(proc):
+    """Stop a ``subprocess_exclusive`` child and close its pipes."""
+    try:
+        if proc.stdin is not None and not proc.stdin.closed:
+            proc.stdin.close()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+            proc.wait(timeout=5)
+    finally:
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None and not pipe.closed:
+                pipe.close()
+        _HOLDERS.discard(proc)
 
 # Both stay below the suite-wide pytest-timeout (60s, pyproject.toml) so the
 # probe's own hang path (stack dumps, kill children) runs first, and children
@@ -118,18 +195,17 @@ def subprocess_exclusive(path):
         stderr=subprocess.PIPE,
         text=True,
     )
+    _HOLDERS.add(proc)
     assert proc.stdout is not None
     line = proc.stdout.readline()
     if line.strip() != "held":
         err = proc.stderr.read() if proc.stderr is not None else ""
+        _stop_holder(proc)
         raise RuntimeError(f"subprocess exclusive holder failed: {line!r} {err!r}")
 
     class _Holder:
         def release(self) -> None:
-            if proc.stdin is not None and not proc.stdin.closed:
-                proc.stdin.close()
-            if proc.poll() is None:
-                proc.wait(timeout=5)
+            _stop_holder(proc)
 
         def __del__(self) -> None:  # noqa: D105
             try:

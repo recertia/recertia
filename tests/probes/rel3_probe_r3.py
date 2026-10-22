@@ -121,6 +121,9 @@ def _busy_child(root, kind, effects_path, q):
         res.append(f"error {type(e).__name__}: {e}")
     q.put(("actions", res, None, time.monotonic() - t0, None))
 
+def _append(path, text):
+    with open(path, "a") as f: f.write(text)
+
 @fresh_root
 def _busy_scenario(tmp, kind):
     from recertia.persistence.root_lock import RootLock
@@ -139,7 +142,7 @@ def _busy_scenario(tmp, kind):
     except Exception:
         first = None                                                     # still blocked -> mode (b) candidate
     during = _snapshot(root)
-    fx_during = open(effects).read().split()
+    fx_during = effects.read_text().split()
     outcome, ok_mode = "", False
     if first is None:
         lock.release(); released = True
@@ -175,11 +178,11 @@ def _busy_scenario(tmp, kind):
         f = open_run_persistence(root)
         hist = [(int(s_), n) for s_, n, *_ in f.checkpoints.history("legacy-run")]
         if kind == "O":
-            f.operations.run_once("legacy-run", 1, "solve", 0, lambda: open(effects, "a").write("fresh-rerun\n") or {"v": 3})
+            f.operations.run_once("legacy-run", 1, "solve", 0, lambda: _append(effects, "fresh-rerun\n") or {"v": 3})
         f.close(); fresh = "opens"
     except Exception as e:
         hist, fresh = None, f"{type(e).__name__}: {e}"
-    fx = open(effects).read().split()
+    fx = effects.read_text().split()
     exp_fx = ["legacy"] if kind == "O" else []
     record(f"{kind}-c no side effect during busy window, none double-run after", fx_during == exp_fx and fx == exp_fx, f"during={fx_during} final={fx} expected={exp_fx}")
     record(f"{kind}-d after release fresh open = pre-existing + holder writes exactly", hist == expected, f"fresh open {fresh}; history={hist}; expected={expected}")

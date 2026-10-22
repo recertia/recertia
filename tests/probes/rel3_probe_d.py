@@ -50,8 +50,9 @@ def try_write(label, fn):
     except Exception as exc: return f"rejected({type(exc).__name__})"
 
 def scenario(mode):
-    with tempfile.TemporaryDirectory() as tmp:
-        _scenario(Path(tmp), mode)
+    from tests.probes.rel3_probe import owned_root  # reaps the thief before removing the dir
+    with owned_root() as root:
+        _scenario(root, mode)
 
 def _scenario(root, mode):
     run = f"d-{mode}"
