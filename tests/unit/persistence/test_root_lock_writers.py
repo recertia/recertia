@@ -372,9 +372,7 @@ def _pending_root(root: Path, run_id: str) -> None:
     assert legacy_sqlite_pending(RuntimeLayout(root).local_runs())
 
 
-def _start_slow_restore(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[Path, threading.Thread]:
+def _start_slow_restore(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, threading.Thread]:
     """Restore a pre-import backup (leftover seqs 1-2) into an empty root, slowly.
 
     Returns once restore holds the root lock and is about to extract.
@@ -488,9 +486,7 @@ def test_orchestrator_init_failure_releases_its_own_handle(
     assert _backup_locks_free(root)
 
 
-def test_lock_released_when_open_raises_after_lock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_lock_released_when_open_raises_after_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import recertia.graph.persistence as gp
 
     root = tmp_path / "runs"
@@ -766,9 +762,7 @@ def test_api_transcript_route_takes_the_runtime_root_lock(
 # --- MF-B (round 3): migrate=off re-checks its decision under the lock ---
 
 
-def _start_slow_restore_of(
-    archive: Path, target: Path, monkeypatch: pytest.MonkeyPatch
-) -> threading.Thread:
+def _start_slow_restore_of(archive: Path, target: Path, monkeypatch: pytest.MonkeyPatch) -> threading.Thread:
     """Restore ``archive`` over ``target`` slowly; return once restore holds the lock."""
 
     real_extract = tarfile.TarFile.extractall

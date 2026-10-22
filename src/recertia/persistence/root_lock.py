@@ -115,6 +115,7 @@ else:
         exc.winerror = code  # type: ignore[attr-defined]
         return exc
 
+
 _WIN_API: _WinLockApi | None = None
 
 
