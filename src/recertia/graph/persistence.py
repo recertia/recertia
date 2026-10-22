@@ -51,7 +51,6 @@ class RunPersistence:
                     lock.release()
 
 
-
 class FencedRunPersistence:
     """Checkpoint writes compare the caller token to ``run_leases`` (REL-3)."""
 
@@ -159,9 +158,7 @@ def open_run_persistence(
         if legacy_sqlite_pending(layout):
             # Decided before the lock; a restore may have brought leftover files back.
             shared.release()
-            raise RootBusy(
-                f"leftover runtime files appeared while waiting for the root lock: {shared.path}"
-            )
+            raise RootBusy(f"leftover runtime files appeared while waiting for the root lock: {shared.path}")
     else:
         try:
             shared.acquire_shared()
@@ -177,9 +174,7 @@ def open_run_persistence(
             # open treats as the source of truth; a write to the leftover files would
             # be lost (REC-058 MF-B). Fail closed; the retry reads runtime.db.
             shared.release()
-            raise RootBusy(
-                f"the runtime root was imported while waiting for the root lock: {shared.path}"
-            )
+            raise RootBusy(f"the runtime root was imported while waiting for the root lock: {shared.path}")
     handle_lock: RootLock | None = shared
     try:
         if use_runtime:
@@ -226,9 +221,7 @@ def open_run_persistence(
             handle_lock.release()
 
 
-def _resolve_runtime_db(
-    layout: RunsRootLayout, mode: MigrateMode
-) -> tuple[bool, Path | None]:
+def _resolve_runtime_db(layout: RunsRootLayout, mode: MigrateMode) -> tuple[bool, Path | None]:
     if mode == "off":
         # After import, runtime.db is the source of truth even though leftover
         # files are kept for rollback (probe K / Q).
