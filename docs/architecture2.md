@@ -1355,9 +1355,9 @@ process. A trusted proxy that appends its own address is not a rewrite: when the
 trusted and a different hop remains to their left, its trailing self-hops are skipped
 before detection. That skip relies on the rewriter setting the peer port to 0, which
 uvicorn does for a bare hop (a real TCP peer never has port 0), so a rewritten peer never
-gets it. `X-Forwarded-For` parsing is bounded before the header is split (16 header lines,
-8192 bytes, 64 hops); anything larger gets the same fail-closed key, with its own one-time
-warning.
+gets it. `X-Forwarded-For` parsing is bounded: header lines and bytes are checked before the
+header is split (16 lines, 8192 bytes) and the hop count right after the split (64 hops);
+anything larger gets the same fail-closed key, with its own one-time warning.
 
 **Warning: with uvicorn's default `--proxy-headers` behind a reverse proxy on loopback,
 every user lands in one shared 16-slot bucket.** One client can then keep everyone's

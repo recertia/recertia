@@ -29,8 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warning, and another when that key first fills; with uvicorn's default behind a
   loopback proxy that puts every user in one 16-slot bucket. A trusted proxy's own
   trailing self-hops are skipped before detection; that relies on the rewriter setting
-  port 0 (true for uvicorn). `X-Forwarded-For` parsing is bounded before splitting (16
-  lines, 8192 bytes, 64 hops; larger fails closed). A Unix-socket peer uses the fixed key
+  port 0 (true for uvicorn). `X-Forwarded-For` parsing is bounded: 16 lines and 8192
+  bytes are checked before splitting, 64 hops right after (larger fails closed). A
+  Unix-socket peer uses the fixed key
   `unknown`. `X-Forwarded-For` from an untrusted peer logs a one-time warning naming
   `RECERTIA_TRUSTED_PROXIES`.
   **Operators: `RECERTIA_TRUSTED_PROXIES` is required behind a reverse proxy** (otherwise

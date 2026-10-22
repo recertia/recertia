@@ -481,9 +481,11 @@ def oidc_client_key(
     * ``peer`` / ``peer_port`` are the ASGI peer (``request.client``); ``forwarded_for`` is
       every ``X-Forwarded-For`` header line, in order. ``Forwarded`` (RFC 7239) is never read.
     * No peer (e.g. ``uvicorn --uds``): the fixed key ``"unknown"``, shared by everyone.
-    * Bounded parsing, checked before the header is split: more than ``_XFF_MAX_LINES``
-      lines, ``_XFF_MAX_BYTES`` bytes or ``_XFF_MAX_HOPS`` hops fails closed to the fixed
-      ``"proxy-headers-rewritten"`` key (one-time warning). Malformed input never raises.
+    * Bounded parsing: more than ``_XFF_MAX_LINES`` lines or ``_XFF_MAX_BYTES`` bytes is
+      checked before the header is split, and more than ``_XFF_MAX_HOPS`` hops right after
+      the split (its input is already at most ``_XFF_MAX_BYTES``). Any of them fails closed
+      to the fixed ``"proxy-headers-rewritten"`` key (one-time warning). Malformed input
+      never raises.
     * A trusted proxy's own trailing self-hops: when the peer is trusted, its port is
       non-zero and a hop other than the peer remains to their left (and the peer appears
       nowhere in that remainder), trailing bare-IP hops equal to the peer are dropped
@@ -518,6 +520,8 @@ def oidc_client_key(
         tail = hops
         while tail and _ip(tail[-1]) == peer_ip:  # bare-IP self-hops only
             tail = tail[:-1]
+        # Defence in depth: the last clause never changes the result, because rewrite
+        # detection below already checks the same loose set over hops, a superset of tail.
         if tail and len(tail) < len(hops) and peer_ip not in {_hop_ip_loose(h) for h in tail}:
             hops = tail
     if peer_ip is None or (hops and (peer.strip() in hops or peer_ip in {_hop_ip_loose(h) for h in hops})):
@@ -535,11 +539,18 @@ def oidc_client_key(
         if hops:
             _warn_once(
                 "untrusted-xff",
-                "console OIDC login: ignoring X-Forwarded-For from an untrusted peer. Behind a "
-                "reverse proxy, RECERTIA_TRUSTED_PROXIES is required, or every user shares the "
-                "proxy's single per-client limit.",
+                "console OIDC login: not using X-Forwarded-For for the client key (untrusted "
+                "peer); it is used for the key only when the peer is trusted. Behind a reverse "
+                "proxy, RECERTIA_TRUSTED_PROXIES is required, or every user shares the proxy's "
+                "single per-client limit.",
             )
         return _key(peer_ip)
+    return _rightmost_client_key(hops, peer_ip, trusted)
+
+
+def _rightmost_client_key(hops: Sequence[str], peer_ip: IPAddress, trusted: Sequence[IPNetwork]) -> str:
+    """Trusted peer: walk from the right to the first hop that is not a trusted proxy."""
+
     for hop in reversed(hops):
         ip = _ip(hop) if hop else None
         if ip is None:

@@ -618,7 +618,8 @@ def test_b1_uvicorn_rewrite_port_contract(star: bool, xff: list[str], bare: bool
     assert oidc_client_key(host, xff, every_hop, port) == REWRITTEN
 
 
-# B2 / ruling (a): bounded parsing, before splitting; over a cap fails closed
+# B2 / ruling (a): bounded parsing (lines and bytes before splitting, hops right after);
+# over a cap fails closed
 
 
 @pytest.mark.parametrize("trusted", [TRUSTED, ()])
@@ -747,9 +748,8 @@ def test_a_warnings_fire_once_per_process_across_apps(
 def test_a_warning_once_under_threads(caplog: pytest.LogCaptureFixture) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
-    with caplog.at_level(logging.WARNING, logger="recertia.api.console_auth"):
-        with ThreadPoolExecutor(16) as pool:
-            list(pool.map(lambda i: oidc_client_key(FLOODER, [f"192.0.2.{i % 200}"], ()), range(2000)))
+    with caplog.at_level(logging.WARNING, logger="recertia.api.console_auth"), ThreadPoolExecutor(16) as pool:
+        list(pool.map(lambda i: oidc_client_key(FLOODER, [f"192.0.2.{i % 200}"], ()), range(2000)))
     assert sum("RECERTIA_TRUSTED_PROXIES" in r.getMessage() for r in caplog.records) == 1
 
 
@@ -902,6 +902,40 @@ def test_s4_docs_say_used_for_the_key_only_when_trusted() -> None:
     assert "use `X-Forwarded-For` for the client key only from a peer" in changelog
     assert "forwarded headers are never read" not in settings_src
     assert "X-Forwarded-For is never used for the client key" in settings_src
+
+
+# PR161 review N-a: the untrusted-peer warning uses the S4 wording
+
+
+def test_na_untrusted_xff_warning_says_used_for_the_key_only_when_trusted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="recertia.api.console_auth"):
+        assert oidc_client_key(FLOODER, ["192.0.2.1"], TRUSTED, 40000) == FLOODER
+    (msg,) = [r.getMessage() for r in caplog.records]
+    assert "not using X-Forwarded-For for the client key (untrusted peer)" in msg
+    assert "it is used for the key only when the peer is trusted" in msg
+    assert "RECERTIA_TRUSTED_PROXIES is required" in msg
+    assert "ignoring" not in msg
+
+
+# PR161 review N-b: docs say lines/bytes are capped before the split and hops right after
+
+
+def test_nb_docs_describe_where_each_xff_cap_runs() -> None:
+    go_live = " ".join((REPO / "docs" / "architecture" / "go-live.md").read_text(encoding="utf-8").split())
+    changelog = " ".join((REPO / "CHANGELOG.md").read_text(encoding="utf-8").split())
+    doc = " ".join((console_auth.oidc_client_key.__doc__ or "").split())
+    assert (
+        "header lines and bytes are checked before the header is split (16 lines, 8192 bytes) "
+        "and the hop count right after the split (64 hops)" in go_live
+    )
+    assert "16 lines and 8192 bytes are checked before splitting, 64 hops right after" in changelog
+    assert "is checked before the header is split, and more than ``_XFF_MAX_HOPS`` hops right after" in doc
+    for text in (go_live, changelog, doc):
+        assert "bounded before the header is split (16 header lines, 8192 bytes, 64 hops)" not in text
+        assert "bounded before splitting (16 lines, 8192 bytes, 64 hops" not in text
+        assert "checked before the header is split: more than" not in text
 
 
 # Nits (PR154_REVIEW N2-N4)
