@@ -27,7 +27,7 @@
 - the importer waits up to `RECERTIA_IMPORT_LOCK_TIMEOUT_S` for the exclusive root lock (`src/recertia/persistence/import_legacy.py:170-175`, default 5 s; the test suite sets 0.25 s at `tests/conftest.py:18`);
 - if the lock is still held, it raises typed `RootBusy` and writes nothing (`import_legacy.py:191-201`; `RootBusy` is defined at `src/recertia/persistence/root_lock.py:28-33`).
 
-**Amended by REC-065 ([#170](https://github.com/recertia/recertia/pull/170)).** The importer now holds root shared + tenant exclusive, and "the lock is held" now includes a same-tenant tenant lock. The decision (typed `RootBusy`, fail closed, no overlay) is unchanged, and so is the cross-tenant scope.
+**Amended by REC-065 ([#170](https://github.com/recertia/recertia/pull/170)).** The importer now holds root shared + tenant exclusive, and "the lock is held" now includes a same-tenant tenant lock. The decision (typed `RootBusy`, fail closed, no overlay) is unchanged, and so is the rule's scope (the leftover-import path); a different tenant's handle or import no longer makes it busy (#158).
 
 The lock is a flock and must not carry pid/tid identity (`root_lock.py:6-8`). The old identity helper was a stub that always returned `False` (`root_lock.py:36-43` at `e25ecfa6`); REC-056b1 ([#132](https://github.com/recertia/recertia/issues/132)) deleted it, and that landed on main as [#151](https://github.com/recertia/recertia/pull/151).
 
@@ -104,7 +104,7 @@ R3 also allows mode (b), "block and succeed only after release" (`rel3_probe_r3.
 - The lock carries no identity.
 - After release, the first open imports exactly once, and every later open converges on exactly the pre-existing state plus the holder's own writes.
 
-**Amended by REC-065 ([#170](https://github.com/recertia/recertia/pull/170)).** The importer now holds root shared + tenant exclusive, and "the lock is held" now includes a same-tenant tenant lock. The decision (typed `RootBusy`, fail closed, no overlay) is unchanged, and so is the cross-tenant scope.
+**Amended by REC-065 ([#170](https://github.com/recertia/recertia/pull/170)).** The importer now holds root shared + tenant exclusive, and "the lock is held" now includes a same-tenant tenant lock. The decision (typed `RootBusy`, fail closed, no overlay) is unchanged, and so is the rule's scope (the leftover-import path); a different tenant's handle or import no longer makes it busy (#158).
 
 The six probes I, L, M, M2, T1, T2 are **rewritten by design** to the expectations in the next section. Their node IDs do not change.
 
