@@ -25,8 +25,9 @@ from recertia.ports.identity import tenant_id
 _MIGRATIONS = Path(__file__).resolve().parents[1] / "persistence" / "migrations" / "control"
 _CLAIM_COST = 1
 _TERMINAL = frozenset({"succeeded", "failed", "cancelled", "dead"})
-# A claim refused with RootBusy (backup, restore, an import or another tenant's open
-# handle holds the runtime root lock) goes back to 'queued' this long (REC-058).
+# A claim refused with RootBusy (backup or restore holds the runtime root lock, or an
+# import or open handle of the same tenant holds its tenant lock; REC-065) goes back
+# to 'queued' this long (REC-058).
 ROOT_BUSY_RETRY_S = 2.0
 QueueStatus = Literal["succeeded", "failed", "cancelled"]
 

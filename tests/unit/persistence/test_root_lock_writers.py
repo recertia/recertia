@@ -21,7 +21,7 @@ from recertia.graph.persistence import open_run_persistence
 from recertia.ops.backup import BackupError, _exclusive_root_locks, backup_tree, restore_tree
 from recertia.persistence.import_legacy import legacy_import_complete, legacy_sqlite_pending
 from recertia.persistence.layout import RuntimeLayout
-from recertia.persistence.root_lock import RootBusy
+from recertia.persistence.root_lock import RootBusy, TenantLock
 
 
 def _state(run_id: str) -> RunState:
@@ -515,13 +515,17 @@ def test_lock_released_when_close_raises(tmp_path: Path) -> None:
     assert _backup_locks_free(root)
 
 
-# --- MF5: ruling condition (4), cross-tenant RootBusy ---
+# --- MF5: ruling condition (4); REC-065 (#158) lifted the cross-tenant RootBusy ---
 
 
-def test_cross_tenant_pending_import_is_root_busy_while_other_tenant_handle_open(
+def test_cross_tenant_pending_import_proceeds_while_other_tenant_handle_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    """REC-058 pinned typed RootBusy here: one root lock for all tenants. Since REC-065
+    each tenant has its own lock, so tenant-b imports while tenant-a's handle is open
+    (timeout 0: any wait would be RootBusy), and the tenants still do not see each other."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0")
     rt = RuntimeLayout(tmp_path / "rt")
     la, lb = rt.tenant("tenant-a"), rt.tenant("tenant-b")
     pb0 = open_run_persistence(lb, migrate="off")
@@ -534,22 +538,15 @@ def test_cross_tenant_pending_import_is_root_busy_while_other_tenant_handle_open
     pa = open_run_persistence(la)
     try:
         pa.checkpoints.save("a-run", 1, "a1", None, _state("a-run"))
-        before = _db_byte_snapshot(lb.runs_root)
-        started = time.monotonic()
-        with pytest.raises(RootBusy):
-            open_run_persistence(lb)
-        assert time.monotonic() - started <= _JOIN_BOUND_S
-        assert _db_byte_snapshot(lb.runs_root) == before  # nothing imported or partly applied
-        assert legacy_sqlite_pending(lb)
+        pb = open_run_persistence(lb)  # imports tenant-b under tenant-a's live handle
+        try:
+            assert _hist(pb, "b-run") == [(1, "n1"), (2, "n2")]
+            assert pb.checkpoints.list_run_ids() == ["b-run"]
+        finally:
+            pb.close()
         assert pa.checkpoints.list_run_ids() == ["a-run"]  # B never visible through A
     finally:
         pa.close()
-    pb = open_run_persistence(lb)
-    try:
-        assert _hist(pb, "b-run") == [(1, "n1"), (2, "n2")]
-        assert pb.checkpoints.list_run_ids() == ["b-run"]
-    finally:
-        pb.close()
     assert legacy_import_complete(lb.runtime_db)
     pb = open_run_persistence(lb)  # re-open: no duplicate rows, no re-import
     try:
@@ -885,11 +882,20 @@ def _queue_due(root: Path, tenant: str, run_id: str) -> str:
 
 
 def _hold_root(root: Path, holder: str) -> object:
-    """Something else holds ``<root>/.lock``: another tenant's open handle, or backup."""
+    """Something else holds a lock tenant-b needs, or (``other_tenant_handle``) does not.
+
+    ``same_tenant_import``: what an import of tenant-b holds (``<root>/.lock`` shared,
+    tenant-b's tenant lock exclusive). ``backup``: ``api.lock`` and ``<root>/.lock``
+    exclusive. ``other_tenant_handle``: a live tenant-a handle (REC-065: no conflict).
+    """
 
     if holder == "other_tenant_handle":
         p = open_run_persistence(root / "runs" / "tenant-a", runtime_root=root)
         return p.close
+    if holder == "same_tenant_import":
+        held = TenantLock(RuntimeLayout(root).root_lock, RuntimeLayout(root).tenant("tenant-b").tenant_lock)
+        held.acquire(exclusive=True, timeout_s=0)
+        return held.release
     api_lock, lock = _exclusive_root_locks(root, action="backup")
 
     def release() -> None:
@@ -899,14 +905,16 @@ def _hold_root(root: Path, holder: str) -> object:
     return release
 
 
-@pytest.mark.parametrize("holder", ["other_tenant_handle", "backup"])
+@pytest.mark.parametrize("holder", ["same_tenant_import", "backup"])
 def test_queue_worker_requeues_a_root_busy_claim_without_spending_an_attempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holder: str
 ) -> None:
     """``recertia worker`` (serve.run_once): RootBusy is retryable (ruling condition 1).
 
-    With ``other_tenant_handle``, tenant-b has a pending leftover import and a
-    tenant-a handle holds the shared root lock, so tenant-b's import is refused.
+    Tenant-b has a pending leftover import. With ``same_tenant_import`` another import
+    of tenant-b holds its tenant lock, so this one is refused. (Until REC-065 the holder
+    here was a tenant-a handle; another tenant no longer refuses the claim, see
+    ``test_queue_worker_claim_runs_while_another_tenant_handle_is_open``.)
     """
 
     import recertia.workers.serve as serve
@@ -968,11 +976,12 @@ def _async_request(root: Path, tenant: str, run_id: str) -> object:
     return req
 
 
-def test_embedded_worker_requeues_a_root_busy_claim_from_another_tenant(
+def test_embedded_worker_requeues_a_root_busy_claim_while_the_same_tenant_imports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The API's embedded queue worker: RootBusy -> 'queued', and the run's events say
-    ``retryable: True`` (they said ``run_failed`` / ``retryable: False`` before)."""
+    ``retryable: True`` (they said ``run_failed`` / ``retryable: False`` before). The
+    holder is an import of tenant-b itself; until REC-065 it was a tenant-a handle."""
 
     from recertia.api.events import RunEventLog
     from recertia.workers.embedded import EmbeddedQueueWorker
@@ -990,7 +999,7 @@ def test_embedded_worker_requeues_a_root_busy_claim_from_another_tenant(
     embedded = EmbeddedQueueWorker(worker, queue, worker_id="embedded-test")
     try:
         before = _run_store_snapshot(tdir)
-        release = _hold_root(root, "other_tenant_handle")
+        release = _hold_root(root, "same_tenant_import")
         try:
             claims = queue.claim("embedded-test", limit=1)
             assert len(claims) == 1

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from recertia.persistence.layout import RuntimeLayout
+from recertia.persistence.layout import TENANT_LOCK_NAME, RuntimeLayout
 from recertia.persistence.root_lock import RootLock, RootLockBusy
 
 MANIFEST_NAME = "MANIFEST.json"
@@ -22,6 +22,17 @@ _MANIFEST_VERSION = 1
 # nor extracted. On Windows the locks are mandatory, so reading or overwriting a
 # file through another handle while it is locked can fail (REC-058 MF-D).
 _ROOT_LOCK_FILES = frozenset({".lock", "api.lock"})
+
+
+def _is_lock_file(rel: str) -> bool:
+    """The root's ``.lock``/``api.lock``, or any runs root's tenant lock (REC-065).
+
+    Tenant locks are empty too. Backup and restore take no tenant lock: the
+    exclusive root ``.lock`` already keeps out every tenant holder, which takes
+    the root lock shared first (lock order in ``recertia.persistence.root_lock``).
+    """
+
+    return rel in _ROOT_LOCK_FILES or rel.rsplit("/", 1)[-1] == TENANT_LOCK_NAME
 
 
 class BackupError(ValueError):
@@ -64,7 +75,8 @@ def backup_tree(root: Path, archive: Path) -> Path:
 
     SQLite databases are snapshotted with the backup API so a live WAL is
     included as one consistent file. ``-wal`` and ``-shm`` sidecars are omitted,
-    and so are the root's ``.lock`` and ``api.lock``, which this call holds.
+    and so are the root's ``.lock`` and ``api.lock``, which this call holds, and
+    every runs root's empty ``.tenant.lock``.
     """
 
     source = Path(root).resolve()
@@ -88,7 +100,7 @@ def backup_tree(root: Path, archive: Path) -> Path:
                     if not path.is_file() and not path.is_symlink():
                         continue
                     rel = path.relative_to(source).as_posix()
-                    if rel == MANIFEST_NAME or rel in _ROOT_LOCK_FILES or _is_sqlite_sidecar(path):
+                    if rel == MANIFEST_NAME or _is_lock_file(rel) or _is_sqlite_sidecar(path):
                         continue
                     if _is_sqlite_db(path) and not path.is_symlink():
                         snapshot = snap_root / rel
@@ -106,8 +118,9 @@ def backup_tree(root: Path, archive: Path) -> Path:
 def restore_tree(archive: Path, dest: Path, *, overwrite: bool = False) -> Path:
     """Extract a backup archive into ``dest``. Refuses path-escaping members.
 
-    The root's ``.lock`` and ``api.lock`` (held by this call) are not extracted,
-    so an archive written before they were left out still restores.
+    The root's ``.lock`` and ``api.lock`` (held by this call) and any
+    ``.tenant.lock`` are not extracted, so an archive written before they were
+    left out still restores.
     """
 
     src = Path(archive).resolve()
@@ -129,7 +142,7 @@ def restore_tree(archive: Path, dest: Path, *, overwrite: bool = False) -> Path:
                         candidate.relative_to(target)
                     except ValueError as exc:
                         raise BackupError(f"archive member escapes dest: {member.name}") from exc
-                if _normalized_member(name) in _ROOT_LOCK_FILES:
+                if _is_lock_file(_normalized_member(name)):
                     continue
                 members.append(member)
             extract_kw: dict[str, Any] = {"path": target, "members": members}
@@ -203,7 +216,11 @@ def _exclusive_lock(path: Path, *, action: str, holder: str = "the API") -> Root
 
 
 def _exclusive_root_locks(root: Path, *, action: str) -> tuple[RootLock, RootLock]:
-    """Exclusive on ``api.lock`` (the API presence lock) then ``.lock`` (importers)."""
+    """Exclusive on ``api.lock`` (the API presence lock) then ``.lock``.
+
+    The exclusive ``.lock`` refuses while any tenant's import or run handle is
+    live: each holds ``.lock`` shared under its tenant lock (REC-065 lock order).
+    """
 
     layout = RuntimeLayout(root)
     api_lock = _exclusive_lock(layout.api_lock, action=action)

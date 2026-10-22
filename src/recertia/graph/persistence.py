@@ -20,7 +20,7 @@ from recertia.persistence.import_legacy import (
     sqlite_has_table,
 )
 from recertia.persistence.layout import RunsRootLayout, RuntimeLayout
-from recertia.persistence.root_lock import RootBusy, RootLock, RootLockBusy
+from recertia.persistence.root_lock import RootBusy, RootLockBusy, TenantLock
 from recertia.settings import MigrateMode, load_settings
 from recertia.trajectory.store import TrajectoryStore
 from recertia.workspace import WorkspaceManager
@@ -36,7 +36,7 @@ class RunPersistence:
     trajectories: TrajectoryStore
     audited_states: AuditedStateStore
     workspaces: WorkspaceManager
-    root_lock: RootLock | None = None
+    root_lock: TenantLock | None = None
 
     def close(self) -> None:
         try:
@@ -110,15 +110,20 @@ def open_run_persistence(
     leftover files (a copy, not a rename) for one-release rollback. After an
     import has been recorded in ``schema_migrations``, ``off`` reads
     ``runtime.db`` so post-import writes cannot vanish. ``manual`` refuses to
-    start while leftover files are still pending. Anyone who finds exclusive
-    ``.lock`` already held waits, then raises ``RootBusy`` and must not write
-    somewhere else. There is no same-thread holder exception.
+    start while leftover files are still pending. Anyone who finds a lock it
+    needs (the root ``.lock`` or its tenant lock) held exclusively waits, then
+    raises ``RootBusy`` and must not write somewhere else. There is no
+    same-thread holder exception.
 
-    On an already-imported (or fresh) root the handle holds a shared root
-    ``.lock`` for its lifetime (released by ``close``), so it cannot write
-    while backup or restore holds the exclusive lock. Taking it waits at most
-    ``RECERTIA_IMPORT_LOCK_TIMEOUT_S``, then raises ``RootBusy`` before any
-    db file is opened or written. Leftover files are re-checked once the lock
+    On an already-imported (or fresh) root the handle holds the runtime root's
+    ``.lock`` shared and then its runs root's tenant lock shared, for its
+    lifetime (released by ``close``; REC-065 lock order, see
+    :class:`~recertia.persistence.root_lock.TenantLock`). So it cannot write while
+    backup or restore holds the root lock exclusively, nor while an import of
+    the same tenant holds its tenant lock exclusively; handles and imports of
+    other tenants on the same root do not wait for it. Taking both waits at
+    most ``RECERTIA_IMPORT_LOCK_TIMEOUT_S`` in total, then raises ``RootBusy``
+    before any db file is opened or written. Leftover files are re-checked once the lock
     is held: if a restore brought some back while this open waited, it raises
     ``RootBusy`` too, and the retry imports them. ``migrate=off`` re-checks too:
     if it chose the leftover files but the root was imported while it waited (a
@@ -126,10 +131,11 @@ def open_run_persistence(
     files no later open reads.
 
     A bare path is its own runtime root (the CLI layout), so its ``.lock`` is
-    ``<path>/.lock``. Pass ``runtime_root`` when ``root`` is a tenant runs
-    directory under a runtime root (workers use ``<runtime_root>/runs/<tenant>``):
-    the handle then locks ``<runtime_root>/.lock``, the lock backup and restore
-    take. Files and tenant id are unchanged.
+    ``<path>/.lock`` and its tenant lock ``<path>/.tenant.lock``. Pass
+    ``runtime_root`` when ``root`` is a tenant runs directory under a runtime
+    root (workers use ``<runtime_root>/runs/<tenant>``): the handle then locks
+    ``<runtime_root>/.lock``, the lock backup and restore take, and then
+    ``<root>/.tenant.lock``. Files and tenant id are unchanged.
     """
 
     del durability
@@ -147,35 +153,36 @@ def open_run_persistence(
     tenant = str(layout.tenant) if layout.tenant is not None else "local"
     mode = migrate if migrate is not None else load_settings().runtime_db_migrate
     use_runtime, read_fallback = _resolve_runtime_db(layout, mode)
-    shared = RootLock(layout.parent.root_lock)
+    # Root lock shared, then this runs root's tenant lock shared (REC-065 lock order).
+    shared = TenantLock(layout.parent.root_lock, layout.tenant_lock)
     if use_runtime:
         try:
-            shared.acquire_shared(timeout_s=import_lock_timeout_s())
+            shared.acquire(exclusive=False, timeout_s=import_lock_timeout_s())
         except RootLockBusy as exc:
-            raise RootBusy(
-                f"cannot open the runtime root while the root lock is held: {shared.path}"
-            ) from exc
+            raise RootBusy(f"cannot open the runtime root while the {shared.refused}") from exc
         if legacy_sqlite_pending(layout):
             # Decided before the lock; a restore may have brought leftover files back.
             shared.release()
-            raise RootBusy(f"leftover runtime files appeared while waiting for the root lock: {shared.path}")
+            raise RootBusy(
+                f"leftover runtime files appeared while waiting for the root lock: {shared.root.path}"
+            )
     else:
         try:
-            shared.acquire_shared()
+            shared.acquire(exclusive=False, timeout_s=None)
         except RootLockBusy as exc:
             # Windows: the blocking wait ends after the LockFileEx retry budget. Typed,
             # so a worker re-queues the claim (REC-058 S-1; the bound itself is #153).
-            raise RootBusy(
-                f"cannot open the runtime root while the root lock is held: {shared.path}"
-            ) from exc
+            raise RootBusy(f"cannot open the runtime root while the {shared.refused}") from exc
         if _resolve_runtime_db(layout, "off")[0]:
             # migrate=off decided "leftover files" before the lock. A restore that ran
             # meanwhile may have brought back an imported runtime.db, which every later
             # open treats as the source of truth; a write to the leftover files would
             # be lost (REC-058 MF-B). Fail closed; the retry reads runtime.db.
             shared.release()
-            raise RootBusy(f"the runtime root was imported while waiting for the root lock: {shared.path}")
-    handle_lock: RootLock | None = shared
+            raise RootBusy(
+                f"the runtime root was imported while waiting for the root lock: {shared.root.path}"
+            )
+    handle_lock: TenantLock | None = shared
     try:
         if use_runtime:
             conn = open_db(layout.runtime_db)

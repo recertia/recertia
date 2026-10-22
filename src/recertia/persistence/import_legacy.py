@@ -11,7 +11,7 @@ from pathlib import Path
 
 from recertia.persistence.db import apply_migrations, open_db
 from recertia.persistence.layout import RunsRootLayout
-from recertia.persistence.root_lock import RootBusy, RootLock, RootLockBusy
+from recertia.persistence.root_lock import RootBusy, RootLockBusy, TenantLock
 from recertia.runtime.errors import StateCorrupt
 
 IMPORT_ID = "runtime.import_legacy_checkpoints"
@@ -187,24 +187,25 @@ def import_legacy_runtime(
     """Copy legacy SQLite files into ``runtime.db``.
 
     Returns ``True`` when the dest is ready (imported, already done, or nothing
-    to import). Anyone who finds exclusive ``.lock`` already held waits
-    ``timeout_s`` (default ``RECERTIA_IMPORT_LOCK_TIMEOUT_S``, 5s) and then
-    raises :class:`RootBusy` — that caller must not write somewhere else.
+    to import). The import holds the runtime root's ``.lock`` shared and then this
+    runs root's tenant lock exclusive (REC-065 lock order, see
+    :class:`~recertia.persistence.root_lock.TenantLock`), so it excludes backup,
+    restore and every other import or handle of the same tenant, but not other
+    tenants. Anyone who finds a lock it needs already held waits ``timeout_s``
+    (default ``RECERTIA_IMPORT_LOCK_TIMEOUT_S``, 5s) in total and then raises
+    :class:`RootBusy` — that caller must not write somewhere else.
     Unequal leftover checkpoints at a seq already in dest keep dest and still
     import the other leftover seqs.
     """
 
     if not legacy_sqlite_pending(layout):
         return True
-    lock_path = layout.parent.root_lock
     wait = _import_lock_timeout_s() if timeout_s is None else max(0.0, timeout_s)
-    lock = RootLock(lock_path)
+    lock = TenantLock(layout.parent.root_lock, layout.tenant_lock)
     try:
-        lock.acquire_exclusive(timeout_s=wait)
+        lock.acquire(exclusive=True, timeout_s=wait)
     except RootLockBusy as exc:
-        raise RootBusy(
-            f"cannot import leftover runtime files while the root lock is held: {lock.path}"
-        ) from exc
+        raise RootBusy(f"cannot import leftover runtime files while the {lock.refused}") from exc
     try:
         return _import_under_lock(layout)
     finally:
@@ -262,7 +263,7 @@ def _ensure_live_operations(conn: sqlite3.Connection) -> None:
     Same crash-safe transaction as ``OperationLedger`` (#87): leftover
     ``operations_rel3`` is dropped or renamed, and Python 3.11 does not
     autocommit DDL (``isolation_level=None``). Caller already holds the
-    exclusive root lock.
+    exclusive tenant lock (under the shared root lock).
     """
 
     if _live_operations_ready(conn):
