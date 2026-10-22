@@ -58,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Exit-code test at the typer floor (REC-050)** — `tests/unit/cli/test_exit_codes.py`
+  imported `typer.exceptions`, a module that first ships in typer 0.27.2, so it failed
+  with `ModuleNotFoundError` at the declared `typer>=0.13` floor. It now catches the
+  public `typer.Exit`, which is the class `recertia.cli.exit.raise_exit` raises on every
+  typer version (`click.exceptions.Exit` on 0.13, `typer.exceptions.Exit` on 0.27.2+).
+  The assertions are unchanged and no dependency floor moves.
+
 - **pytest floor (REC-049)** — `tests/unit/test_faulthandler_backstop.py` reads the
   `faulthandler_exit_on_timeout` ini option with `getini()`, and pytest added that option in
   9.0.0. The `pytest>=8` floor let the nightly `import-all (py3.11 lowest)` job install
