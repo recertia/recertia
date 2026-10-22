@@ -54,6 +54,12 @@ def _double_root(root: Path) -> str:
     return _sha(b"".join(line for _, line in sorted(lines)))
 
 
+def _file_count(root: Path) -> int:
+    """WO-06's manifest ``count``: regular files in the tree (not task dirs)."""
+
+    return sum(1 for p in root.rglob("*") if p.is_file())
+
+
 class HeldoutManifestError(Exception):
     """Double of WO-06's error: one type for every refusal or mismatch."""
 
@@ -78,16 +84,19 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         order.append("root")
         doc = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
         if set(doc) != _KEYS:
-            raise HeldoutManifestError(f"manifest invalid keys={len(doc)}")
+            unknown, missing = len(set(doc) - _KEYS), len(_KEYS - set(doc))
+            raise HeldoutManifestError(f"manifest refused: {unknown} unknown and {missing} missing key(s)")
         try:
             got = _double_root(Path(root))
         except ValueError:
-            raise HeldoutManifestError("hash mismatch stage=root special") from None
-        if got != doc["root_sha256"]:
-            raise HeldoutManifestError(f"hash mismatch stage=root expected={doc['root_sha256']} got={got}")
-        tasks = [p for p in Path(root).glob("*/*") if (p / "task.json").is_file()]
-        if len(tasks) != doc["count"]:
-            raise HeldoutManifestError(f"count mismatch expected={doc['count']} got={len(tasks)}")
+            raise HeldoutManifestError("held-out tree refused: special file") from None
+        files = _file_count(Path(root))
+        if got != doc["root_sha256"] or files != doc["count"]:
+            kind = "count" if files != doc["count"] else "hash"
+            raise HeldoutManifestError(
+                f"held-out {kind} mismatch: manifest root_sha256={doc['root_sha256']} "
+                f"count={doc['count']}; tree root_sha256={got} count={files}"
+            )
         return HeldoutManifest(doc["split_id"], doc["count"], doc["root_sha256"])
 
     mod.verify_heldout_tree = verify_heldout_tree  # type: ignore[attr-defined]
@@ -123,7 +132,7 @@ def _build(tmp_path: Path, **override: object) -> tuple[Path, Path, Path]:
     doc = {
         "schema_version": 1,
         "split_id": "heldout-test-v1",
-        "count": len(FIXTURE_IDS),
+        "count": _file_count(split),
         "hash_rule": heldout.HASH_RULE,
         "root_sha256": _double_root(split),
         "ciphertext_sha256": _sha(ciphertext.read_bytes()),
@@ -191,6 +200,9 @@ def _assert_no_leak(text: str) -> None:
     for needle in (*FIXTURE_IDS, CONTENT_MARK, "task.json", "expect.json", "zz-", "repo-chore", "/"):
         assert needle not in text, needle
     for line in text.splitlines():
+        wo06 = re.fullmatch(r"heldout: FAIL (.+) executed=0", line)
+        if wo06 and heldout.loader_reason(Exception(wo06.group(1))) == wo06.group(1):
+            continue  # one of main's WO-06 hash/count-only messages, passed through verbatim
         assert re.fullmatch(r"heldout: (PASS|FAIL|VERIFIED)( [a-z_0-9-]+(=[a-z_0-9]+)?)*", line), line
 
 
@@ -208,7 +220,8 @@ def test_good_split_runs_in_spec_order(tmp_path: Path, capsys, calls, fake_docke
     assert calls == ["load", "ciphertext", "root", "container_preflight", "execute", "execute"]
     out = capsys.readouterr()
     _assert_no_leak(out.out + out.err)
-    assert "count=2" in out.out and "PASS passed=2 failed=0" in out.out
+    # count is WO-06's FILE count (2 x task.json + 2 x expect.json + SELECTION.md); tasks= the dirs.
+    assert "count=5 tasks=2" in out.out and "PASS passed=2 failed=0" in out.out
     (run_dir,) = (tmp_path / "audit").iterdir()
     results = json.loads((run_dir / "results.json").read_text())
     assert [r["backend_used"] for r in results] == [["container"], ["container"]]
@@ -273,62 +286,47 @@ def test_heldout_manifest_error_logs_its_hash_message(tmp_path: Path, capsys, ca
     manifest, ct, split = _build(tmp_path)
     expected = json.loads(manifest.read_text())["root_sha256"]
     (split / "repo-chore" / FIXTURE_IDS[0] / "task.json").write_text("tampered")
+    got = _double_root(split)
     spy = _Spy(calls)
     assert _run(tmp_path, manifest, ct, split, spy) == heldout.EXIT_VERIFY_FAILED
     out = capsys.readouterr()
     _assert_no_leak(out.out + out.err)
-    # The manifest's public root hash is printed; the tampered tree's hash is not (N-A).
-    assert f"FAIL hash mismatch stage=root expected={expected} got=redacted executed=0" in out.out
+    # Lucas-rec #2: main's message is hash/count-only, so it is printed verbatim (both hashes).
+    want = f"held-out hash mismatch: manifest root_sha256={expected} count=5; tree root_sha256={got} count=5"
+    assert f"heldout: FAIL {want} executed=0" in out.out
     assert "execute" not in calls and "container_preflight" not in calls
 
 
-def test_loader_reason_keys_are_a_fixed_frozenset() -> None:
-    assert isinstance(heldout.LOADER_REASON_KEYS, frozenset)
-    assert heldout.LOADER_REASON_KEYS == {
-        "expected",
-        "got",
-        "stage",
-        "count",
-        "files",
-        "missing",
-        "extra",
-        "keys",
-    }
+_MISMATCH = (
+    f"held-out count mismatch: manifest root_sha256={'b' * 64} count=3; tree root_sha256={'c' * 64} count=5"
+)
 
 
 @pytest.mark.parametrize(
     ("message", "want"),
     [
-        ("count mismatch expected=2 got=3", "count mismatch expected=2 got=3"),
-        ("hash mismatch stage=ciphertext", "hash mismatch stage=ciphertext"),
+        ("manifest refused: split_id format", "manifest refused: split_id format"),
         (
-            "hash mismatch stage=root files=3 missing=1 extra=0",
-            "hash mismatch stage=root files=3 missing=1 extra=0",
+            "manifest refused: 1 unknown and 0 missing key(s)",
+            "manifest refused: 1 unknown and 0 missing key(s)",
         ),
-        (f"hash mismatch expected={'b' * 64}", "hash mismatch expected=b" + "b" * 63),
-        (f"hash mismatch got={'c' * 64}", "hash mismatch got=redacted"),
-        ("count mismatch secret_fixture_alpha=1", "manifest_error redacted"),
-        ("hash mismatch unknown_key=0", "manifest_error redacted"),
-        ("hash mismatch stage=zz-secret-fixture-alpha", "manifest_error redacted"),
-        ("hash mismatch stage=root expected=add-editorconfig", "manifest_error redacted"),
+        ("held-out tree refused: special file", "held-out tree refused: special file"),
+        (_MISMATCH, _MISMATCH),
+        ("count mismatch expected=2 got=3", "manifest_error redacted"),
+        ("manifest refused: zz-secret-fixture-alpha", "manifest_error redacted"),
+        ("held-out tree refused: special file repo-chore", "manifest_error redacted"),
+        (
+            f"held-out hash mismatch: manifest root_sha256={'b' * 64} count=3; tree root_sha256=x count=5",
+            "manifest_error redacted",
+        ),
+        ("Manifest refused: split_id format", "manifest_error redacted"),
     ],
-    ids=[
-        "count",
-        "stage",
-        "file-counts",
-        "public-hash",
-        "other-hash",
-        "unknown-key-id",
-        "unknown-key",
-        "bad-stage",
-        "bad-value",
-    ],
+    ids=["fixed", "keys-shape", "tree", "mismatch-shape", "old-format", "id", "suffix", "bad-hash", "case"],
 )
-def test_loader_reason_allow_set(message: str, want: str) -> None:
-    """MF-A: keys only from LOADER_REASON_KEYS; any other key redacts the whole message."""
+def test_loader_reason_allow_list(message: str, want: str) -> None:
+    """Lucas-rec #2 / MF-A: main's WO-06 messages pass verbatim; anything else is redacted whole."""
 
-    manifest = {"root_sha256": "b" * 64, "ciphertext_sha256": "d" * 64}
-    assert heldout.loader_reason(HeldoutManifestError(message), manifest) == want
+    assert heldout.loader_reason(HeldoutManifestError(message)) == want
 
 
 def test_unknown_key_in_loader_message_is_redacted_end_to_end(
@@ -609,7 +607,7 @@ def test_tampered_file_root_mismatch(tmp_path: Path, capsys, calls) -> None:
         ct,
         split,
         calls,
-        "hash mismatch stage=root",
+        "held-out hash mismatch: manifest root_sha256=",
         2,
         ["load", "ciphertext", "root"],
     )
@@ -626,7 +624,7 @@ def test_missing_and_extra_files_root_mismatch(tmp_path: Path, capsys, calls) ->
         ct,
         split,
         calls,
-        "hash mismatch stage=root",
+        "held-out hash mismatch: manifest root_sha256=",
         2,
         ["load", "ciphertext", "root"],
     )
@@ -642,6 +640,7 @@ def test_symlink_in_split_fails_closed(tmp_path: Path, capsys, calls) -> None:
 
 def test_count_mismatch_logs_counts_only(tmp_path: Path, capsys, calls) -> None:
     manifest, ct, split = _build(tmp_path, count=3)
+    root = json.loads(manifest.read_text())["root_sha256"]
     _expect_fail(
         tmp_path,
         capsys,
@@ -649,7 +648,36 @@ def test_count_mismatch_logs_counts_only(tmp_path: Path, capsys, calls) -> None:
         ct,
         split,
         calls,
-        "count mismatch expected=3 got=2",
+        f"held-out count mismatch: manifest root_sha256={root} count=3; tree root_sha256={root} count=5",
+        2,
+        ["load", "ciphertext", "root"],
+    )
+
+
+def test_file_count_is_not_compared_with_task_dirs(tmp_path: Path, capsys, calls, fake_docker) -> None:
+    """Lucas-rec #2: the manifest count is WO-06's FILE count, so 5 files / 2 task dirs runs."""
+
+    manifest, ct, split = _build(tmp_path)
+    assert json.loads(manifest.read_text())["count"] == 5
+    assert _run(tmp_path, manifest, ct, split, _Spy(calls)) == heldout.EXIT_OK
+    assert calls.count("execute") == 2
+
+
+def test_tree_without_task_dirs_fails_closed(tmp_path: Path, capsys, calls) -> None:
+    manifest, ct, split = _build(tmp_path)
+    for fid in FIXTURE_IDS:
+        (split / "repo-chore" / fid / "task.json").rename(split / "repo-chore" / fid / "notes.json")
+    doc = json.loads(manifest.read_text())
+    doc["root_sha256"] = _double_root(split)
+    manifest.write_text(json.dumps(doc))
+    _expect_fail(
+        tmp_path,
+        capsys,
+        manifest,
+        ct,
+        split,
+        calls,
+        "count mismatch tasks=0",
         2,
         ["load", "ciphertext", "root"],
     )

@@ -13,9 +13,11 @@ by Build Bot-rec), imported by ONE from-import of ``verify_heldout_tree``,
 ``HeldoutManifestError`` and ``HeldoutManifest`` (the result type, for CTO-rec MF-B's isinstance
 check). ``verify_heldout_tree`` is the ONLY WO-06 call: nothing here loads the manifest or
 computes the root hash separately. A ``HeldoutManifestError`` is a fail-closed exit (2) that logs
-only its hash/count message, keys from ``LOADER_REASON_KEYS`` only (MF-A). Anything raised while
-importing the loader, or a missing name, fails closed with ``loader_unavailable`` (exit 2); until
-WO-06 merges, every run does. The one field used here before
+main's hash/count-only message verbatim when it is one of WO-06's known messages
+(``LOADER_MESSAGES`` / ``_LOADER_SHAPES``), else ``LOADER_REDACTED`` (MF-A, Lucas-rec #2).
+Anything raised while importing the loader, or a missing name, fails closed with
+``loader_unavailable`` (exit 2). The manifest ``count`` is WO-06's FILE count, checked by
+``verify_heldout_tree`` itself. The one field used here before
 the tree check is ``ciphertext_sha256`` (step 1 runs before decrypt); ``read_public_manifest``
 refuses any key set other than the spec's seven.
 
@@ -29,8 +31,9 @@ Order. Every step fails closed before any eval runs:
 2. Decrypt into ``$RUNNER_TEMP``. This is the workflow's TODO step; the key is pending approval.
 3. Stage a copy of the decrypted tree under ``$TMPDIR`` (``$RUNNER_TEMP/tmp`` in the job;
    symlinks and special files are rejected), then call WO-06 ``verify_heldout_tree`` on the
-   staged copy, then cross-check the task count. The split root, staging dir and audit store
-   must all lie outside the checkout (cwd, repo root, ``$GITHUB_WORKSPACE``).
+   staged copy (root hash and file count); a tree with no task dirs fails closed. The split
+   root, staging dir and audit store must all lie outside the checkout (cwd, repo root,
+   ``$GITHUB_WORKSPACE``).
 4. Run the container preflight from M1 (``solver/container.py`` ``ensure_execution_ready`` and
    ``probe_container_runtime``) against the digest-pinned local image. Digest pins run with
    ``--pull never`` and ``--network=none``.
@@ -38,8 +41,8 @@ Order. Every step fails closed before any eval runs:
    ``ModelClient`` (``__new__`` or ``__init__``, every subclass) or importing a provider module
    exits 1, and so does any fixture whose commands used a backend other than ``container``.
 
-Output rule. The console gets only counts, hashes, and fixed reasons ("hash mismatch",
-"count mismatch"), never names or paths. While the eval runs, fd 1/2 and sys.stdout/stderr go
+Output rule. The console gets only counts, hashes, fixed reasons, and WO-06's known
+hash/count-only messages, never names or paths. While the eval runs, fd 1/2 and sys.stdout/stderr go
 to ``--audit-store``. Console lines are checked against a deny list built from the staged tree
 (dir and file names, relpaths, skill ids, the first 40 chars of each request, the split-root
 path); a hit exits ``EXIT_LEAK``. The ``scan`` subcommand re-checks captured console files and,
@@ -63,7 +66,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
-# Build Bot-rec's WO-06 tree verifier (not on main yet). Interface confirmed by Build Bot-rec:
+# Build Bot-rec's WO-06 tree verifier (on main since #118, recertia.evals.heldout_manifest):
 #   verify_heldout_tree(manifest_path: Path, root: Path) -> HeldoutManifest
 #   raises HeldoutManifestError on any refusal or mismatch; messages carry hashes and counts only.
 # The tree counts as verified ONLY if the result is a HeldoutManifest instance (CTO-rec MF-B).
@@ -87,21 +90,52 @@ MANIFEST_KEYS = frozenset(
 REQUEST_PREFIX_CHARS = 40
 # RFC 3339 date-time with a numeric offset or Z.
 _RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
-# A HeldoutManifestError message is logged only if every token is a fixed word or a
-# key=value pair whose key is in LOADER_REASON_KEYS (CTO-rec MF-A). Any other token (a name, a
-# path, free text, an unknown key) replaces the WHOLE message with LOADER_REDACTED, so an id can
-# never reach the public log through the loader's message. Values: a count, a stage word, or a
-# sha256 equal to the manifest's root/ciphertext hash; any other sha256 (it could confirm a
-# guessed per-file hash) is printed as "redacted".
-_LOADER_WORDS = frozenset(
-    "hash mismatch count manifest invalid refused root ciphertext tree file files missing extra "
-    "unknown unlisted keys key symlink special schema version rule split unsupported".split()
+# WO-06's HeldoutManifestError messages (main, #118) carry hashes and counts only, never names
+# (Lucas-rec #2). One is logged verbatim if it is one of these fixed messages or fully matches one
+# of these shapes. Anything else (a name, a path, free text, a message WO-06 does not emit) replaces
+# the WHOLE message with LOADER_REDACTED, so an id can never reach the public log through the
+# loader (CTO-rec MF-A). tests/unit/evals/test_heldout.py checks this list against main's module.
+LOADER_MESSAGES = frozenset(
+    {
+        "manifest refused: duplicate key",
+        "manifest refused: non-finite number",
+        "manifest refused: symlink",
+        "manifest refused: unreadable",
+        "manifest refused: too large",
+        "manifest refused: not UTF-8",
+        "manifest refused: invalid JSON or trailing data",
+        "manifest refused: top level must be an object",
+        "manifest refused: schema_version must be the integer 1",
+        "manifest refused: split_id format",
+        "manifest refused: count must be an integer >= 1",
+        f"manifest refused: hash_rule must be {HASH_RULE!r}",
+        "manifest refused: root_sha256 must be 64 lowercase hex",
+        "manifest refused: ciphertext_sha256 must be 64 lowercase hex",
+        "manifest refused: created_at must be RFC 3339 with an explicit offset",
+        "manifest refused: created_at is not a valid time",
+        "manifest refused: created_at needs an offset",
+        "held-out tree refused: non-UTF-8 name",
+        "held-out tree refused: newline, CR or backslash in a name",
+        "held-out tree refused: name is not NFC",
+        "held-out tree refused: unreadable file",
+        "held-out tree refused: special file",
+        "held-out tree refused: unreadable directory",
+        "held-out tree refused: empty directory",
+        "held-out tree refused: symlink",
+        "held-out tree refused: root is a symlink",
+        "held-out tree refused: root is not a directory",
+        "held-out tree refused: root is inside a git checkout (decrypt outside the repo)",
+        "held-out tree refused: manifest lies inside the split root",
+    }
 )
-LOADER_REASON_KEYS = frozenset({"expected", "got", "stage", "count", "files", "missing", "extra", "keys"})
+_LOADER_SHAPES = (
+    re.compile(r"manifest refused: \d{1,3} unknown and \d{1,3} missing key\(s\)"),
+    re.compile(
+        r"held-out (count|hash) mismatch: manifest root_sha256=[0-9a-f]{64} count=\d{1,12}; "
+        r"tree root_sha256=[0-9a-f]{64} count=\d{1,12}"
+    ),
+)
 LOADER_REDACTED = "manifest_error redacted"
-_LOADER_STAGES = frozenset({"root", "ciphertext", "tree", "manifest"})
-_LOADER_COUNT = re.compile(r"^\d{1,12}$")
-_LOADER_MESSAGE_MAX = 400
 
 # Executor: (staged fixture dir, task_class, audit run dir) -> passed.
 Executor = Callable[[Path, str, Path], bool]
@@ -139,35 +173,13 @@ def _loader() -> tuple[Callable[[Path, Path], Any], type[Exception], type]:
     return verify_heldout_tree, HeldoutManifestError, HeldoutManifest
 
 
-def loader_reason(exc: BaseException, manifest: Mapping[str, Any] | None = None) -> str:
-    """The HeldoutManifestError message if it is hash/count-only (MF-A), else LOADER_REDACTED."""
+def loader_reason(exc: BaseException) -> str:
+    """The HeldoutManifestError message if it is one of WO-06's known ones, else LOADER_REDACTED."""
 
-    public_hashes = {
-        manifest.get(name) for name in ("root_sha256", "ciphertext_sha256") if manifest is not None
-    } - {None}
-    tokens = str(exc).split()
-    if not tokens or len(" ".join(tokens)) > _LOADER_MESSAGE_MAX:
-        return LOADER_REDACTED
-    out = []
-    for token in tokens:
-        key, sep, value = token.partition("=")
-        if not sep:
-            if token not in _LOADER_WORDS:
-                return LOADER_REDACTED
-            out.append(token)
-        elif key not in LOADER_REASON_KEYS:
-            return LOADER_REDACTED
-        elif key == "stage":
-            if value not in _LOADER_STAGES:
-                return LOADER_REDACTED
-            out.append(token)
-        elif _LOADER_COUNT.match(value):
-            out.append(token)
-        elif _HEX64.match(value):
-            out.append(token if value in public_hashes else f"{key}=redacted")
-        else:
-            return LOADER_REDACTED
-    return " ".join(out)
+    message = str(exc)
+    if message in LOADER_MESSAGES or any(shape.fullmatch(message) for shape in _LOADER_SHAPES):
+        return message
+    return LOADER_REDACTED
 
 
 def read_public_manifest(path: Path) -> dict[str, Any]:
@@ -260,25 +272,26 @@ def task_dirs(root: Path) -> list[Path]:
 def verify_tree(manifest_path: Path, manifest: Mapping[str, Any], staged: Path) -> list[Path]:
     """Step 3: WO-06 ``verify_heldout_tree`` over the staged copy (the only WO-06 call).
 
-    ``HeldoutManifestError`` fails closed and logs only its hash/count message (``loader_reason``).
+    ``HeldoutManifestError`` fails closed and logs WO-06's hash/count message (``loader_reason``).
     Any other exception, or a result that is not a ``HeldoutManifest`` instance, fails closed with
-    a fixed phrase. The task
-    count is then cross-checked against the dirs the executor will run.
+    a fixed phrase. The manifest ``count`` is a FILE count and WO-06 has already compared it with
+    the tree (Lucas-rec #2), so it is not compared with the task dirs here. A tree with no task
+    dirs fails closed.
     """
 
     verify_heldout_tree, heldout_manifest_error, heldout_manifest = _loader()
     try:
         result = verify_heldout_tree(manifest_path, staged)
     except heldout_manifest_error as exc:
-        raise Refused(loader_reason(exc, manifest)) from None
+        raise Refused(loader_reason(exc)) from None
     except Exception:  # noqa: BLE001 - outside the WO-06 contract: still fail closed
         raise Refused("verifier_error") from None
     # MF-B: only a real HeldoutManifest counts as verified (not 0, "", {"ok": False}, None, ...).
     if not isinstance(result, heldout_manifest):
         raise Refused("verifier_error")
     tasks = task_dirs(staged)
-    if len(tasks) != manifest["count"]:
-        raise Refused(f"count mismatch expected={manifest['count']} got={len(tasks)}")
+    if not tasks:
+        raise Refused("count mismatch tasks=0")
     return tasks
 
 
@@ -710,8 +723,8 @@ def run(
 
         deny = deny_terms(staging, [str(split_root), str(staging)])
         root_sha = manifest["root_sha256"]
-        say(f"VERIFIED root_sha256={root_sha} count={len(tasks)}")
-        record.update(root_sha256=root_sha, count=len(tasks))
+        say(f"VERIFIED root_sha256={root_sha} count={manifest['count']} tasks={len(tasks)}")
+        record.update(root_sha256=root_sha, count=manifest["count"], tasks=len(tasks))
         if verify_only:
             record.update(status="verified")
             _write_json(run_dir / "record.json", record)
