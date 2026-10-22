@@ -24,6 +24,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -399,4 +400,157 @@ def test_windows_tenants_on_one_root_lock_apart_and_backup_is_refused(
     api_lock, lock = _exclusive_root_locks(root, action="backup")
     lock.release()
     api_lock.release()
+
+
+# --- round 5 (CTO-rec review of #169): N-1 the refused fd is closed, N-3 non-busy errors ---
+
+
+def _record_lock_fds(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, os.stat_result]]:
+    """Record every fd ``RootLock._open`` hands out, with the file it was opened on."""
+
+    opened: list[tuple[int, os.stat_result]] = []
+    original = RootLock._open
+
+    def recording_open(self: RootLock) -> int:
+        fd = original(self)
+        opened.append((fd, os.fstat(fd)))
+        return fd
+
+    monkeypatch.setattr(RootLock, "_open", recording_open)
+    return opened
+
+
+def _still_open(fd: int, opened_on: os.stat_result) -> bool:
+    """True if ``fd`` is still open on the same lock file (a reused fd number is not)."""
+
+    try:
+        now = os.fstat(fd)
+    except OSError:
+        return False
+    return os.path.samestat(now, opened_on)
+
+
+def test_root_lock_windows_blocking_typed_busy_closes_the_lock_fd(
+    tmp_path: Path, kernel32: FakeKernel32, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """N-1: when the blocking ``acquire_shared`` runs out of its ``LockFileEx`` budget and
+    raises typed ``RootLockBusy``, the fd it opened is closed, not leaked."""
+
+    monkeypatch.setattr(root_lock, "_WIN_BLOCKING_RETRY_S", 0.1)
+    holder = RootLock(tmp_path / ".lock")
+    holder.try_exclusive()
+    opened = _record_lock_fds(monkeypatch)
+    waiter = RootLock(tmp_path / ".lock")
+    try:
+        with pytest.raises(RootLockBusy):
+            waiter.acquire_shared()
+    finally:
+        holder.release()
+    assert len(opened) == 1
+    fd, opened_on = opened[0]
+    assert not _still_open(fd, opened_on)
+    assert waiter._fd is None
+
+
+def test_root_lock_windows_migrate_off_root_busy_closes_the_lock_fd(
+    tmp_path: Path, kernel32: FakeKernel32, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """N-1 through ``open_run_persistence``: the ``migrate=off`` wait that ends in typed
+    ``RootBusy`` closes the root-lock fd it opened, so a worker that re-queues the claim
+    does not leak one handle per refused attempt."""
+
+    root = tmp_path / "runs"
+    p = open_run_persistence(root, migrate="off")
+    try:
+        p.checkpoints.save("old", 1, "n1", None, _state("old"))
+    finally:
+        p.close()
+    monkeypatch.setattr(root_lock, "_WIN_BLOCKING_RETRY_S", 0.1)
+    lock_path = RuntimeLayout(root).root_lock
+    holder = RootLock(lock_path)
+    holder.try_exclusive()
+    opened = _record_lock_fds(monkeypatch)
+    try:
+        for _attempt in range(3):
+            with pytest.raises(RootBusy):
+                open_run_persistence(root, migrate="off")
+    finally:
+        holder.release()
+    assert len(opened) == 3
+    assert all(os.path.samestat(st, os.stat(lock_path)) for _fd, st in opened)
+    assert [fd for fd, st in opened if _still_open(fd, st)] == []
+    assert kernel32.held == {}
+
+
+def _fail_lock_with(kernel32: FakeKernel32, monkeypatch: pytest.MonkeyPatch, winerror: int) -> None:
+    def failing_lock(handle: int, flags: int) -> bool:
+        kernel32.calls.append(("lock", handle, flags))
+        kernel32._last_error = winerror
+        return False
+
+    monkeypatch.setattr(kernel32, "lock", failing_lock)
+
+
+# ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_SHARING_BUFFER_EXCEEDED: none is 33,
+# and the fake's OSError carries errno EIO (not EACCES / EDEADLOCK).
+_NOT_BUSY_WINERRORS = (6, 87, 36)
+
+
+@pytest.mark.parametrize("winerror", _NOT_BUSY_WINERRORS)
+@pytest.mark.parametrize("call", ["blocking_shared", "bounded_shared", "try_exclusive"])
+def test_root_lock_windows_error_other_than_33_is_oserror_not_busy(
+    tmp_path: Path,
+    kernel32: FakeKernel32,
+    monkeypatch: pytest.MonkeyPatch,
+    call: str,
+    winerror: int,
+) -> None:
+    """N-3: a ``LockFileEx`` error other than ``ERROR_LOCK_VIOLATION`` (33) whose errno is
+    not ``EACCES`` / ``EDEADLOCK`` propagates as ``OSError`` with its ``winerror`` on every
+    entry point, including the blocking typed path; it is never ``RootLockBusy``. The fd
+    is closed either way."""
+
+    _fail_lock_with(kernel32, monkeypatch, winerror)
+    opened = _record_lock_fds(monkeypatch)
+    lock = RootLock(tmp_path / ".lock")
+    with pytest.raises(OSError) as info:
+        if call == "blocking_shared":
+            lock.acquire_shared()
+        elif call == "bounded_shared":
+            lock.acquire_shared(timeout_s=0.05)
+        else:
+            lock.try_exclusive()
+    assert not isinstance(info.value, RootLockBusy)
+    assert getattr(info.value, "winerror", None) == winerror
+    assert info.value.errno not in root_lock._WIN_BUSY_ERRNOS
+    assert len([op for op, _h, _f in kernel32.calls if op == "lock"]) == 1  # no busy retry
+    assert [fd for fd, st in opened if _still_open(fd, st)] == []
+    assert lock._fd is None
+
+
+@pytest.mark.parametrize("migrate", ["off", "auto"])
+def test_root_lock_windows_open_error_other_than_33_is_oserror_not_root_busy(
+    tmp_path: Path,
+    kernel32: FakeKernel32,
+    monkeypatch: pytest.MonkeyPatch,
+    migrate: Literal["off", "auto"],
+) -> None:
+    """N-3 through ``open_run_persistence``: with ``migrate=off`` (pending leftover files,
+    the blocking wait) and with the bounded runtime-db wait, a non-busy ``LockFileEx``
+    error is raised as that ``OSError``, not as ``RootBusy``, which a worker would
+    re-queue forever instead of failing the claim with the real cause."""
+
+    root = tmp_path / "runs"
+    p = open_run_persistence(root, migrate=migrate)
+    try:
+        p.checkpoints.save("old", 1, "n1", None, _state("old"))
+    finally:
+        p.close()
+    before = _file_bytes(root)
+    _fail_lock_with(kernel32, monkeypatch, 87)  # ERROR_INVALID_PARAMETER
+    with pytest.raises(OSError) as info:
+        open_run_persistence(root, migrate=migrate)
+    assert not isinstance(info.value, RootLockBusy)
+    assert getattr(info.value, "winerror", None) == 87
+    assert _file_bytes(root) == before
     assert kernel32.held == {}

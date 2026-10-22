@@ -406,3 +406,80 @@ def test_cross_process_tenant_import_makes_a_same_tenant_open_root_busy(
         assert _hist(p, "a") == [(1, "n1")]
     finally:
         p.close()
+
+
+# --- round 5 (CTO-rec review of #169): N-1 the refused handle is closed, N-3 non-busy errors ---
+
+
+def _record_lock_fds(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, os.stat_result]]:
+    opened: list[tuple[int, os.stat_result]] = []
+    original = RootLock._open
+
+    def recording_open(self: RootLock) -> int:
+        fd = original(self)
+        opened.append((fd, os.fstat(fd)))
+        return fd
+
+    monkeypatch.setattr(RootLock, "_open", recording_open)
+    return opened
+
+
+def _still_open(fd: int, opened_on: os.stat_result) -> bool:
+    try:
+        now = os.fstat(fd)
+    except OSError:
+        return False
+    return os.path.samestat(now, opened_on)
+
+
+def test_root_lock_migrate_off_root_busy_closes_the_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """N-1: the blocking ``migrate=off`` wait that runs out of the real ``LockFileEx``
+    budget against a cross-process holder raises ``RootBusy`` and closes the fd (and so
+    the handle) it opened on ``.lock``."""
+
+    root = tmp_path / "runs"
+    p = open_run_persistence(root, migrate="off")
+    try:
+        p.checkpoints.save("old", 1, "n1", None, _state("old"))
+    finally:
+        p.close()
+    monkeypatch.setattr(root_lock, "_WIN_BLOCKING_RETRY_S", 0.3)
+    holder = _Holder(RuntimeLayout(root).root_lock, "exclusive")
+    opened = _record_lock_fds(monkeypatch)
+    try:
+        with pytest.raises(RootBusy):
+            open_run_persistence(root, migrate="off")
+    finally:
+        holder.stop()
+    assert len(opened) == 1
+    fd, opened_on = opened[0]
+    assert not _still_open(fd, opened_on)
+
+
+@pytest.mark.parametrize("call", ["blocking_shared", "try_exclusive"])
+def test_root_lock_real_error_other_than_33_is_oserror_not_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, call: str
+) -> None:
+    """N-3: a real ``LockFileEx`` failure that is not ``ERROR_LOCK_VIOLATION`` (here a
+    NULL handle, ``ERROR_INVALID_HANDLE``) propagates as ``OSError`` with its ``winerror``,
+    on the blocking typed path too; it is never ``RootLockBusy``. The fd is closed."""
+
+    api = root_lock._win_api()
+    monkeypatch.setattr(api, "handle", lambda fd: 0)
+    opened = _record_lock_fds(monkeypatch)
+    lock = RootLock(tmp_path / ".lock")
+    started = time.monotonic()
+    with pytest.raises(OSError) as info:
+        if call == "blocking_shared":
+            lock.acquire_shared()
+        else:
+            lock.try_exclusive()
+    assert time.monotonic() - started < root_lock._WIN_BLOCKING_RETRY_S  # no busy retry
+    assert not isinstance(info.value, RootLockBusy)
+    winerror = getattr(info.value, "winerror", None)
+    assert winerror is not None and winerror != root_lock._ERROR_LOCK_VIOLATION
+    assert info.value.errno not in root_lock._WIN_BUSY_ERRNOS
+    assert [fd for fd, st in opened if _still_open(fd, st)] == []
+    assert lock._fd is None
