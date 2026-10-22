@@ -1016,3 +1016,56 @@ def test_embedded_worker_requeues_a_root_busy_claim_from_another_tenant(
     finally:
         queue.close()
         worker.shutdown(wait=True)
+
+
+# --- MF-D (round 3): backup/restore leave the root's own lock files alone ---
+
+
+def test_backup_leaves_out_the_root_lock_files(tmp_path: Path) -> None:
+    """Backup holds ``.lock`` and ``api.lock`` exclusively; on Windows those locks are
+    mandatory, so reading them through another handle can fail. They carry no data."""
+
+    from recertia.ops.backup import verify_archive
+
+    root = _imported_root(tmp_path)
+    layout = RuntimeLayout(root)
+    assert layout.root_lock.is_file()
+    layout.api_lock.touch()
+    archive = tmp_path / "b.tar.gz"
+    backup_tree(root, archive)
+    with tarfile.open(archive) as tar:
+        names = set(tar.getnames())
+    assert ".lock" not in names and "api.lock" not in names, sorted(names)
+    assert "runtime.db" in names
+    listed = {entry["path"] for entry in verify_archive(archive)["files"]}
+    assert ".lock" not in listed and "api.lock" not in listed
+
+
+def test_restore_does_not_extract_root_lock_files_from_an_older_archive(tmp_path: Path) -> None:
+    """An archive written before this change has ``.lock`` / ``api.lock`` members;
+    restore must not write over the files it is holding locked."""
+
+    import io
+
+    src = _imported_root(tmp_path)
+    archive = tmp_path / "old.tar.gz"
+    backup_tree(src, archive)
+    legacy = tmp_path / "legacy.tar.gz"
+    with tarfile.open(archive) as old, tarfile.open(legacy, "w:gz") as new:
+        for member in old.getmembers():
+            data = old.extractfile(member) if member.isfile() else None
+            new.addfile(member, data)
+        for name in (".lock", "./api.lock"):
+            info = tarfile.TarInfo(name)
+            info.size = 1
+            new.addfile(info, io.BytesIO(b"x"))
+    target = tmp_path / "target"
+    restore_tree(legacy, target)
+    layout = RuntimeLayout(target)
+    for lock_file in (layout.root_lock, layout.api_lock):
+        assert not lock_file.exists() or lock_file.stat().st_size == 0, lock_file
+    opened = open_run_persistence(target)
+    try:
+        assert opened.checkpoints.list_run_ids() == ["old-run"]
+    finally:
+        opened.close()

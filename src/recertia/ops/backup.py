@@ -17,6 +17,11 @@ from recertia.persistence.root_lock import RootLock, RootLockBusy
 
 MANIFEST_NAME = "MANIFEST.json"
 _MANIFEST_VERSION = 1
+# The root's own lock files: empty lock targets that backup and restore hold
+# exclusively while they run. They carry no data, so they are neither archived
+# nor extracted. On Windows the locks are mandatory, so reading or overwriting a
+# file through another handle while it is locked can fail (REC-058 MF-D).
+_ROOT_LOCK_FILES = frozenset({".lock", "api.lock"})
 
 
 class BackupError(ValueError):
@@ -58,7 +63,8 @@ def backup_tree(root: Path, archive: Path) -> Path:
     """Write a gzip tar of ``root`` (the whole ``.recertia/`` tree).
 
     SQLite databases are snapshotted with the backup API so a live WAL is
-    included as one consistent file. ``-wal`` and ``-shm`` sidecars are omitted.
+    included as one consistent file. ``-wal`` and ``-shm`` sidecars are omitted,
+    and so are the root's ``.lock`` and ``api.lock``, which this call holds.
     """
 
     source = Path(root).resolve()
@@ -82,7 +88,7 @@ def backup_tree(root: Path, archive: Path) -> Path:
                     if not path.is_file() and not path.is_symlink():
                         continue
                     rel = path.relative_to(source).as_posix()
-                    if rel == MANIFEST_NAME or _is_sqlite_sidecar(path):
+                    if rel == MANIFEST_NAME or rel in _ROOT_LOCK_FILES or _is_sqlite_sidecar(path):
                         continue
                     if _is_sqlite_db(path) and not path.is_symlink():
                         snapshot = snap_root / rel
@@ -98,7 +104,11 @@ def backup_tree(root: Path, archive: Path) -> Path:
 
 
 def restore_tree(archive: Path, dest: Path, *, overwrite: bool = False) -> Path:
-    """Extract a backup archive into ``dest``. Refuses path-escaping members."""
+    """Extract a backup archive into ``dest``. Refuses path-escaping members.
+
+    The root's ``.lock`` and ``api.lock`` (held by this call) are not extracted,
+    so an archive written before they were left out still restores.
+    """
 
     src = Path(archive).resolve()
     target = Path(dest).resolve()
@@ -119,6 +129,8 @@ def restore_tree(archive: Path, dest: Path, *, overwrite: bool = False) -> Path:
                         candidate.relative_to(target)
                     except ValueError as exc:
                         raise BackupError(f"archive member escapes dest: {member.name}") from exc
+                if _normalized_member(name) in _ROOT_LOCK_FILES:
+                    continue
                 members.append(member)
             extract_kw: dict[str, Any] = {"path": target, "members": members}
             if hasattr(tarfile, "data_filter"):
@@ -128,6 +140,11 @@ def restore_tree(archive: Path, dest: Path, *, overwrite: bool = False) -> Path:
     finally:
         lock.release()
         api_lock.release()
+
+
+def _normalized_member(name: str) -> str:
+    parts = [part for part in name.replace("\\", "/").split("/") if part not in {"", "."}]
+    return "/".join(parts)
 
 
 def verify_archive(archive: Path) -> dict[str, Any]:
