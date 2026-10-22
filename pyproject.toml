@@ -41,7 +41,9 @@ otel = [
 ]
 dev = [
     "pytest>=8",
-    "pytest-timeout>=2.3.0",
+    # 2.3.0 was never on PyPI (so the nightly lowest-deps pin could not install), and
+    # the suite's backstop tests match 2.4.0's "Timeout (>Ns) from pytest-timeout" text.
+    "pytest-timeout>=2.4.0",
     # Nightly lowest-deps requires a >= floor. 0.17.1 is the version CI lint
     # pins; do not lower this floor to 0.6.
     "ruff>=0.17.1",

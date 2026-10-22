@@ -58,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Nightly lowest-deps install (REC-048)** — `import-all (py3.11 lowest)` pins every
+  direct dependency at its `pyproject.toml` floor, and the `pytest-timeout>=2.3.0` floor
+  from #112 named a version that was never uploaded to PyPI (2.3.1 was the first 2.3.x
+  upload), so pip stopped with `ResolutionImpossible`. The floor is now `2.4.0`: the
+  backstop tests match the "Timeout (>Ns) from pytest-timeout" failure text that 2.4.0
+  introduced, and four of them fail on 2.3.1.
+
 - **Leaked `recertia-neg-*` temp dirs (REC-046)** — sensitivity proofs no longer leave an
   empty `recertia-neg-*` directory behind. `author_sensitivity_proof` takes
   `negative_workdir` as optional; when it is omitted, the criterion runs in a
