@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import tarfile
 import tempfile
 from datetime import datetime, timezone
@@ -22,17 +23,21 @@ _MANIFEST_VERSION = 1
 # nor extracted. On Windows the locks are mandatory, so reading or overwriting a
 # file through another handle while it is locked can fail (REC-058 MF-D).
 _ROOT_LOCK_FILES = frozenset({".lock", "api.lock"})
+# A runs root's tenant lock (REC-065), only where a runs root sits: the CLI layout's
+# root itself, ``runs/<tenant>``, and the ``jobs`` runs root under either. A file of
+# that name anywhere else (a snapshot, a workspace) is user content and is archived.
+_TENANT_LOCK_RE = re.compile(r"(?:runs/[^/]+/)?(?:jobs/)?" + re.escape(TENANT_LOCK_NAME))
 
 
 def _is_lock_file(rel: str) -> bool:
-    """The root's ``.lock``/``api.lock``, or any runs root's tenant lock (REC-065).
+    """The root's ``.lock``/``api.lock``, or a runs root's tenant lock (REC-065).
 
     Tenant locks are empty too. Backup and restore take no tenant lock: the
     exclusive root ``.lock`` already keeps out every tenant holder, which takes
     the root lock shared first (lock order in ``recertia.persistence.root_lock``).
     """
 
-    return rel in _ROOT_LOCK_FILES or rel.rsplit("/", 1)[-1] == TENANT_LOCK_NAME
+    return rel in _ROOT_LOCK_FILES or _TENANT_LOCK_RE.fullmatch(rel) is not None
 
 
 class BackupError(ValueError):
