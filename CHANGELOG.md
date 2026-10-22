@@ -289,6 +289,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **REL-3 R4 probes rewritten to typed `RootBusy` (REC-056b2, #139; ADR-0022)** — the six
+  REL-3 probes that were skipped on main (I, L, M, M2, T1, T2) now run. They expected an open
+  under the held exclusive root lock to succeed and overlay the leftover `checkpoints.db` /
+  `operations.db`, which contradicted the green R3 rulings (O/M3/M4) and the shipped contract.
+  [ADR-0022](docs/adr/0022-rootbusy-no-leftover-overlay.md) keeps main's behaviour: on the
+  leftover-import path, an open that finds the lock held raises typed `RootBusy` within
+  `RECERTIA_IMPORT_LOCK_TIMEOUT_S` and writes nothing; there is no overlay, no same-thread
+  holder exception and no lock identity. The six probes assert exactly that (new
+  `busy_open` helper in `tests/probes/rel3_probe.py`: typed `RootBusy` within
+  `BUSY_BOUND_S`, no root-level db file changed), plus convergence after release: the
+  first open imports once, I lists exactly the leftover run and the retried writer's run,
+  M keeps leftover seqs 1–3 exactly, T1 does not re-execute the imported op, and T2 loses
+  nothing. L and M are renamed to match. Their node IDs are unchanged, the 12 O/M3/M4
+  probes, T3–T5 and `tests/unit/persistence/test_import_legacy.py` are untouched, and
+  `tests/unit/graph/test_rel3_probe.py` has no unconditional skip left. Test-only: no
+  `src/` change.
 - **Nightly runs the full suite (REC-051)** — both `nightly.yml` arms (py3.11 at the
   lowest-direct floors, py3.13 at newest) now run `pytest -v` the way `ci.yml` does, with
   the same env and the suite-wide pytest-timeout, after the import-all step. The job
