@@ -163,7 +163,14 @@ def open_run_persistence(
                 f"leftover runtime files appeared while waiting for the root lock: {shared.path}"
             )
     else:
-        shared.acquire_shared()
+        try:
+            shared.acquire_shared()
+        except RootLockBusy as exc:
+            # Windows: the blocking wait ends after the LockFileEx retry budget. Typed,
+            # so a worker re-queues the claim (REC-058 S-1; the bound itself is #153).
+            raise RootBusy(
+                f"cannot open the runtime root while the root lock is held: {shared.path}"
+            ) from exc
         if _resolve_runtime_db(layout, "off")[0]:
             # migrate=off decided "leftover files" before the lock. A restore that ran
             # meanwhile may have brought back an imported runtime.db, which every later

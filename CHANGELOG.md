@@ -157,8 +157,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `RootBusy` is not yet the `root_busy` API/CLI error (#145): the API returns a generic
     error for it.
   - The leftover path (`migrate=off` with pending files) still waits without a bound
-    (#153), and a blocking Windows wait ends in `OSError(EDEADLK)` after 10 s rather than
-    `RootBusy`.
+    (#153). On Windows that wait ends after 10 s in typed `RootBusy`, which both worker
+    paths re-queue; before, it ended in an untyped `OSError(EDEADLK)`, so a worker failed
+    the claim.
   - The operations-schema exclusive lock is unbounded and the faithfulness command's
     orchestrator is not closed on every path (#160).
   - Worker imports on older releases lock `<root>/runs/<tenant>/.lock`, so mixed-version

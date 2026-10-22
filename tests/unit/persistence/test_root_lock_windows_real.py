@@ -8,6 +8,7 @@ binding (``_Kernel32LockApi``) and run only on Windows, in ci.yml's
 
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
@@ -279,3 +280,36 @@ def test_backup_then_restore_round_trip(tmp_path: Path) -> None:
             assert _hist(q, "r") == [(1, "n1"), (2, "n2")]
         finally:
             q.close()
+
+
+def test_migrate_off_blocking_wait_raises_root_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """REC-058 S-1 (refs #153): ``migrate=off`` with pending leftover files waits for the
+    shared root lock without a timeout; against a real cross-process exclusive holder the
+    ``LockFileEx`` retry budget runs out and the open raises typed ``RootBusy``, not
+    ``OSError(EDEADLK)``. The retry after release writes to the leftover files."""
+
+    root = tmp_path / "runs"
+    p = open_run_persistence(root, migrate="off")
+    try:
+        p.checkpoints.save("old", 1, "n1", None, _state("old"))
+    finally:
+        p.close()
+    monkeypatch.setattr(root_lock, "_WIN_BLOCKING_RETRY_S", 0.3)
+    holder = _Holder(RuntimeLayout(root).root_lock, "exclusive")
+    try:
+        started = time.monotonic()
+        with pytest.raises(RootBusy) as info:
+            open_run_persistence(root, migrate="off")
+        assert 0.3 <= time.monotonic() - started <= _BOUND_S
+        busy = info.value.__cause__
+        assert isinstance(busy, RootLockBusy)
+        assert isinstance(busy.__cause__, OSError)
+        assert busy.__cause__.errno == errno.EDEADLK
+    finally:
+        holder.stop()
+    p = open_run_persistence(root, migrate="off")
+    try:
+        p.checkpoints.save("old", 2, "n2", None, _state("old"))
+        assert _hist(p, "old") == [(1, "n1"), (2, "n2")]
+    finally:
+        p.close()

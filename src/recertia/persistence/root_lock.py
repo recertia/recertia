@@ -11,7 +11,8 @@ On Windows the same shared/exclusive modes use ``LockFileEx`` on byte 0
 (``msvcrt.locking`` has no shared mode: its ``LK_LOCK`` is an exclusive byte
 lock). Locking past end-of-file is allowed, so the lock file stays empty.
 Blocking calls keep the old ``msvcrt`` budget: they retry for
-``_WIN_BLOCKING_RETRY_S`` and then raise.
+``_WIN_BLOCKING_RETRY_S`` and then raise (``RootLockBusy`` from a blocking
+``acquire_shared``).
 """
 
 from __future__ import annotations
@@ -158,16 +159,22 @@ class RootLock:
     def acquire_shared(self, *, timeout_s: float | None = None) -> None:
         """Shared lock. Compatible with other shared holders.
 
-        Blocks until granted when ``timeout_s`` is ``None``. Otherwise waits at
-        most ``timeout_s`` for an exclusive holder and raises ``RootLockBusy``.
+        Blocks until granted when ``timeout_s`` is ``None`` (on Windows, for at
+        most the ``LockFileEx`` retry budget, then ``RootLockBusy``). Otherwise
+        waits at most ``timeout_s`` for an exclusive holder and raises
+        ``RootLockBusy``.
         """
 
         if timeout_s is None:
             fd = self._open()
             try:
                 _lock_shared(fd)
-            except OSError:
+            except OSError as exc:
                 os.close(fd)
+                if _is_busy(exc):
+                    # Windows: the retry budget ran out (OSError(EDEADLK)). Typed busy, as
+                    # for the bounded wait, so callers can raise RootBusy (REC-058 S-1).
+                    raise RootLockBusy(f"root lock held: {self.path}") from exc
                 raise
             self._fd = fd
             return
