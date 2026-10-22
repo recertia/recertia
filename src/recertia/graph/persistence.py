@@ -13,13 +13,14 @@ from recertia.ledger import HashChainLedger
 from recertia.mea.store import AuditedStateStore
 from recertia.persistence.db import MigrationChecksumError, apply_migrations, open_db
 from recertia.persistence.import_legacy import (
+    _import_lock_timeout_s,
     import_legacy_runtime,
     legacy_import_complete,
     legacy_sqlite_pending,
     sqlite_has_table,
 )
 from recertia.persistence.layout import RunsRootLayout, RuntimeLayout
-from recertia.persistence.root_lock import RootLock
+from recertia.persistence.root_lock import RootBusy, RootLock, RootLockBusy
 from recertia.settings import MigrateMode, load_settings
 from recertia.trajectory.store import TrajectoryStore
 from recertia.workspace import WorkspaceManager
@@ -112,6 +113,12 @@ def open_run_persistence(
     start while leftover files are still pending. Anyone who finds exclusive
     ``.lock`` already held waits, then raises ``RootBusy`` and must not write
     somewhere else. There is no same-thread holder exception.
+
+    On an already-imported (or fresh) root the handle holds a shared root
+    ``.lock`` for its lifetime (released by ``close``), so it cannot write
+    while backup or restore holds the exclusive lock. Taking it waits at most
+    ``RECERTIA_IMPORT_LOCK_TIMEOUT_S``, then raises ``RootBusy`` before any
+    db file is opened or written.
     """
 
     del durability
@@ -124,10 +131,17 @@ def open_run_persistence(
     tenant = str(layout.tenant) if layout.tenant is not None else "local"
     mode = migrate if migrate is not None else load_settings().runtime_db_migrate
     use_runtime, read_fallback = _resolve_runtime_db(layout, mode)
-    leftover_lock: RootLock | None = None
-    if not use_runtime:
-        leftover_lock = RootLock(layout.parent.root_lock)
-        leftover_lock.acquire_shared()
+    shared = RootLock(layout.parent.root_lock)
+    if use_runtime:
+        try:
+            shared.acquire_shared(timeout_s=_import_lock_timeout_s())
+        except RootLockBusy as exc:
+            raise RootBusy(
+                f"cannot open the runtime root while the root lock is held: {shared.path}"
+            ) from exc
+    else:
+        shared.acquire_shared()
+    leftover_lock: RootLock | None = shared
     try:
         if use_runtime:
             conn = open_db(layout.runtime_db)

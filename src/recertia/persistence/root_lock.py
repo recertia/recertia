@@ -26,7 +26,11 @@ class RootLockBusy(RuntimeError):
 
 
 class RootBusy(RootLockBusy):
-    """Typed busy error: leftover import timed out waiting for the root lock.
+    """Typed busy error: an open timed out waiting for the root lock.
+
+    Raised by the leftover import and by ``open_run_persistence`` on an
+    already-imported root while another holder (backup, restore, an import)
+    has the exclusive lock.
 
     Callers must not write somewhere else. A generic ``Exception`` or a hang is
     not this error.
@@ -40,14 +44,43 @@ class RootLock:
         self.path = Path(path)
         self._fd: int | None = None
 
-    def acquire_shared(self) -> None:
-        """Blocking shared lock. Compatible with other shared holders."""
+    def acquire_shared(self, *, timeout_s: float | None = None) -> None:
+        """Shared lock. Compatible with other shared holders.
 
+        Blocks until granted when ``timeout_s`` is ``None``. Otherwise waits at
+        most ``timeout_s`` for an exclusive holder and raises ``RootLockBusy``.
+        """
+
+        if timeout_s is None:
+            fd = self._open()
+            try:
+                _lock_shared(fd)
+            except OSError:
+                os.close(fd)
+                raise
+            self._fd = fd
+            return
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while True:
+            try:
+                self._try_shared()
+                return
+            except RootLockBusy:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
+
+    def _try_shared(self) -> None:
         fd = self._open()
         try:
-            _lock_shared(fd)
-        except OSError:
+            _lock_shared_nb(fd)
+        except BlockingIOError as exc:
             os.close(fd)
+            raise RootLockBusy(f"root lock held: {self.path}") from exc
+        except OSError as exc:
+            os.close(fd)
+            if _is_busy(exc):
+                raise RootLockBusy(f"root lock held: {self.path}") from exc
             raise
         self._fd = fd
 
@@ -112,6 +145,14 @@ def _lock_shared(fd: int) -> None:
         msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
         return
     fcntl.flock(fd, fcntl.LOCK_SH)
+
+
+def _lock_shared_nb(fd: int) -> None:
+    if sys.platform == "win32":
+        _win_prepare(fd)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        return
+    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
 
 
 def _lock_exclusive_nb(fd: int) -> None:
