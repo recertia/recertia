@@ -88,14 +88,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fork `DeprecationWarning`; it holds no recertia or SQLite lock). New test
   `tests/unit/test_faulthandler_backstop.py`.
 
-- **fork-with-threads warning filter (REC-017, rest of #96)** — `filterwarnings`
-  turns CPython's "This process is multi-threaded, use of fork() may lead to
-  deadlocks in the child" `DeprecationWarning` into an error, as #96 had it.
-  CPython 3.12 discards an exception raised by that warning inside `os.fork()`
-  (the fork still succeeds), so this does not fail a test that forks with threads
-  alive; it removes the warning from the report. With it, the full suite shows no
-  fork warnings and still passes. An explicit fork check is separate (REC-033).
-
 ### Added
 
 - **REC-011 C1 part 1 run resolution** — `EvalStore.append_run` records
