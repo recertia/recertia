@@ -40,7 +40,9 @@ otel = [
     "opentelemetry-api>=1.20",
 ]
 dev = [
-    "pytest>=8",
+    # REC-049: 9.0.0 added the faulthandler_exit_on_timeout ini option that
+    # tests/unit/test_faulthandler_backstop.py reads with getini().
+    "pytest>=9.0",
     # 2.3.0 was never on PyPI (so the nightly lowest-deps pin could not install), and
     # the suite's backstop tests match 2.4.0's "Timeout (>Ns) from pytest-timeout" text.
     "pytest-timeout>=2.4.0",
