@@ -58,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Exit-code test at the typer floor (REC-050)** — `tests/unit/cli/test_exit_codes.py`
+  imported `typer.exceptions`, a module that first ships in typer 0.27.2, so it failed
+  with `ModuleNotFoundError` at the declared `typer>=0.13` floor. It now catches the
+  public `typer.Exit`, which is the class `recertia.cli.exit.raise_exit` raises on every
+  typer version (`click.exceptions.Exit` on 0.13, `typer.exceptions.Exit` on 0.27.2+).
+  The assertions are unchanged and no dependency floor moves.
+
 - **Nightly lowest-deps install (REC-048)** — `import-all (py3.11 lowest)` pins every
   direct dependency at its `pyproject.toml` floor, and the `pytest-timeout>=2.3.0` floor
   from #112 named a version that was never uploaded to PyPI (2.3.1 was the first 2.3.x
