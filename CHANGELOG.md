@@ -84,8 +84,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   faulthandler's native watchdog dumps every thread's stack at 60s regardless; it
   does not exit (`faulthandler_exit_on_timeout` stays off), so failing the test is
   still pytest-timeout's job. The watchdog is one native thread per running test,
-  so a `fork` inside a test now always sees a multi-threaded process (CPython's
-  fork `DeprecationWarning`; it holds no recertia or SQLite lock). New test
+  so a `fork` inside a test would always run in a multi-threaded process.
+  `tests/runtime/test_ledger_concurrency.py`, the last test that forked, now
+  starts its four appenders with `spawn`, releases them together through a
+  barrier, bounds their joins with one 40s deadline and kills stragglers; it also
+  asserts that the appends interleave, and a new test holds the file-lock
+  registry guard in another thread while two appenders start (a forked child
+  would block on it). The suite now reports no fork-with-threads
+  `DeprecationWarning` without any warning filter. New test
   `tests/unit/test_faulthandler_backstop.py`.
 
 ### Added
