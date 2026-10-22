@@ -105,7 +105,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The leftover import takes the root `.lock` shared, then its tenant lock exclusive
     (before: the root `.lock` exclusive). A run handle (`open_run_persistence`) takes the
     root `.lock` shared, then its tenant lock shared, for the handle's lifetime. Both
-    waits share the one `RECERTIA_IMPORT_LOCK_TIMEOUT_S` bound.
+    waits share the one `RECERTIA_IMPORT_LOCK_TIMEOUT_S` bound, except the `migrate=off`
+    leftover path (#153).
   - So an open handle or an import on one tenant, including a long worker run, no longer
     makes another tenant's pending import raise `RootBusy`, and imports of different
     tenants run at the same time. A second import of the same tenant, or an import while
@@ -116,9 +117,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     its lock.
   - Backup does not archive `.tenant.lock` files and restore does not extract them, as
     for `.lock` and `api.lock`.
-  - Mixed versions: a REC-058 handle takes only the root `.lock` shared, so it does not
-    keep a newer release's import of the same tenant out. Upgrade all processes that
-    share a root together.
+  - **Upgrade requirement: mixed versions can silently lose data.** Before starting any
+    REC-065 process on a runtime root, stop every REC-058-or-older process on that root
+    (workers, API, CLI). Do not do a rolling restart, and do not mix versions.
+    - Consequence: an older `migrate=off` handle on a tenant whose leftover files are not
+      yet imported can have its later writes silently lost if a newer process imports
+      that tenant meanwhile. A REC-058 handle takes only the root `.lock` shared, so it
+      does not keep a newer import of the same tenant out; neither process reports an
+      error.
+    - If you cannot stop every process at once: run an `auto` open of every tenant
+      before the upgrade, so no tenant is pending, which closes the window. Or keep the
+      new processes on `migrate=off` or `manual` until every old process is gone.
 
   Tests: `tests/unit/persistence/test_root_lock_writers.py` (REC-065 section),
   `tests/unit/persistence/test_root_lock_windows_path.py`,
