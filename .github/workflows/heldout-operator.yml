@@ -208,9 +208,10 @@ jobs:
         env:
           AUDIT_STORE: ${{ runner.temp }}/audit
         run: |
-          # TODO(REC-022): proposal §5 / §7 items 5, 7, 10: encrypt the record to Rob and the
-          # operator and append it to the private audit repo. Never upload $AUDIT_STORE as an
-          # artifact or cache, and never write it to $GITHUB_STEP_SUMMARY.
+          # TODO(REC-022): proposal §5 / §7 items 5, 7, 10: encrypt the record to Rob's two
+          # recipients only (HELDOUT_AUDIT_RECIPIENTS: `rob`, `rob-recovery`) and append it to the
+          # private audit repo. Never upload $AUDIT_STORE as an artifact or cache, and never write
+          # it to $GITHUB_STEP_SUMMARY.
           echo "heldout: FAIL reason=audit_sink_not_approved"
           exit 1
 

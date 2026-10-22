@@ -1284,3 +1284,21 @@ def test_workflow_cto_must_fixes_m2_to_m5_and_log_scan_job() -> None:
     )
     jobs_perms = re.findall(r"^    permissions:\n((?:      .+\n)+)", code + "\n", flags=re.M)
     assert all("write" not in p for p in jobs_perms) and len(jobs_perms) == 2
+
+
+def test_audit_record_goes_to_robs_two_recipients_only() -> None:
+    """Lucas-rec #1 / Harper-rec: the audit record is encrypted to `rob` and `rob-recovery` only.
+
+    No separate operator recipient. The job key stays where it is (the decrypt step), and the
+    workflow names recipients only, never key material.
+    """
+
+    text = (REPO / ".github/workflows/heldout-operator.yml").read_text(encoding="utf-8")
+    code = "\n".join(line.split("#", 1)[0].rstrip() for line in text.splitlines())
+    persist = _steps(code)["evaluate/Persist to audit store (PENDING approval; fails closed)"]
+    assert "audit_sink_not_approved" in persist and "exit 1" in persist
+    raw = text.split("- name: Persist to audit store", 1)[1].split("\n      - name:", 1)[0]
+    assert "HELDOUT_AUDIT_RECIPIENTS: `rob`, `rob-recovery`" in " ".join(raw.replace("#", " ").split())
+    assert "recipients only" in raw
+    assert not re.search(r"\bthe\s+operator\b", raw, flags=re.I), "no separate operator recipient"
+    assert "age1" not in text and "AGE-SECRET-KEY" not in text and "BEGIN " not in text
