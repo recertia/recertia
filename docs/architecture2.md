@@ -1311,6 +1311,16 @@ opt in.
 Cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` except in `dev`. The session
 token is not returned in JSON and is not stored in `localStorage`.
 
+Pending OIDC login starts are unauthenticated, so they are capped in process: at most 1024
+in total and 16 per client, where the client is the peer address the login route sees
+(`request.client.host`). A client past its limit loses its own oldest start. When the map
+is full, the client holding the most starts loses its oldest, so one client's flood cannot
+evict or block another client's login. The app does not read `X-Forwarded-For`. Behind a
+reverse proxy, start uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy addresses>`
+so the server rewrites the peer address from the proxy's header; otherwise every user
+behind the proxy shares one client limit. Telemetry keeps the newest 1024 spans and 1024
+events in memory; exporters still receive every record.
+
 Promote and improvement jobs require the `promote` / `jobs` API-key scopes (or
 `admin`), or a console reviewer session. A `runs` key cannot approve skills.
 

@@ -31,6 +31,14 @@ from recertia.api.auth import validate_tenant_id
 Role = Literal["operator", "reviewer", "admin"]
 _VALID_ROLES = frozenset({"operator", "reviewer", "admin"})
 _OIDC_TTL_S = 600
+# Pending OIDC login starts are unauthenticated, so the map is bounded (REC-056a).
+# Fairness: each client (the login route's peer address) holds at most
+# _OIDC_PENDING_PER_CLIENT starts; past that its own oldest start is dropped. When the
+# whole map is full, the oldest start of the client holding the most starts is dropped,
+# so a flood never evicts a client that holds fewer starts than the flooder.
+_OIDC_PENDING_MAX = 1024
+_OIDC_PENDING_PER_CLIENT = 16
+_OIDC_DEFAULT_CLIENT = "local"
 
 
 def auth_mode() -> str:
@@ -129,6 +137,7 @@ class OidcPending:
     redirect_uri: str
     created_at: float
     nonce: str
+    client_key: str = _OIDC_DEFAULT_CLIENT
 
 
 def _checked_tenants(
@@ -323,14 +332,33 @@ class SessionStore:
             active_tenant=tenant_id,
         )
 
-    def begin_oidc(self, *, redirect_uri: str) -> tuple[str, str, str]:
+    def begin_oidc(
+        self, *, redirect_uri: str, client_key: str = _OIDC_DEFAULT_CLIENT
+    ) -> tuple[str, str, str]:
+        """Record a pending login start for ``client_key`` (see ``_OIDC_PENDING_*``)."""
+
         state = secrets.token_urlsafe(24)
         verifier = secrets.token_urlsafe(48)
         nonce = secrets.token_urlsafe(24)
         with self._oidc_lock:
             self._purge_oidc_locked()
-            self._oidc[state] = OidcPending(verifier, redirect_uri, time.time(), nonce)
+            mine = [k for k, v in self._oidc.items() if v.client_key == client_key]
+            while len(mine) >= _OIDC_PENDING_PER_CLIENT:
+                self._oidc.pop(mine.pop(0), None)
+            while len(self._oidc) >= _OIDC_PENDING_MAX:
+                self._evict_heaviest_oidc_locked()
+            self._oidc[state] = OidcPending(verifier, redirect_uri, time.time(), nonce, client_key)
         return state, verifier, nonce
+
+    def _evict_heaviest_oidc_locked(self) -> None:
+        counts: dict[str, int] = {}
+        for pending in self._oidc.values():
+            counts[pending.client_key] = counts.get(pending.client_key, 0) + 1
+        heaviest = max(counts.values())
+        for key, pending in self._oidc.items():
+            if counts[pending.client_key] == heaviest:
+                del self._oidc[key]
+                return
 
     def claim_jti(self, jti: str) -> None:
         """Remember an OIDC ``jti``. A second claim is rejected."""

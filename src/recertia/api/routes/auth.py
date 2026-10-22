@@ -134,7 +134,11 @@ def register_auth_routes(app: FastAPI, rs: RouteState) -> None:
         if auth_mode() != "oidc" or not oidc_configured():
             raise HTTPException(status_code=404, detail="oidc not configured")
         redirect = str(request.url_for("oidc_callback"))
-        state, verifier, nonce = ctx.sessions.begin_oidc(redirect_uri=redirect)
+        # Client key for the per-client pending cap (REC-056a): the ASGI peer address only.
+        # Forwarded-for headers are never read here; behind a reverse proxy, run uvicorn with
+        # --proxy-headers --forwarded-allow-ips=<proxy ips> so the server rewrites the peer.
+        client_key = request.client.host if request.client else "unknown"
+        state, verifier, nonce = ctx.sessions.begin_oidc(redirect_uri=redirect, client_key=client_key)
         return {
             "authorize_url": oidc_authorize_url(
                 redirect_uri=redirect,
