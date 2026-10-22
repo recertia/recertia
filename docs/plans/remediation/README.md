@@ -393,7 +393,7 @@ One base type. HTTP bodies stay `{"error": {code, message, retryable, run_id?, d
 | Durability | D3 | Default `normal`. `fast` will not start in `multi_node`. |
 | CLI identity | D5 | Ledger `actor` becomes `cli:<user>@<host>` with `platform_admin`. Tenant admin commands take `--tenant`. |
 | Backups and restore | REL-9, REL-10 | Restore takes the root lock. `multi_node` backups are the Postgres snapshot plus object storage, not a tar of a live tree. |
-| Migrations | REL-10 | `multi_node` runs `recertia migrate apply` as a deploy step under the owner role. API replicas do not apply DDL. |
+| Migrations | REL-10 | `multi_node` runs `recertia migrate apply` (planned with REL-10, not shipped yet; #172) as a deploy step under the owner role. API replicas do not apply DDL. |
 | Async default | D4 | Operators who need the old POST body set `RECERTIA_API_DEFAULT_ASYNC=0` for the release that flips the default, or send `mode=sync`. |
 | Health | 0.16, REL-7 | `/health` stays a liveness body. Readiness is `/ready` and checks the deployment rules. |
 

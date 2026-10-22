@@ -364,9 +364,86 @@ def test_open_run_persistence_manual_refuses_legacy(tmp_path: Path) -> None:
         store.save("run-a", 0, "intake", None, _state("run-a"))
     finally:
         store.close()
-    with pytest.raises(MigrationChecksumError, match="migrate apply"):
+    with pytest.raises(MigrationChecksumError, match="RECERTIA_RUNTIME_DB_MIGRATE=auto"):
         open_run_persistence(tmp_path / "runs", migrate="manual")
     assert layout.checkpoints_db.is_file()
+
+
+def _registered_cli_path(words: list[str]) -> list[str] | None:
+    """Walk ``words`` through the real CLI; return the matched leaf path, or None.
+
+    Groups are recognised by their ``commands`` mapping rather than by class,
+    because typer may vendor its own click classes.
+    """
+    import typer
+
+    from recertia.cli.main import app
+
+    cmd: object = typer.main.get_command(app)
+    path: list[str] = []
+    for word in words:
+        commands = getattr(cmd, "commands", None)
+        if not isinstance(commands, dict):
+            break  # a leaf command; the rest are its arguments
+        sub = commands.get(word)
+        if sub is None:
+            return None
+        cmd = sub
+        path.append(word)
+    is_group = isinstance(getattr(cmd, "commands", None), dict)
+    return path if path and not is_group else None
+
+
+def test_manual_mode_error_names_only_registered_cli_commands(tmp_path: Path) -> None:
+    """#172: the `manual` refusal must not send operators to a missing command.
+
+    Every ``recertia <subcommand ...>`` named in the message or in
+    ``details["action"]`` must resolve to a registered CLI leaf command, and the
+    procedure it names instead (``RECERTIA_RUNTIME_DB_MIGRATE=auto``) must be a
+    value the settings accept and must actually import the pending files.
+    """
+    import re
+
+    from recertia.settings import load_settings
+
+    layout = RuntimeLayout(tmp_path / "runs").local_runs()
+    store = CheckpointStore(layout.checkpoints_db)
+    try:
+        store.save("run-a", 0, "intake", None, _state("run-a"))
+    finally:
+        store.close()
+    with pytest.raises(MigrationChecksumError) as excinfo:
+        open_run_persistence(tmp_path / "runs", migrate="manual")
+    action = excinfo.value.details["action"]
+    assert isinstance(action, str)
+    texts = [str(excinfo.value), action]
+
+    # The walker accepts real commands and rejects missing or partial ones.
+    assert _registered_cli_path(["migrate", "run-events"]) == ["migrate", "run-events"]
+    assert _registered_cli_path(["migrate", "apply"]) is None
+    assert _registered_cli_path(["migrate"]) is None
+
+    named = [
+        m.group(1).split() for t in texts for m in re.finditer(r"\brecertia((?:\s+[a-z][a-z0-9_-]*)+)", t)
+    ]
+    for words in named:
+        assert _registered_cli_path(words) is not None, (
+            f"names unregistered command: recertia {' '.join(words)}"
+        )
+    for text in texts:
+        assert "RECERTIA_RUNTIME_DB_MIGRATE=auto" in text
+    assert load_settings({"RECERTIA_RUNTIME_DB_MIGRATE": "auto"}).runtime_db_migrate == "auto"
+    assert load_settings({}).runtime_db_migrate == "auto"  # "(the default)" is true
+
+    # Following the named procedure imports the pending files; `manual` then opens.
+    persistence = open_run_persistence(tmp_path / "runs", migrate="auto")
+    persistence.close()
+    assert not legacy_sqlite_pending(layout)
+    persistence = open_run_persistence(tmp_path / "runs", migrate="manual")
+    try:
+        assert persistence.checkpoints.latest("run-a") is not None
+    finally:
+        persistence.close()
 
 
 def test_open_run_persistence_auto_imports_then_reads(tmp_path: Path) -> None:
