@@ -1066,6 +1066,59 @@ def test_embedded_worker_requeues_a_root_busy_raised_mid_run(
         worker.shutdown(wait=True)
 
 
+@pytest.mark.parametrize("path", ["serve", "embedded"])
+def test_root_busy_requeue_backs_off_for_root_busy_retry_s(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """REC-058 S-3: a refused claim is due again exactly ``ROOT_BUSY_RETRY_S`` (2 s) after
+    the refusal, and a worker that polls inside that window claims nothing. The older
+    checks (``due > started``, a second ``run_once`` returns 0) also held with no back-off,
+    because the item was re-claimed, refused again and re-queued (mutant C6)."""
+
+    from datetime import timedelta
+
+    import recertia.workers.serve as serve
+    from recertia.api.events import RunEventLog
+    from recertia.workers.embedded import EmbeddedQueueWorker
+    from recertia.workers.queue import ROOT_BUSY_RETRY_S, open_run_queue
+    from recertia.workers.run_worker import AsyncRunWorker, dump_async_request
+
+    assert ROOT_BUSY_RETRY_S == 2.0
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    root = tmp_path / "rt"
+    _tenant_pending(root, "tenant-b", "b-old")
+    if path == "serve":
+        payload: dict[str, object] = {"request": "b-new", "budget": {"max_attempts": 1}}
+    else:
+        payload = dump_async_request(_async_request(root, "tenant-b", "b-new"))  # type: ignore[arg-type]
+    _enqueue(root, "tenant-b", "b-new", payload)
+    release = _hold_root(root, "backup")
+    try:
+        lo = datetime.now(timezone.utc)
+        if path == "serve":
+            assert serve.run_once(root, worker="w1") == 0
+        else:
+            worker = AsyncRunWorker(events=RunEventLog(root))
+            queue = open_run_queue(root)
+            try:
+                claims = queue.claim("embedded-test", limit=1)
+                assert len(claims) == 1
+                EmbeddedQueueWorker(worker, queue, worker_id="embedded-test")._execute(claims[0])
+            finally:
+                queue.close()
+                worker.shutdown(wait=True)
+        hi = datetime.now(timezone.utc)
+        row = _queue_row(root, "tenant-b", "b-new")
+        assert (row.status, row.attempt, row.error_code) == ("queued", 0, "root_busy")  # type: ignore[attr-defined]
+        due = _queue_due(root, "tenant-b", "b-new")
+        back_off = timedelta(seconds=ROOT_BUSY_RETRY_S)
+        assert lo + back_off <= datetime.fromisoformat(due) <= hi + back_off
+        assert serve.run_once(root, worker="w2") == 0  # polled inside the back-off window
+        assert _queue_due(root, "tenant-b", "b-new") == due  # nothing was claimed or re-queued
+    finally:
+        release()  # type: ignore[operator]
+
+
 # --- MF-D (round 3): backup/restore leave the root's own lock files alone ---
 
 
