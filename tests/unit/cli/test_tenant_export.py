@@ -138,3 +138,29 @@ def test_tenant_export_execute_refuses_unsafe_dest(tmp_path: Path) -> None:
     assert "source tenant" in inside.output
     assert not (note.parent / "out").exists()
     assert note.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_tenant_export_execute_skips_the_runs_root_tenant_lock_files(tmp_path: Path) -> None:
+    """REC-065: ``runs/<t>/.tenant.lock`` and ``runs/<t>/jobs/.tenant.lock`` are empty lock
+    targets, not tenant data, so ``--execute`` does not copy them. A file of that name
+    elsewhere in the tenant tree is data and is copied."""
+
+    root = tmp_path / ".recertia"
+    _seed(root)
+    runs = root / "runs" / "acme"
+    (runs / "jobs").mkdir()
+    (runs / ".tenant.lock").touch()
+    (runs / "jobs" / ".tenant.lock").touch()
+    (runs / "notes").mkdir()
+    (runs / "notes" / ".tenant.lock").write_text("data\n", encoding="utf-8")
+    dest = root / "exports" / "acme"
+
+    copied = runner.invoke(
+        app,
+        ["tenant", "export", "--tenant", "acme", "--root", str(root), "--execute", "--dest", str(dest)],
+    )
+    assert copied.exit_code == 0, copied.output
+    assert not (dest / "runs" / "acme" / ".tenant.lock").exists()
+    assert not (dest / "runs" / "acme" / "jobs" / ".tenant.lock").exists()
+    assert (dest / "runs" / "acme" / "notes" / ".tenant.lock").read_text(encoding="utf-8") == "data\n"
+    assert "copied 3 files" in copied.output
