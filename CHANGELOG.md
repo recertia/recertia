@@ -58,14 +58,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Exit-code test stderr at click<8.2 (REC-053)** — `tests/unit/cli/test_exit_codes.py`
-  read `result.stderr` from a default `CliRunner`. typer 0.13 accepts `click>=8.0.0`, and
+- **CLI tests read stderr at the click floor (REC-053)** — the `dev` extra gains
+  `click>=8.2`. Six CLI tests read `result.stderr` from a default `CliRunner()`, and
   before click 8.2 that runner mixes stderr into stdout, so the read raised
-  `ValueError: stderr not separately captured` with typer 0.13.0 and click 8.0.0–8.1.8.
-  The test now asks for `mix_stderr=False` when the runner takes it (click<8.2) and
-  asserts `LEDGER INVALID:` is in `result.stderr` and not in `result.stdout`. It also
-  checks that `raise_exit` raises exactly `typer.Exit`. `src/` does not import click, so no
-  click floor is added and no other floor changes.
+  `ValueError: stderr not separately captured` with typer 0.13 and click 8.0.0–8.1.8
+  (typer 0.13 accepts `click>=8.0.0`). The floor goes in the `dev` extra only: `src/`
+  never imports click, and typer 0.26+ has no click dependency at all (click arrives
+  only through uvicorn). With the floor declared, the nightly lowest-deps arm pins
+  `click==8.2` and exercises it. `tests/unit/cli/test_exit_codes.py` also asserts
+  `LEDGER INVALID:` is in `result.stderr` and not in `result.stdout`, shows
+  `result.stderr` when the exit code is wrong, and checks that `raise_exit` raises
+  exactly `typer.Exit`. No runtime floor changes.
 
 - **Exit-code test at the typer floor (REC-050)** — `tests/unit/cli/test_exit_codes.py`
   imported `typer.exceptions`, a module that first ships in typer 0.27.2, so it failed

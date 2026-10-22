@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 
 import pytest
@@ -22,17 +21,7 @@ from recertia.errors import (
     Unauthorized,
 )
 
-
-def _stderr_runner() -> CliRunner:
-    """A runner whose result keeps stderr apart from stdout on every click typer allows.
-
-    typer 0.13 accepts click>=8.0.0. click<8.2 mixes stderr into stdout unless
-    mix_stderr=False (result.stderr raises ValueError otherwise); click 8.2+ and the
-    typer 0.26+ runner always capture stderr separately and dropped the argument.
-    """
-    if "mix_stderr" in inspect.signature(CliRunner.__init__).parameters:
-        return CliRunner(mix_stderr=False)  # type: ignore[call-arg]
-    return CliRunner()
+runner = CliRunner()
 
 
 def test_not_found_is_1_invalid_is_2_ledger_verify_is_2(tmp_path: Path) -> None:
@@ -59,7 +48,7 @@ def test_not_found_is_1_invalid_is_2_ledger_verify_is_2(tmp_path: Path) -> None:
 
     ledger = tmp_path / "ledger.jsonl"
     ledger.write_text("{not json\n", encoding="utf-8")
-    result = _stderr_runner().invoke(app, ["ledger", "verify", "--runs-root", str(tmp_path)])
-    assert result.exit_code == 2, result.output
+    result = runner.invoke(app, ["ledger", "verify", "--runs-root", str(tmp_path)])
+    assert result.exit_code == 2, result.stderr
     assert "LEDGER INVALID:" in result.stderr
     assert "LEDGER INVALID:" not in result.stdout
