@@ -26,14 +26,21 @@ jobs:
   import-all:
     name: import-all + suite (py${{ matrix.python-version }} ${{ matrix.deps }})
     runs-on: ubuntu-latest
+    # The full suite takes ~2.5 min on ci.yml's 3.12; leave room for 3.11/3.13.
     timeout-minutes: 20
     permissions:
       contents: read # checkout only
     env:
+      # Same as ci.yml: no real provider credentials, no non-loopback network.
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
       RECERTIA_NO_NETWORK: "1"
       # Extras both arms install; the lowest arm pins every one of their floors too.
+      # `api` repeats dev's fastapi/uvicorn/httpx floors, so listing it lets the
+      # conflicting-floor check catch drift between the two lists (REC-062).
+      # psycopg[binary]==3.2.1 has wheels only up to cp312 (the first cp313 wheel is
+      # psycopg-binary 3.2.2), so this floor would not install on 3.13. The lowest arm
+      # is 3.11 because requires-python is >=3.11 (it predates the extras), not for that.
       NIGHTLY_EXTRAS: dev,api,postgres,pdf,otel
     strategy:
       fail-fast: false
@@ -46,6 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # The suite runs PyPI code; keep the job token out of .git/config (REC-057 N2).
           persist-credentials: false
 
       - uses: actions/setup-python@v5
@@ -70,15 +78,17 @@ jobs:
           reqs = list(data["project"]["dependencies"])
           for extra in os.environ["NIGHTLY_EXTRAS"].split(","):
               reqs += optional[extra]
-          pins = {}
+          pins = {}  # PEP 503 name -> (name as written, floor)
           for req in reqs:
               if ";" in req:
                   raise SystemExit(f"environment markers are not supported here: {req}")
               head, ge, rest = req.partition(">=")
               if not ge:
                   raise SystemExit(f"direct dep has no >= floor: {req}")
+              # A constraint cannot carry extras: psycopg[binary]>=3.2 pins psycopg==3.2.
               name = head.split("[", 1)[0].strip()
               floor = rest.split(",", 1)[0].strip()
+              # PEP 503: import_linter, Import.Linter and import-linter are one package.
               key = re.sub(r"[-_.]+", "-", name).lower()
               seen = pins.setdefault(key, (name, floor))
               if seen[1] != floor:
@@ -93,48 +103,99 @@ jobs:
             pip install -e ".[$NIGHTLY_EXTRAS]"
           fi
 
+      # REC-062 S2: the extras must import, and psycopg must use the [binary] package's
+      # bundled libpq. Without [binary], psycopg falls back to the pure-Python wrapper
+      # (or fails to import if no system libpq), and nothing else in the nightly
+      # imports psycopg or pypdf, so this step is what makes a dropped [binary] loud.
       - name: Extras import
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: |
           python - <<'PY'
           from importlib.metadata import version
-          import opentelemetry.trace
+
+          import opentelemetry.trace  # noqa: F401
           import psycopg
           import pypdf
+
           impl = psycopg.pq.__impl__
           if impl != "binary":
               raise SystemExit(f"psycopg pq implementation is {impl!r}, expected 'binary'")
-          print(f"psycopg {psycopg.__version__} (pq {impl}), pypdf {pypdf.__version__}")
+          print(
+              f"psycopg {psycopg.__version__} (pq {impl}, libpq {psycopg.pq.version()}), "
+              f"pypdf {pypdf.__version__}, opentelemetry-api {version('opentelemetry-api')}"
+          )
           PY
 
+      # Runs even if the extras import failed; skipped if Install failed.
       - name: Import-all
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pytest -v tests/boundary/test_import_all_modules.py
 
+      # Runs even if import-all failed, so both signals are kept; skipped if Install failed.
       - name: Test suite (same as ci.yml)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pytest -v
 
+  # REC-057 N5: a red scheduled nightly alerts someone. The job keeps one open issue
+  # titled "nightly: scheduled run failing", created by github-actions[bot], with the
+  # MARKER line in its body. It opens that issue, or comments on it if it is already
+  # open, and skips a run id that is already reported (for example a re-run attempt).
+  # Closing the issue is a human step. Manual dispatches never alert.
+  # Hardening (CTO-rec rulings): schedule-only `if:`; no checkout and no `uses:` actions,
+  # only the runner's `gh` CLI; every `${{ }}` value enters through `env:` and the body
+  # holds run metadata only. This job holds the workflow's only write grant: job-scoped
+  # `issues: write` on the built-in GITHUB_TOKEN. No secret is used.
   alert:
     name: alert on scheduled failure
     needs: import-all
+    # REC-062 S3: any import-all result but success (failure, cancelled, which is also
+    # what a timeout-minutes hit reports, or skipped) alerts on a scheduled run.
     if: ${{ always() && github.event_name == 'schedule' && needs.import-all.result != 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      issues: write
+      issues: write # find, open or comment on the one tracking issue
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      SERVER_URL: ${{ github.server_url }}
+      WORKFLOW_NAME: ${{ github.workflow }}
+      RUN_ID: ${{ github.run_id }}
+      RUN_NUMBER: ${{ github.run_number }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
+      RUN_SHA: ${{ github.sha }}
+      NEEDS_RESULT: ${{ needs.import-all.result }}
       TITLE: "nightly: scheduled run failing"
       MARKER: "<!-- recertia-nightly-alert -->"
     steps:
       - name: Open or update the tracking issue
         run: |
           set -euo pipefail
-          num=$(gh issue list --state open --author 'github-actions[bot]' --limit 100 --json number,title,body --jq '[.[] | select(.title == env.TITLE and (.body | contains(env.MARKER)))] | .[0].number // empty')
+          export RUN_KEY="<!-- run-id: ${RUN_ID} -->"
+          run_url="${SERVER_URL}/${GH_REPO}/actions/runs/${RUN_ID}"
+          stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          body=$(printf '%s\n%s\n\n- workflow: %s\n- run: %s (run %s, attempt %s)\n- sha: %s\n- needs.import-all.result: %s\n- reported at: %s\n' \
+            "$MARKER" "$RUN_KEY" "$WORKFLOW_NAME" "$run_url" "$RUN_NUMBER" "$RUN_ATTEMPT" \
+            "$RUN_SHA" "$NEEDS_RESULT" "$stamp")
+          # gh fetches at most 100 open issues here and the first 100 comments in the view
+          # below; more than that on one tracking issue means it is time to close it.
+          num=$(gh issue list --state open --author 'github-actions[bot]' --limit 100 \
+            --json number,title,body \
+            --jq '[.[] | select(.title == env.TITLE and (.body | contains(env.MARKER)))]
+                  | sort_by(.number) | .[0].number // empty')
           if [ -z "$num" ]; then
-            gh issue create --title "$TITLE" --body "$MARKER\n\nScheduled nightly failed."
-          else
-            gh issue comment "$num" --body "Run failed again."
+            gh issue create --title "$TITLE" --body "$body"
+            exit 0
           fi
+          # REC-062 S1: only the bot's own text counts. The issue body is the bot's (the
+          # list above filters on author); comments count only if GraphQL reports their
+          # author as "github-actions" (the bot's login there; no user account has it), so a
+          # visitor's comment that carries the run-id key cannot suppress this alert.
+          seen=$(gh issue view "$num" --json body,comments \
+            --jq '[.body, (.comments[] | select(.author.login == "github-actions") | .body)]
+                  | map(select(contains(env.RUN_KEY))) | length')
+          if [ "$seen" -gt 0 ]; then
+            echo "run ${RUN_ID} is already reported on issue ${num}; not commenting again"
+            exit 0
+          fi
+          gh issue comment "$num" --body "$body"
