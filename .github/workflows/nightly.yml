@@ -6,26 +6,35 @@ name: nightly
 #
 # pip has no --resolution flag (that is uv). This repo's CI uses pip, so the
 # lowest arm pins each direct dependency at its pyproject.toml floor and lets
-# pip resolve remaining (transitive) deps.
+# pip resolve remaining (transitive) deps. Both arms install the runtime deps plus
+# the extras in NIGHTLY_EXTRAS (REC-057: postgres, pdf and otel too, not only dev).
+#
+# A failed or cancelled *scheduled* run opens (or comments on) one tracking issue,
+# "nightly: scheduled run failing", through the alert job (REC-057 N5).
 
 on:
+  # GitHub disables scheduled workflows in a public repo after 60 days without
+  # repository activity; then neither the nightly nor its alert job runs (REC-062).
   schedule:
     - cron: "17 5 * * *"
   workflow_dispatch:
+
+# No workflow-level grant; each job states its own below.
+permissions: {}
 
 jobs:
   import-all:
     name: import-all + suite (py${{ matrix.python-version }} ${{ matrix.deps }})
     runs-on: ubuntu-latest
-    # The full suite takes ~2.5 min on ci.yml's 3.12; leave room for 3.11/3.13.
     timeout-minutes: 20
     permissions:
-      contents: read
+      contents: read # checkout only
     env:
-      # Same as ci.yml: no real provider credentials, no non-loopback network.
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
       RECERTIA_NO_NETWORK: "1"
+      # Extras both arms install; the lowest arm pins every one of their floors too.
+      NIGHTLY_EXTRAS: dev,api,postgres,pdf,otel
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +45,8 @@ jobs:
             deps: newest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -49,31 +60,81 @@ jobs:
           python -m pip install --upgrade pip
           if [ "$DEPS" = "lowest" ]; then
             python - <<'PY'
+          import os
+          import re
           import tomllib
           from pathlib import Path
 
           data = tomllib.loads(Path("pyproject.toml").read_text())
+          optional = data["project"]["optional-dependencies"]
           reqs = list(data["project"]["dependencies"])
-          reqs += data["project"]["optional-dependencies"]["dev"]
-          pins = []
+          for extra in os.environ["NIGHTLY_EXTRAS"].split(","):
+              reqs += optional[extra]
+          pins = {}
           for req in reqs:
+              if ";" in req:
+                  raise SystemExit(f"environment markers are not supported here: {req}")
               head, ge, rest = req.partition(">=")
               if not ge:
                   raise SystemExit(f"direct dep has no >= floor: {req}")
-              pins.append(f"{head.strip()}=={rest.split(',', 1)[0].strip()}")
-          Path("lowest-direct.txt").write_text("\n".join(pins) + "\n")
+              name = head.split("[", 1)[0].strip()
+              floor = rest.split(",", 1)[0].strip()
+              key = re.sub(r"[-_.]+", "-", name).lower()
+              seen = pins.setdefault(key, (name, floor))
+              if seen[1] != floor:
+                  raise SystemExit(f"conflicting floors for {key}: {seen[0]}>={seen[1]} vs {req}")
+          lines = [f"{name}=={floor}" for name, floor in pins.values()]
+          Path("lowest-direct.txt").write_text("\n".join(lines) + "\n")
           print("lowest-direct pins:")
-          print("\n".join(pins))
+          print("\n".join(lines))
           PY
-            pip install -e ".[dev]" -c lowest-direct.txt
+            pip install -e ".[$NIGHTLY_EXTRAS]" -c lowest-direct.txt
           else
-            pip install -e ".[dev]"
+            pip install -e ".[$NIGHTLY_EXTRAS]"
           fi
 
+      - name: Extras import
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          python - <<'PY'
+          from importlib.metadata import version
+          import opentelemetry.trace
+          import psycopg
+          import pypdf
+          impl = psycopg.pq.__impl__
+          if impl != "binary":
+              raise SystemExit(f"psycopg pq implementation is {impl!r}, expected 'binary'")
+          print(f"psycopg {psycopg.__version__} (pq {impl}), pypdf {pypdf.__version__}")
+          PY
+
       - name: Import-all
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pytest -v tests/boundary/test_import_all_modules.py
 
-      # Runs even if import-all failed, so both signals are kept; skipped if Install failed.
       - name: Test suite (same as ci.yml)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pytest -v
+
+  alert:
+    name: alert on scheduled failure
+    needs: import-all
+    if: ${{ always() && github.event_name == 'schedule' && needs.import-all.result != 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TITLE: "nightly: scheduled run failing"
+      MARKER: "<!-- recertia-nightly-alert -->"
+    steps:
+      - name: Open or update the tracking issue
+        run: |
+          set -euo pipefail
+          num=$(gh issue list --state open --author 'github-actions[bot]' --limit 100 --json number,title,body --jq '[.[] | select(.title == env.TITLE and (.body | contains(env.MARKER)))] | .[0].number // empty')
+          if [ -z "$num" ]; then
+            gh issue create --title "$TITLE" --body "$MARKER\n\nScheduled nightly failed."
+          else
+            gh issue comment "$num" --body "Run failed again."
+          fi
