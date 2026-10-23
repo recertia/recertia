@@ -167,11 +167,12 @@ def open_run_persistence(
                 f"leftover runtime files appeared while waiting for the root lock: {shared.root.path}"
             )
     else:
+        # REC-064: the leftover (migrate=off) path is also bounded. It used to
+        # block forever; now it waits at most RECERTIA_IMPORT_LOCK_TIMEOUT_S
+        # and raises typed RootBusy, writing nothing.
         try:
-            shared.acquire(exclusive=False, timeout_s=None)
+            shared.acquire(exclusive=False, timeout_s=import_lock_timeout_s())
         except RootLockBusy as exc:
-            # Windows: the blocking wait ends after the LockFileEx retry budget. Typed,
-            # so a worker re-queues the claim (REC-058 S-1; the bound itself is #153).
             raise RootBusy(f"cannot open the runtime root while the {shared.refused}") from exc
         if _resolve_runtime_db(layout, "off")[0]:
             # migrate=off decided "leftover files" before the lock. A restore that ran
