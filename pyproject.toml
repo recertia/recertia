@@ -31,7 +31,11 @@ api = [
     "httpx>=0.27",
 ]
 postgres = [
-    "psycopg[binary]>=3.2",
+    # 3.2.1, not 3.2: psycopg 3.2.0's [binary] extra requires psycopg-binary==3.2.0.dev1,
+    # which was never uploaded to PyPI, so psycopg[binary]==3.2.0 cannot install (REC-057).
+    # psycopg-binary 3.2.1 has wheels up to cp312 only (cp313 starts at 3.2.2), so the
+    # floor itself installs on 3.11/3.12, which covers the nightly's 3.11 lowest arm.
+    "psycopg[binary]>=3.2.1",
 ]
 pdf = [
     "pypdf>=4",
