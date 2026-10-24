@@ -19,6 +19,8 @@ from typing import Callable, Literal, TypeVar
 
 from recertia.persistence.db import open_db
 from recertia.persistence.root_lock import RootLock
+from recertia.persistence.import_legacy import import_lock_timeout_s
+from recertia.errors import RootBusy
 
 T = TypeVar("T")
 
@@ -363,12 +365,18 @@ def _init_operations_table(conn: sqlite3.Connection, db_path: Path) -> None:
     The rebuild is exclusive under the runtime root lock and runs in one SQLite
     transaction (``isolation_level=None`` so Python 3.11 does not autocommit DDL).
     A crash that left ``operations_rel3`` is dropped and retried.
+
+    REC-067: bounded wait. If the exclusive lock cannot be acquired within
+    RECERTIA_IMPORT_LOCK_TIMEOUT_S, raise typed RootBusy and write nothing.
     """
 
     if _operations_schema_ready(conn):
         return
     lock = RootLock(Path(db_path).parent / ".lock")
-    lock.acquire_exclusive()
+    try:
+        lock.acquire(exclusive=True, timeout_s=import_lock_timeout_s())
+    except Exception as exc:
+        raise RootBusy("cannot rebuild operations schema while the root lock is held") from exc
     try:
         if _operations_schema_ready(conn):
             return
