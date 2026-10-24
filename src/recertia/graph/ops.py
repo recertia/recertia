@@ -18,9 +18,8 @@ from pathlib import Path
 from typing import Callable, Literal, TypeVar
 
 from recertia.persistence.db import open_db
-from recertia.persistence.root_lock import RootLock
 from recertia.persistence.import_legacy import import_lock_timeout_s
-from recertia.errors import RootBusy
+from recertia.persistence.root_lock import RootBusy, RootLock
 
 T = TypeVar("T")
 
