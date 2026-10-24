@@ -55,13 +55,20 @@ def T3_stale_holder_identity(root):
     a later process with the same pid/thread-ident (PID 1 in a container, pthread ident reuse) is
     treated as the holder WITHOUT holding the flock.
     REC-056b1: root_lock no longer has a pid/tid helper to ask, so the probe checks behaviour only:
-    with that text in .lock and no flock held, the open must import the leftover normally."""
+    with that text in .lock and no flock held, the open must import the leftover normally.
+    REC-063: history must confirm the leftover data was actually imported,
+    not merely that the import call reported done from .lock text alone."""
     legacy(root)
     (root / ".lock").write_text(f"{os.getpid()} {threading.get_ident()}\n")   # leftover text, no flock held
     p = open_run_persistence(root); imported = not (root / "checkpoints.db").is_file() or _complete(root)
     p.checkpoints.save("legacy-run", 4, "n4", None, state("legacy-run")); p.close()
-    record("T3 identity text without the flock is not treated as holder", imported,
-           f"import ran={imported}")
+    # REC-063: history must confirm the leftover data was actually imported,
+    # not merely that the import call reported done from .lock text alone.
+    h = hist(root)
+    expected = [(1, "n1"), (2, "n2"), (3, "n3"), (4, "n4")]
+    record("T3 identity text without the flock is not treated as holder",
+           imported and h == expected,
+           f"import ran={imported}; history={h} expected={expected}")
 
 def _complete(root):
     from recertia.persistence.import_legacy import legacy_import_complete
