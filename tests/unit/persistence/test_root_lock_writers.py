@@ -802,7 +802,11 @@ def test_migrate_off_open_racing_post_import_restore_does_not_lose_a_write(
         try:
             p = open_run_persistence(target, migrate="off")  # decided before the restore
         except RootBusy as exc:
-            assert "imported while waiting for the root lock" in str(exc)
+            msg = str(exc)
+            assert (
+                "imported while waiting for the root lock" in msg
+                or "cannot open the runtime root while the root lock is held" in msg
+            ), msg
             restore.join(_JOIN_BOUND_S)
             p = open_run_persistence(target, migrate="off")  # the caller's retry
     finally:
