@@ -373,7 +373,7 @@ def _init_operations_table(conn: sqlite3.Connection, db_path: Path) -> None:
         return
     lock = RootLock(Path(db_path).parent / ".lock")
     try:
-        lock.acquire(exclusive=True, timeout_s=import_lock_timeout_s())
+        lock.acquire_exclusive(timeout_s=import_lock_timeout_s())
     except Exception as exc:
         raise RootBusy("cannot rebuild operations schema while the root lock is held") from exc
     try:
