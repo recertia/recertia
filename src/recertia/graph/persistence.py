@@ -152,7 +152,7 @@ def open_run_persistence(
             layout = RunsRootLayout(parent=RuntimeLayout(Path(runtime_root)), tenant=None, runs_root=path)
     tenant = str(layout.tenant) if layout.tenant is not None else "local"
     mode = migrate if migrate is not None else load_settings().runtime_db_migrate
-    use_runtime, read_fallback = _resolve_runtime_db(layout, mode)
+    use_runtime, _ = _resolve_runtime_db(layout, mode)
     # Root lock shared, then this runs root's tenant lock shared (REC-065 lock order).
     shared = TenantLock(layout.parent.root_lock, layout.tenant_lock)
     if use_runtime:
@@ -204,7 +204,6 @@ def open_run_persistence(
                 checkpoint_db,
                 lease_db=layout.runtime_db,
                 tenant_id=tenant,
-                read_fallback=read_fallback,
             ),
             operations=OperationLedger(
                 operations_db,
@@ -261,5 +260,4 @@ def _resolve_runtime_db(layout: RunsRootLayout, mode: MigrateMode) -> tuple[bool
     imported = import_legacy_runtime(layout)
     if imported:
         return True, None
-    ckpt_fb = layout.checkpoints_db if layout.checkpoints_db.is_file() else None
-    return True, ckpt_fb
+    return True, None
