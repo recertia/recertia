@@ -87,9 +87,9 @@ the chapter text itself is inlined here so this file is readable offline.
 - [ADR-0017: Version-write budget is a first-class dimension](#ch-adr-0017-version-write-budget) — `adr/0017-version-write-budget.md`
 - [ADR-0018: Idle-state offloading for working-set residency](#ch-adr-0018-idle-state-offloading) — `adr/0018-idle-state-offloading.md`
 - [ADR-0019: External trajectories and optional computer-use backends](#ch-adr-0019-external-trajectories) — `adr/0019-external-trajectories.md`
-- [ADR-0020: Store receipts](#ch-adr-0020-store-receipts) — `adr/0020-store-receipts.md`
-- [ADR-0021: Deployment model](#ch-adr-0021-deployment-model) — `adr/0021-deployment-model.md`
-- [ADR-0022: RootBusy and no leftover overlay](#ch-adr-0022-rootbusy-no-leftover-overlay) — `adr/0022-rootbusy-no-leftover-overlay.md`
+- [ADR-0020: Store Receipts — the published durability unit](#ch-adr-0020-store-receipts) — `adr/0020-store-receipts.md`
+- [ADR-0021: Multi-tenant service with pooled control plane and isolated execution](#ch-adr-0021-deployment-model) — `adr/0021-deployment-model.md`
+- [ADR-0022: REL-3 R4 — an open that finds the root lock held is typed `RootBusy`, never a leftover overlay](#ch-adr-0022-rootbusy-no-leftover-overlay) — `adr/0022-rootbusy-no-leftover-overlay.md`
 
 ### Part IV — Assumptions and references
 
@@ -100,4 +100,5 @@ the chapter text itself is inlined here so this file is readable offline.
 
 # Part I — Architecture
 
-<!-- STUB: Full inlined chapters must be produced by running `python3 scripts/generate_architecture2.py` locally on this branch and committing the result. The TOC above is correct for ADR-0020/0021/0022. -->
+<!-- Full regenerated content (500kB) is available as an attachment but exceeds practical single-call connector limits. -->
+<!-- To fix the drift, replace this file with the full content from the uploaded architecture2-regenerated-2.md. -->
