@@ -1,6 +1,6 @@
 # Measurement Continuity Kit Specification
 
-**Status:** Proposed  
+**Status:** Proposed (hardened)  
 **Date:** 2026-10-26  
 **Branch:** docs/2030-sprint-workplan-hardened  
 **Related:** Workplan section WS1; ADR-0005; measurement-integrity.md; week_close
@@ -27,7 +27,7 @@ Packets are not consultable by retrieve. They are not part of the ablation arm. 
   "data_source": "fixture|recorded|synthetic",
   "eval_row_count": 0,
   "counts_toward_week": false,
-  "metric_report": { /* existing MetricReport snapshot */ },
+  "metric_report": { /* existing MetricReport snapshot; field names must match current contract */ },
   "assumption_status": { "a1": "untested", "a2": "untested", "a4": "untested" },
   "tabletop_entries": [],
   "generated_at": "ISO-8601",
@@ -35,9 +35,9 @@ Packets are not consultable by retrieve. They are not part of the ablation arm. 
 }
 ```
 
-Empty or fixture packets set `counts_toward_week: false` and must not increment counted weeks.
+Empty or fixture packets set `counts_toward_week: false` and must not increment counted weeks. The schema is additive; existing week_packet fields remain valid.
 
-## Characterization Tests
+## Characterization Tests (concrete outline)
 
 Lock current soak-tree behavior for:
 
@@ -45,7 +45,12 @@ Lock current soak-tree behavior for:
 - `monday_close`
 - `lift_label`
 
-Fixtures live outside the live eval DB. Tests fail if an older packet is misinterpreted as having silent zeros or if counting rules change.
+**Fixture structure (required):**
+- `fixture_empty_week.json` — offline packet with `counts_toward_week: false`, zero eval rows. Test asserts the checker does not increment counted weeks and does not emit a silent zero for causal_lift.
+- `fixture_recorded_packet.json` — snapshot of a real MetricReport. Test asserts Wilson interval and unavailable reasons are preserved exactly.
+- `fixture_silent_zero_trap.json` — deliberately malformed packet missing interval fields. Test must fail (or label unavailable) rather than emit 0.0.
+
+Fixtures live outside the live eval DB. Tests fail if an older packet is misinterpreted as having silent zeros or if counting rules change. Stop_plan conditions are asserted on synthetic packets that would have triggered them.
 
 ## Tabletop Restore Log Template
 
@@ -62,7 +67,8 @@ Counting rules, stop_plan conditions, week-close checker logic, and measurement 
 ## Acceptance Criteria
 
 - Existing week_close accepts offline packets and refuses to count empty/fixture weeks.
-- Characterization tests pass against frozen fixtures.
+- Characterization tests pass against the three frozen fixtures above.
+- Silent-zero trap fixture fails rather than emitting 0.0.
 - Tabletop template complete.
 - Reports never emit silent zeros.
 - No write path into RunState.
