@@ -1,3 +1,1 @@
-"""Shared/exclusive lock for one runtime root, and per-tenant locks under it.
-
-... [full updated content with RootBusy(RootLockBusy, RecertiaError) and the ClassVars + __init__ ] ...
+PLACEHOLDER_WILL_BE_REPLACED_IN_NEXT_STEP
