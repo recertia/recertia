@@ -1,12 +1,12 @@
 # Physics-Inspired Measurement Pipeline Specification
 
-**Status:** Proposed (hardened)  
+**Status:** Proposed (completed after harder synthesis)  
 **Date:** 2026-10-26  
-**Related:** Workplan WS4; particle-physics-quant-expert inputs
+**Related:** Workplan WS4 (Tier B); particle-physics-quant-expert inputs; harder re-synthesis
 
 ## Purpose
 
-Provide rigorous, falsifiable statistical procedures for causal_lift and implicit recovery, systematic uncertainties, and assumption resolution. Fully offline-capable on recorded or synthetic packets.
+Provide rigorous, falsifiable statistical procedures for causal_lift and implicit recovery, systematic uncertainties, and assumption resolution. Fully offline-capable on recorded or synthetic packets. Supports the measurement substrate; does not create new primary metrics.
 
 ## Procedures
 
@@ -30,6 +30,8 @@ Clustered-by-week variant: inflate by design effect \( 1 + (m-1)\rho \) where m 
 
 Empty/fixture weeks do not contribute to n. Rule: never claim support if Wilson interval includes 0.
 
+5. **Pre-registration / Analysis Freeze Practice**: Any future claim about causal_lift or a1 must have an analysis plan (cuts, intervals, power calculation) frozen and hashed before looking at the data or before unblinding. This is a standing practice that supports the measurement substrate, not a one-time protocol. The frozen plan is part of the characterization fixture set.
+
 ## Data Ownership
 
 Operates only on offline packets. Does not modify live measurement code.
@@ -44,11 +46,12 @@ Measurement pipeline code and judge isolation remain non-modifiable.
 - Power calculator states assumptions and includes the formula above.
 - Results labeled “not established” when intervals span zero or data insufficient.
 - Control-arm divergence fixture fails if arms differ on model, temperature, or prompt.
+- Pre-registration practice is stated and required for claims of support.
 
 ## Non-Goals
 
-No modification of live measurement code in this sprint. No claims of support from sparse data.
+No modification of live measurement code in this sprint. No claims of support from sparse data. No new primary metrics.
 
 ## Cross-References
 
-MetricReport, measurement-integrity.md, ADR-0005.
+MetricReport, measurement-integrity.md, ADR-0005, harder re-synthesis.

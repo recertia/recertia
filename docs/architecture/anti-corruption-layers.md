@@ -1,8 +1,8 @@
 # Anti-Corruption Layers and Non-Modifiable Measurement Plane
 
-**Status:** Proposed  
+**Status:** Proposed (completed after harder synthesis)  
 **Date:** 2026-10-26  
-**Related:** Workplan WS5; ADR-0001, ADR-0002, ADR-0005; horizon note
+**Related:** Workplan WS5 (Tier A); ADR-0001, ADR-0002, ADR-0005; horizon note; harder re-synthesis
 
 ## Purpose
 
@@ -27,9 +27,9 @@ Define bounded contexts, data ownership, and fail-closed contracts that prevent 
 
 ## Contracts
 
-- Fail-closed gates on plane boundaries.
-- Continuous auditor for judge isolation: solver and verifier model ids must differ.
-- Living non-goals register.
+- Fail-closed gates on plane boundaries. POST /v1/runs rejects any payload containing fields outside the documented contract before RunState is constructed.
+- Continuous auditor for judge isolation: solver and verifier model ids must differ. Offline fixture required that fails if model ids match.
+- Living non-goals register with explicit stop conditions (negative or unestablished a1, failed characterization tests, control-arm divergence halt expansion).
 - Phased exit criteria: four consecutive counted weeks + tabletop_ok as Phase 1 exit.
 - Schema changes additive and versioned, accompanied by characterization tests.
 - Control-arm identity invariant: arms identical except deliberate difference.
@@ -42,13 +42,15 @@ Measurement, judge isolation, promotion thresholds, ablation rate, and graph top
 
 - Every new store or surface has explicit single-writer and no-RunState-write rule.
 - Characterization tests lock existing week_close behavior.
-- Model-id isolation check included.
+- Model-id isolation fixture present and fails on matching model ids.
+- POST /v1/runs fail-closed contract stated.
+- Living non-goals register and stop conditions present.
 - Non-goals restated.
 
 ## Non-Goals
 
-No 16th node. No dual-write of fills. No client utterances in RunState. No unparking EBT or full D2. No auto-promotion.
+No 16th node. No dual-write of fills. No client utterances in RunState. No unparking EBT or full D2. No auto-promotion. No claims from sparse data.
 
 ## Cross-References
 
-ADR-0001 (graph with loops, no growth), ADR-0002 (plural memory), ADR-0005, measurement-and-scope.md, loops-and-graphs-horizon.md.
+ADR-0001 (graph with loops, no growth), ADR-0002 (plural memory), ADR-0005, measurement-and-scope.md, loops-and-graphs-horizon.md, harder re-synthesis.
