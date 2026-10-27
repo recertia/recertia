@@ -111,6 +111,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/unit/persistence/test_import_legacy.py` also pins the condition, the retry hint
   and that the named setting is read.
 
+- **`migrate=off` open with pending leftover files has a bounded wait (REC-064, #153)** —
+  `open_run_persistence(..., migrate="off")` on a root that still has `checkpoints.db` /
+  `operations.db` took the shared root lock with no bound: against a holder it waited
+  forever on POSIX, and on Windows until the 10 s retry budget ran out in an `OSError`
+  (`EDEADLK`). It now waits at most `RECERTIA_IMPORT_LOCK_TIMEOUT_S` (default 5 s), like
+  the other opens, and then raises typed `RootBusy` (`root_busy`, caused by
+  `RootLockBusy`) without writing anything; a retry after the holder leaves opens the
+  leftover files and sees their data. Tests: `test_migrate_off_leftover_open_wait_is_bounded`
+  in `tests/unit/persistence/test_import_legacy.py` fails if the bound is removed, zeroed
+  or ignores the setting; the real-Windows tests in
+  `tests/unit/persistence/test_root_lock_windows_real.py` expect the bounded wait (a
+  `BlockingIOError(EAGAIN)` cause, one lock-file open per try, all closed).
+
 - **Per-tenant root locking: tenants on one root no longer exclude each other (REC-065,
   #158)** — each runs root gets its own lock file, `<runs_root>/.tenant.lock`
   (`RunsRootLayout.tenant_lock`), nested under the runtime root's `.lock`. Locks are taken
@@ -119,8 +132,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The leftover import takes the root `.lock` shared, then its tenant lock exclusive
     (before: the root `.lock` exclusive). A run handle (`open_run_persistence`) takes the
     root `.lock` shared, then its tenant lock shared, for the handle's lifetime. Both
-    waits share the one `RECERTIA_IMPORT_LOCK_TIMEOUT_S` bound, except the `migrate=off`
-    leftover path (#153).
+    waits, and the `migrate=off` leftover path since REC-064 (#153), share the one
+    `RECERTIA_IMPORT_LOCK_TIMEOUT_S` bound.
   - So an open handle or an import on one tenant, including a long worker run, no longer
     makes another tenant's pending import raise `RootBusy`, and imports of different
     tenants run at the same time. A second import of the same tenant, or an import while
@@ -216,10 +229,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     REC-065 (above) adds per-tenant locks and lifts this limit.
   - `RootBusy` is not yet the `root_busy` API/CLI error (#145): the API returns a generic
     error for it.
-  - The leftover path (`migrate=off` with pending files) still waits without a bound
-    (#153). On Windows that wait ends after 10 s in typed `RootBusy`, which both worker
-    paths re-queue; before, it ended in an untyped `OSError(EDEADLK)`, so a worker failed
-    the claim.
+  - The leftover path (`migrate=off` with pending files) waited without a bound (#153).
+    Since REC-064 (above) it waits at most `RECERTIA_IMPORT_LOCK_TIMEOUT_S` and raises
+    typed `RootBusy` on every platform, which both worker paths re-queue.
   - The operations-schema exclusive lock is unbounded and the faithfulness command's
     orchestrator is not closed on every path (#160).
   - Worker imports on older releases lock `<root>/runs/<tenant>/.lock`, so mixed-version

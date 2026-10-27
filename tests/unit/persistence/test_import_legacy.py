@@ -471,6 +471,57 @@ def test_manual_mode_error_names_only_registered_cli_commands(tmp_path: Path) ->
         persistence.close()
 
 
+def test_migrate_off_leftover_open_wait_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """REC-064 (#153): ``migrate=off`` with pending leftover files waits for the root lock
+    at most ``RECERTIA_IMPORT_LOCK_TIMEOUT_S`` and then raises typed ``RootBusy``, writing
+    nothing. Before, this path waited without a bound. The open runs in a thread so a
+    missing bound fails the test instead of hanging it; the bound is the env value (0.3 s),
+    well under the 5 s default, so a read of the wrong variable fails too."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.3")
+    root = tmp_path / "runs"
+    layout = RuntimeLayout(root).local_runs()
+    store = CheckpointStore(layout.checkpoints_db)
+    try:
+        store.save("run-a", 0, "intake", None, _state("run-a"))
+    finally:
+        store.close()
+    outcome: list[tuple[BaseException | None, float]] = []
+
+    def attempt() -> None:
+        started = time.monotonic()
+        try:
+            open_run_persistence(root, migrate="off").close()
+            error: BaseException | None = None
+        except BaseException as exc:  # noqa: BLE001
+            error = exc
+        outcome.append((error, time.monotonic() - started))
+
+    held = RootLock(layout.parent.root_lock)
+    held.try_exclusive()
+    worker = threading.Thread(target=attempt, daemon=True)
+    try:
+        worker.start()
+        worker.join(timeout=2.5)
+        finished = not worker.is_alive()
+    finally:
+        held.release()
+        worker.join(timeout=15)
+    assert finished, "the migrate=off open is still waiting: its wait is not bounded"
+    ((error, elapsed),) = outcome
+    assert isinstance(error, RootBusy)
+    assert isinstance(error.__cause__, RootLockBusy)
+    assert 0.25 <= elapsed <= 2.0  # not a single try, and not the 5 s default
+    assert layout.checkpoints_db.is_file()
+    assert not layout.runtime_db.exists()  # nothing was written elsewhere
+    # After the holder is gone, the retry opens the leftover files and sees the data.
+    persistence = open_run_persistence(root, migrate="off")
+    try:
+        assert persistence.checkpoints.latest("run-a") is not None
+    finally:
+        persistence.close()
+
+
 def test_open_run_persistence_auto_imports_then_reads(tmp_path: Path) -> None:
     layout = RuntimeLayout(tmp_path / "runs").local_runs()
     store = CheckpointStore(layout.checkpoints_db)

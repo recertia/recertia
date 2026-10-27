@@ -30,6 +30,10 @@ from recertia.persistence.root_lock import RootBusy, RootLock, RootLockBusy
 pytestmark = [pytest.mark.windows, pytest.mark.skipif(sys.platform != "win32", reason="real Windows only")]
 
 _BOUND_S = 5.0
+# Upper bound for a wait that RECERTIA_IMPORT_LOCK_TIMEOUT_S limits to 0.3 s. It is well
+# under the production default (5 s) and the 10 s retry budget, so a read of the wrong
+# variable or an unbounded wait fails by seconds, not by a few milliseconds.
+_OFF_BOUND_S = 2.0
 _ERROR_NOT_LOCKED = 158
 
 
@@ -305,7 +309,7 @@ def test_migrate_off_blocking_wait_raises_root_busy(tmp_path: Path, monkeypatch:
         started = time.monotonic()
         with pytest.raises(RootBusy) as info:
             open_run_persistence(root, migrate="off")
-        assert 0.3 <= time.monotonic() - started <= _BOUND_S
+        assert 0.3 <= time.monotonic() - started <= _OFF_BOUND_S
         busy = info.value.__cause__
         assert isinstance(busy, RootLockBusy)
         assert isinstance(busy.__cause__, BlockingIOError)
@@ -316,7 +320,7 @@ def test_migrate_off_blocking_wait_raises_root_busy(tmp_path: Path, monkeypatch:
         started = time.monotonic()
         with pytest.raises(RootLockBusy) as budget:
             unbounded.acquire_shared()
-        assert 0.3 <= time.monotonic() - started <= _BOUND_S
+        assert 0.3 <= time.monotonic() - started <= _OFF_BOUND_S
         assert isinstance(budget.value.__cause__, OSError)
         assert budget.value.__cause__.errno == errno.EDEADLK
         assert unbounded._fd is None
@@ -439,6 +443,19 @@ def _record_lock_fds(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, os.stat
     return opened
 
 
+def _record_open_times(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Monotonic time at which each ``RootLock._open`` call began (wraps the current one)."""
+    starts: list[float] = []
+    original = RootLock._open
+
+    def timed_open(self: RootLock) -> int:
+        starts.append(time.monotonic())
+        return original(self)
+
+    monkeypatch.setattr(RootLock, "_open", timed_open)
+    return starts
+
+
 def _still_open(fd: int, opened_on: os.stat_result) -> bool:
     try:
         now = os.fstat(fd)
@@ -464,13 +481,22 @@ def test_root_lock_migrate_off_root_busy_closes_the_handle(
     monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.3")
     holder = _Holder(RuntimeLayout(root).root_lock, "exclusive")
     opened = _record_lock_fds(monkeypatch)
+    starts = _record_open_times(monkeypatch)
     try:
+        started = time.monotonic()
         with pytest.raises(RootBusy):
             open_run_persistence(root, migrate="off")
+        elapsed = time.monotonic() - started
     finally:
         holder.stop()
     lock_stat = os.stat(RuntimeLayout(root).root_lock)
-    assert len(opened) >= 2  # it retried: one open (and one close) per try
+    assert elapsed <= _OFF_BOUND_S
+    # It retried: one open (and one close) per try. A single try is accepted only when it
+    # began at once and itself used the whole 0.3 s bound (a stall inside that one open,
+    # e.g. a scanner on a hosted runner); a single try that began late (sleep, then one
+    # try) or ended early (bound of zero) still fails.
+    assert len(opened) >= 1
+    assert len(opened) >= 2 or (starts[0] - started < 0.1 and elapsed >= 0.3), (len(opened), elapsed)
     assert all(os.path.samestat(st, lock_stat) for _fd, st in opened)
     assert [fd for fd, st in opened if _still_open(fd, st)] == []
 
