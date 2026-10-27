@@ -283,10 +283,14 @@ def test_backup_then_restore_round_trip(tmp_path: Path) -> None:
 
 
 def test_migrate_off_blocking_wait_raises_root_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """REC-058 S-1 (refs #153): ``migrate=off`` with pending leftover files waits for the
-    shared root lock without a timeout; against a real cross-process exclusive holder the
-    ``LockFileEx`` retry budget runs out and the open raises typed ``RootBusy``, not
-    ``OSError(EDEADLK)``. The retry after release writes to the leftover files."""
+    """REC-058 S-1 (refs #153, REC-073): ``migrate=off`` with pending leftover files takes
+    the shared root lock with a bounded wait (REC-064): at most
+    ``RECERTIA_IMPORT_LOCK_TIMEOUT_S``, in non-blocking ``LockFileEx`` tries. Against a
+    real cross-process exclusive holder the open raises typed ``RootBusy`` after that
+    bound, not after the ``LockFileEx`` retry budget and not as a bare ``OSError``; the
+    cause is the non-blocking refusal (``EAGAIN``). The unbounded wait (``timeout_s=None``)
+    still ends in ``RootLockBusy`` over ``EDEADLK`` once the retry budget runs out. The
+    retry after release writes to the leftover files."""
 
     root = tmp_path / "runs"
     p = open_run_persistence(root, migrate="off")
@@ -294,7 +298,8 @@ def test_migrate_off_blocking_wait_raises_root_busy(tmp_path: Path, monkeypatch:
         p.checkpoints.save("old", 1, "n1", None, _state("old"))
     finally:
         p.close()
-    monkeypatch.setattr(root_lock, "_WIN_BLOCKING_RETRY_S", 0.3)
+    # The bound is the env timeout, not the 10 s retry budget (left at its default here).
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.3")
     holder = _Holder(RuntimeLayout(root).root_lock, "exclusive")
     try:
         started = time.monotonic()
@@ -303,8 +308,18 @@ def test_migrate_off_blocking_wait_raises_root_busy(tmp_path: Path, monkeypatch:
         assert 0.3 <= time.monotonic() - started <= _BOUND_S
         busy = info.value.__cause__
         assert isinstance(busy, RootLockBusy)
-        assert isinstance(busy.__cause__, OSError)
-        assert busy.__cause__.errno == errno.EDEADLK
+        assert isinstance(busy.__cause__, BlockingIOError)
+        assert busy.__cause__.errno == errno.EAGAIN
+        # The unbounded wait keeps the LockFileEx retry budget and its EDEADLK refusal.
+        monkeypatch.setattr(root_lock, "_WIN_BLOCKING_RETRY_S", 0.3)
+        unbounded = RootLock(RuntimeLayout(root).root_lock)
+        started = time.monotonic()
+        with pytest.raises(RootLockBusy) as budget:
+            unbounded.acquire_shared()
+        assert 0.3 <= time.monotonic() - started <= _BOUND_S
+        assert isinstance(budget.value.__cause__, OSError)
+        assert budget.value.__cause__.errno == errno.EDEADLK
+        assert unbounded._fd is None
     finally:
         holder.stop()
     p = open_run_persistence(root, migrate="off")
@@ -435,9 +450,10 @@ def _still_open(fd: int, opened_on: os.stat_result) -> bool:
 def test_root_lock_migrate_off_root_busy_closes_the_handle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """N-1: the blocking ``migrate=off`` wait that runs out of the real ``LockFileEx``
-    budget against a cross-process holder raises ``RootBusy`` and closes the fd (and so
-    the handle) it opened on ``.lock``."""
+    """N-1 (REC-073): the bounded ``migrate=off`` wait that runs out against a
+    cross-process holder raises ``RootBusy`` and closes every fd (and so every handle) it
+    opened on ``.lock``. The bounded wait retries, opening one fd per try, so there are
+    several and none may stay open."""
 
     root = tmp_path / "runs"
     p = open_run_persistence(root, migrate="off")
@@ -445,7 +461,7 @@ def test_root_lock_migrate_off_root_busy_closes_the_handle(
         p.checkpoints.save("old", 1, "n1", None, _state("old"))
     finally:
         p.close()
-    monkeypatch.setattr(root_lock, "_WIN_BLOCKING_RETRY_S", 0.3)
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.3")
     holder = _Holder(RuntimeLayout(root).root_lock, "exclusive")
     opened = _record_lock_fds(monkeypatch)
     try:
@@ -453,9 +469,10 @@ def test_root_lock_migrate_off_root_busy_closes_the_handle(
             open_run_persistence(root, migrate="off")
     finally:
         holder.stop()
-    assert len(opened) == 1
-    fd, opened_on = opened[0]
-    assert not _still_open(fd, opened_on)
+    lock_stat = os.stat(RuntimeLayout(root).root_lock)
+    assert len(opened) >= 2  # it retried: one open (and one close) per try
+    assert all(os.path.samestat(st, lock_stat) for _fd, st in opened)
+    assert [fd for fd, st in opened if _still_open(fd, st)] == []
 
 
 @pytest.mark.parametrize("call", ["blocking_shared", "try_exclusive"])
