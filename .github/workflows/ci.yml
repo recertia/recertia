@@ -261,7 +261,7 @@ jobs:
           RECERTIA_REQUIRE_REAL_DOCKER: "1"
         run: pytest -v -rs tests/e2e/test_container_smoke.py tests/runtime/test_hung_command_timeouts.py
 
-  # REC-058 (MF-D in CTO-rec's PR #163 review): run the root-lock tests against the real
+  # REC-058: run the root-lock tests against the real
   # kernel32 on Windows, which a fake kernel32 on Linux cannot prove. A separate job, so
   # the required `ci` check keeps its name; no secrets, read-only token, SHA-pinned actions
   # (the same pins as weekly-ops.yml and heldout-operator.yml).

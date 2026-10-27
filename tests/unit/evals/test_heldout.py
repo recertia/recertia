@@ -1171,7 +1171,7 @@ def test_workflow_is_dispatch_only_pinned_container_and_secretless() -> None:
         assert banned not in code, banned
     assert re.search(r'python-version: "3\.12\.\d+"', code)
     assert "--require-hashes -r requirements/heldout-eval.txt" in code
-    assert "TODO(REC-022)" in text and "Harper-rec" in text
+    assert "TODO(REC-022)" in text and "access-storage proposal" in text
     names = re.findall(r"- name: (.+)", code)
     assert names[:2] == ["Refuse debug logging", "Refuse non-main ref"], names
     order = [
@@ -1251,7 +1251,7 @@ def test_workflow_cto_must_fixes_m2_to_m5_and_log_scan_job() -> None:
         # M4: a decrypt step that is no longer the fail-closed stub must emit ::add-mask::.
         stub = "decrypt_not_approved" in decrypt and "exit 1" in decrypt
         assert stub or "::add-mask::" in decrypt
-    assert "CTO-rec M4" in text and "::add-mask::" in text
+    assert "proposal §4 item 8: RIGHT AFTER" in text and "::add-mask::" in text
     # M5: no deployment environment yet; the TODO says when it is added.
     assert not re.search(r"^\s*environment:", code, flags=re.M)
     assert "`environment: heldout-operator` is added to BOTH jobs in the same" in text
@@ -1278,7 +1278,8 @@ def test_audit_record_goes_to_robs_two_recipients_only() -> None:
     persist = _steps(code)["evaluate/Persist to audit store (PENDING approval; fails closed)"]
     assert "audit_sink_not_approved" in persist and "exit 1" in persist
     raw = text.split("- name: Persist to audit store", 1)[1].split("\n      - name:", 1)[0]
-    assert "HELDOUT_AUDIT_RECIPIENTS: `rob`, `rob-recovery`" in " ".join(raw.replace("#", " ").split())
+    flat = " ".join(raw.replace("#", " ").split())
+    assert "HELDOUT_AUDIT_RECIPIENTS: the owner's key and recovery key" in flat
     assert "recipients only" in raw
     assert not re.search(r"\bthe\s+operator\b", raw, flags=re.I), "no separate operator recipient"
     assert "age1" not in text and "AGE-SECRET-KEY" not in text and "BEGIN " not in text
