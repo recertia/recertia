@@ -119,11 +119,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `open_run_persistence(..., migrate="off")` on a root that still has `checkpoints.db` /
   `operations.db` took the shared root lock with no bound: against a holder it waited
   forever on POSIX, and on Windows until the 10 s retry budget ran out, when it raised
-  typed `RootBusy` (the `OSError` with `EDEADLK` was only the cause). It now waits at
-  most `RECERTIA_IMPORT_LOCK_TIMEOUT_S` (default 5 s), like the other opens, on every
-  platform, and then raises typed `RootBusy` (`root_busy`, caused by `RootLockBusy`)
-  without writing anything; a retry after the holder leaves opens the
-  leftover files and sees their data. Tests: `test_migrate_off_leftover_open_wait_is_bounded`
+  typed `RootBusy` (the chain was `OSError(EDEADLK)`, wrapped in `RootLockBusy`, wrapped
+  in `RootBusy`). It now waits at most `RECERTIA_IMPORT_LOCK_TIMEOUT_S` (default 5 s),
+  like the other opens, on every platform, and then raises typed `RootBusy`
+  (`root_busy`, caused by `RootLockBusy`) without writing anything; a retry after the
+  holder leaves opens the leftover files and sees their data. Tests:
+  `test_migrate_off_leftover_open_wait_is_bounded`
   in `tests/unit/persistence/test_import_legacy.py` fails if the bound is removed, zeroed
   or ignores the setting; the real-Windows tests in
   `tests/unit/persistence/test_root_lock_windows_real.py` expect the bounded wait (a
@@ -491,14 +492,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arm pins their floors too (psycopg 3.2.1, pypdf 4, opentelemetry-api 1.20). The pin
   script drops a requirement's extras from its constraint and stops on a marker or a
   conflicting floor. `actions/checkout` runs with `persist-credentials: false`. A new
-  `alert` job runs only when a scheduled run fails or is cancelled: it opens one issue
-  titled "nightly: scheduled run failing" (found by exact title, bot author and a marker
-  line), or comments on it if it is already open, and skips a run id it already reported.
+  `alert` job runs only when a scheduled run does not succeed (it fails, is cancelled or
+  is skipped): it opens one issue titled "nightly: scheduled run failing" (found by exact
+  title, bot author and a marker line), or comments on it if it is already open,
+  and skips a run id it already reported.
   The body is run metadata only. The job has no checkout and no `uses:` actions. It is the
   workflow's only write grant (job-scoped `issues: write` on `GITHUB_TOKEN`); the
   workflow-level `permissions` is now `{}`.
 
-- **Nightly alert and extras hardening (REC-062, #180)** — follow-up to the #143 review.
+- **Nightly alert and extras hardening (REC-062, #180)** — follow-up to the review
+  of the first nightly-extras pull request (#143, closed and superseded).
   The alert job's run-id dedupe now counts only comments by `github-actions`, so a
   visitor's comment carrying the run-id key cannot suppress an alert. Its condition is
   `always() && github.event_name == 'schedule' && needs.import-all.result != 'success'`,
