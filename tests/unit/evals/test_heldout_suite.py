@@ -147,7 +147,7 @@ def test_heldout_suite_fails_closed_before_running_on_a_mismatch(tmp_path: Path)
 
 
 def test_task_class_gate_runs_opaque_dirs_unchanged(tmp_path: Path) -> None:
-    """CTO-rec 14:08: the task-class gate already handles h001… dirs; it is not modified."""
+    """The task-class gate already handles h001… dirs; it is not modified."""
 
     root = _split(tmp_path)
     _skills(tmp_path)
@@ -157,7 +157,7 @@ def test_task_class_gate_runs_opaque_dirs_unchanged(tmp_path: Path) -> None:
     assert [r.passed for r in report.results] == [True, False]
 
 
-# ----- M3: held-out run state stays out of checkouts and is removed after each run -----
+# ----- Held-out run state stays out of checkouts and is removed after each run -----
 
 MARK_REQUEST = "MARKREQUEST7f3a"
 MARK_COMMAND = "MARKCMD91bd"

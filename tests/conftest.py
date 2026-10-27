@@ -260,7 +260,7 @@ def stop_test_workers_report(timeout: float = 5.0) -> str | None:
     from recertia.workers.embedded import EmbeddedQueueWorker
     from recertia.workers.run_worker import AsyncRunWorker
 
-    # Queue workers first, then pools (CTO-rec S3): a live queue worker can
+    # Queue workers first, then pools: a live queue worker can
     # still submit a run, and a submit into a pool that shutdown_all already
     # closed silently starts a new pool (F2) whose thread outlives teardown.
     queue_stopped = EmbeddedQueueWorker.stop_all(timeout=timeout)

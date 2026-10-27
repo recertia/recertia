@@ -5,7 +5,7 @@ weekly-ops.yml used to upload its eval output (metrics, probes, canary, soak log
 public artifact on a public repo. It now writes only this summary. Each value comes from an
 explicit allowlist of aggregate fields. Numbers, booleans, and null are printed as they are.
 A string is printed only for a field listed in ``STRING_ENUMS`` and only when it is one of
-that field's known values (CTO-rec N2: a free-form token could carry a skill or fixture id).
+that field's known values (a free-form token could carry a skill or fixture id).
 Anything else is printed as ``(omitted)``. No per-probe, per-fixture, or per-run rows.
 
 Usage:

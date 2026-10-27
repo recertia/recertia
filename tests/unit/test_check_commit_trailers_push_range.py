@@ -208,7 +208,7 @@ def test_zero_before_new_branch_at_existing_commit_checks_after_alone(repo: Repo
     assert f"ok 1 commit(s) in commit {after[:12]} (tip only, empty push range)" in result.stdout
 
 
-# --- force push (CTO case e5) -------------------------------------------------
+# --- force push (case e5) -------------------------------------------------
 
 
 def _force_push_setup(repo: Repo) -> tuple[str, str, str]:
@@ -579,7 +579,7 @@ def test_malformed_trailer_value_fails_closed(repo: Repo, value: str) -> None:
 
 
 def test_env_inputs_are_not_echoed_unless_sha_shaped(repo: Repo) -> None:
-    # CTO nit 2: an address-shaped PUSH_BEFORE / DEFAULT_BRANCH is printed as <invalid>.
+    # An address-shaped PUSH_BEFORE / DEFAULT_BRANCH is printed as <invalid>.
     after = repo.commit()
     repo.publish_main()
     result = _push(repo, LEAK, after)
@@ -617,7 +617,7 @@ def _raw_bytes_commit(repo: Repo, author_email: bytes, message: bytes) -> str:
 
 
 def test_non_utf8_identity_is_classified_per_commit(repo: Repo) -> None:
-    # CTO nit 3: bad bytes no longer abort the run; each SHA is reported.
+    # Bad bytes no longer abort the run; each SHA is reported.
     before = repo.commit()
     bad_author = _raw_bytes_commit(repo, b"zz-\xff" + b"@" + b"leak-domain.invalid", b"raw\n")
     bad_trailer = _raw_bytes_commit(

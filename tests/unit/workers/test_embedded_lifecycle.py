@@ -1,4 +1,4 @@
-"""REC-029: EmbeddedQueueWorker start/stop transitions (CTO-rec nits N1, N2 on #106).
+"""REC-029: EmbeddedQueueWorker start/stop transitions (review nits on #106).
 
 N1: ensure_started() while stop() is still waiting for an in-flight item must
 not strand later work, and must not leave two threads polling.
@@ -289,7 +289,7 @@ def test_shutdown_all_ignores_a_patched_time_monotonic(monkeypatch: pytest.Monke
 
 
 def test_teardown_stops_queue_workers_before_pools(monkeypatch: pytest.MonkeyPatch) -> None:
-    """CTO-rec S3: a queue worker's last submit must not leak a pool past teardown.
+    """A queue worker's last submit must not leak a pool past teardown.
 
     The stand-in ``stop_all`` submits a run, as a queue worker can while it
     stops. Queue first, then pools: ``shutdown_all`` closes the pool that

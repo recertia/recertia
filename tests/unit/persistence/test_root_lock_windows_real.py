@@ -287,7 +287,7 @@ def test_backup_then_restore_round_trip(tmp_path: Path) -> None:
 
 
 def test_migrate_off_blocking_wait_raises_root_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """REC-058 S-1 (refs #153, REC-073): ``migrate=off`` with pending leftover files takes
+    """REC-058 (refs #153, REC-073): ``migrate=off`` with pending leftover files takes
     the shared root lock with a bounded wait (REC-064): at most
     ``RECERTIA_IMPORT_LOCK_TIMEOUT_S``, in non-blocking ``LockFileEx`` tries. Against a
     real cross-process exclusive holder the open raises typed ``RootBusy`` after that
@@ -427,7 +427,7 @@ def test_cross_process_tenant_import_makes_a_same_tenant_open_root_busy(
         p.close()
 
 
-# --- review of #169: N-1 the refused handle is closed, N-3 non-busy errors ---
+# --- review of #169: the refused handle is closed, non-busy errors ---
 
 
 def _record_lock_fds(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, os.stat_result]]:
@@ -467,7 +467,7 @@ def _still_open(fd: int, opened_on: os.stat_result) -> bool:
 def test_root_lock_migrate_off_root_busy_closes_the_handle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """N-1 (REC-073): the bounded ``migrate=off`` wait that runs out against a
+    """REC-073: the bounded ``migrate=off`` wait that runs out against a
     cross-process holder raises ``RootBusy`` and closes every fd (and so every handle) it
     opened on ``.lock``. The bounded wait retries, opening one fd per try, so there are
     several and none may stay open."""
@@ -505,7 +505,7 @@ def test_root_lock_migrate_off_root_busy_closes_the_handle(
 def test_root_lock_real_error_other_than_33_is_oserror_not_busy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, call: str
 ) -> None:
-    """N-3: a real ``LockFileEx`` failure that is not ``ERROR_LOCK_VIOLATION`` (here a
+    """A real ``LockFileEx`` failure that is not ``ERROR_LOCK_VIOLATION`` (here a
     NULL handle, ``ERROR_INVALID_HANDLE``) propagates as ``OSError`` with its ``winerror``,
     on the blocking typed path too; it is never ``RootLockBusy``. The fd is closed."""
 

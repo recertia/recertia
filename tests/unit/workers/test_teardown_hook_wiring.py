@@ -8,8 +8,8 @@ Loading the conftest with ``-p`` registers it earlier than a real
 ``conftest.py``. The child's hook order (logging, capture, the conftest
 wrapper, runner) matches the suite's only because the wrapper is ``trylast``;
 without it the suite's wrapper sorts outside capture while the child's stays
-inside, so these child tests cannot catch a ``trylast`` regression (CTO-rec
-D1, D2). ``test_teardown_wrapper_is_trylast_inside_capture`` checks it in this
+inside, so these child tests cannot catch a ``trylast`` regression.
+``test_teardown_wrapper_is_trylast_inside_capture`` checks it in this
 process, where the conftest is loaded as a real ``conftest.py``.
 """
 
@@ -276,7 +276,7 @@ def test_timeout_while_stopping_workers_does_not_skip_teardown(
 def test_workers_are_stopped_before_fixture_finalizers(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CTO-rec S2: fixture finalizers run with every worker thread already stopped.
+    """Fixture finalizers run with every worker thread already stopped.
 
     Against "yield first, then stop", the finalizer sees the live pool thread
     and the test ERRORs at teardown.
@@ -297,7 +297,7 @@ def test_workers_are_stopped_before_fixture_finalizers(
 def test_finalizer_error_keeps_the_leak_message(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CTO-rec S1b: when a finalizer raises, the leak message rides on that error as a note."""
+    """When a finalizer raises, the leak message rides on that error as a note."""
 
     pytester.makepyfile(
         test_child="""
@@ -334,7 +334,7 @@ def test_finalizer_error_keeps_the_leak_message(
 
 
 def test_teardown_wrapper_is_trylast_inside_capture(request: pytest.FixtureRequest) -> None:
-    """CTO-rec D1: the suite's teardown wrapper is ``trylast`` and sorts inside capturemanager.
+    """The suite's teardown wrapper is ``trylast`` and sorts inside capturemanager.
 
     In-process, so it sees the real ``conftest.py`` registration order. Without
     ``trylast`` the wrapper sorts outside capture and output printed while
