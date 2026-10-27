@@ -161,8 +161,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       until every old process is gone. A `manual` open of a tenant whose leftover files
       are pending refuses with `state_corrupt` and cannot serve that tenant, so `off` is
       the only choice there. Only once no process of an older release uses this root is
-      it safe to reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto`; do not follow the
-      `manual` advice while an old process is still running.
+      it safe to reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto`; while an old process is
+      still running, ignore the `manual` error's advice to reopen with `auto` and stay on
+      `off`.
 
   Tests: `tests/unit/persistence/test_root_lock_writers.py` (REC-065 section),
   `tests/unit/persistence/test_root_lock_windows_path.py`,

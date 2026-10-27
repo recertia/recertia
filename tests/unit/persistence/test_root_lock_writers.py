@@ -786,6 +786,9 @@ def test_migrate_off_open_racing_post_import_restore_does_not_lose_a_write(
     an imported runtime.db. Before MF-B it wrote seq 3 to the leftover checkpoints.db,
     which every later open ignores, so seq 3 was lost."""
 
+    # The restore holds the root lock for at least 0.5 s (the slow extract), the open waits
+    # at most 0.25 s, so the open is always refused with the "root lock is held" message.
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
     src = tmp_path / "src"
     _pending_root(src, "r")
     open_run_persistence(src).close()  # imported; leftover files kept for rollback
@@ -802,11 +805,7 @@ def test_migrate_off_open_racing_post_import_restore_does_not_lose_a_write(
         try:
             p = open_run_persistence(target, migrate="off")  # decided before the restore
         except RootBusy as exc:
-            msg = str(exc)
-            assert (
-                "imported while waiting for the root lock" in msg
-                or "cannot open the runtime root while the root lock is held" in msg
-            ), msg
+            assert "cannot open the runtime root while the root lock is held" in str(exc), exc
             restore.join(_JOIN_BOUND_S)
             p = open_run_persistence(target, migrate="off")  # the caller's retry
     finally:

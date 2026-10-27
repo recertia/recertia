@@ -404,9 +404,15 @@ def _release_ids_in(text: str) -> list[str]:
 
     patterns = (
         r"\b(?:REC|REL|ADR)-\d+\b",  # ticket ids
-        r"(?<![\w&])#\d+\b",  # issue or pull request numbers
-        r"\b[0-9a-f]{7,40}\b",  # commit hashes, short or full
-        r"\bv?\d+\.\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.]+)?\b",  # version tags: v1.2.3, 2026.10
+        r"(?<![\w&])#\d+\b",  # issue or pull request numbers: #172
+        r"\b(?:pr|pull request|issue|gh)[-_ ]?#?\d+\b",  # PR 172, pull request 172, issue 9
+        # Commit hashes, short or full: 6 to 40 hex digits with at least one digit and one
+        # letter (so "defaced" and "300000" are not hashes), or 12+ letters a-f alone.
+        r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{6,40}\b",
+        r"\b[a-f]{12,40}\b",
+        r"\bv\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.]+)?\b",  # version tags: v3, v1.2, v1.2.3
+        r"\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?\b",  # three-part versions: 1.2.3
+        r"\b(?:19|20)\d{2}\.\d{1,2}\b",  # calendar versions: 2026.10 (not "0.3 s")
         r"\b(?:release|rel|tag)[-_ ]?v?\d[\w.-]*\b",  # release-2026.10, tag_3
     )
     return [m.group(0) for pattern in patterns for m in re.finditer(pattern, text, re.IGNORECASE)]
@@ -417,6 +423,17 @@ def test_release_id_detector_finds_hashes_tags_and_ticket_ids() -> None:
         "0e85d983",
         "0e85d983a1b2c3d4e5f60718293a4b5c6d7e8f90",
         "since v1.2.3 only",
+        "v3",
+        "v1.2",
+        "1.2.3",
+        "2026.10",
+        "0e85d9",
+        "a1b2c3",
+        "deadbeefcafe",
+        "PR 172",
+        "pr172",
+        "pull request 172",
+        "issue 9",
         "release 2026.10",
         "release-2026.10",
         "REC-070",
@@ -425,6 +442,19 @@ def test_release_id_detector_finds_hashes_tags_and_ticket_ids() -> None:
         "see #172",
     ):
         assert _release_ids_in(f"reopen with auto ({sample})"), sample
+    for innocent in (
+        "waits 0.3 s",
+        "at most 2.5 s",
+        "defaced",
+        "facade",
+        "decade",
+        "beaded",
+        "300000",
+        "1000000 ms",
+        "root_busy",
+        "the 5 s default",
+    ):
+        assert _release_ids_in(f"reopen with auto ({innocent})") == [], innocent
     clean = (
         "only once no process of an older release uses this root, set"
         " RECERTIA_RUNTIME_DB_MIGRATE=auto (the default) and reopen; retry on root_busy"
@@ -525,7 +555,7 @@ def _doc_segment(doc: str, start: str, end: str) -> str:
 
 
 def test_manual_mode_advice_is_pinned_in_changelog_and_rel_specs() -> None:
-    """The docs give the same advice as the runtime text, so the MF-2 contradiction (a doc
+    """The docs give the same advice as the runtime text, so the contradiction (a doc
     saying to reopen with ``auto`` without the condition) cannot come back by a docs-only
     edit. Each place that gives the advice must carry the condition before the ``auto``
     reopen, and say to stay on ``off`` otherwise; the places that describe the whole
@@ -641,6 +671,56 @@ def test_migrate_off_leftover_open_wait_is_bounded(tmp_path: Path, monkeypatch: 
         assert persistence.checkpoints.latest("run-a") is not None
     finally:
         persistence.close()
+
+
+def test_migrate_off_leftover_open_wait_ends_when_the_holder_leaves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``migrate=off`` wait polls: when the holder leaves mid-wait, the open succeeds
+    soon after, not at the end of the bound. A wait that sleeps the whole bound and then
+    tries once passes the test above (the holder stays) but fails this one: the bound is
+    6 s, the holder leaves after 0.2 s, and the open must finish well inside the bound."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "6")
+    root = tmp_path / "runs"
+    layout = RuntimeLayout(root).local_runs()
+    store = CheckpointStore(layout.checkpoints_db)
+    try:
+        store.save("run-a", 0, "intake", None, _state("run-a"))
+    finally:
+        store.close()
+    waiting = threading.Event()
+    outcome: list[tuple[object, float]] = []
+
+    def attempt() -> None:
+        started = time.monotonic()
+        waiting.set()
+        result: object
+        try:
+            result = open_run_persistence(root, migrate="off")
+        except BaseException as exc:  # noqa: BLE001
+            result = exc
+        outcome.append((result, time.monotonic() - started))
+
+    held = RootLock(layout.parent.root_lock)
+    held.try_exclusive()
+    worker = threading.Thread(target=attempt, daemon=True)
+    try:
+        worker.start()
+        assert waiting.wait(timeout=10)
+        time.sleep(0.2)
+    finally:
+        held.release()
+        worker.join(timeout=15)
+    assert not worker.is_alive()
+    ((result, elapsed),) = outcome
+    assert not isinstance(result, BaseException), result
+    persistence = result
+    try:
+        assert persistence.checkpoints.latest("run-a") is not None  # type: ignore[attr-defined]
+    finally:
+        persistence.close()  # type: ignore[attr-defined]
+    assert 0.1 <= elapsed < 3.0  # it did wait, and it did not wait out the 6 s bound
 
 
 def test_open_run_persistence_auto_imports_then_reads(tmp_path: Path) -> None:
