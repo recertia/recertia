@@ -394,6 +394,44 @@ def _registered_cli_path(words: list[str]) -> list[str] | None:
     return path if path and not is_group else None
 
 
+_MANUAL_CONDITION = "only once no process of an older release uses this root"
+_REPO = Path(__file__).resolve().parents[3]
+
+
+def _release_ids_in(text: str) -> list[str]:
+    """Ticket ids, issue numbers, commit hashes and version tags found in ``text``."""
+    import re
+
+    patterns = (
+        r"\b(?:REC|REL|ADR)-\d+\b",  # ticket ids
+        r"(?<![\w&])#\d+\b",  # issue or pull request numbers
+        r"\b[0-9a-f]{7,40}\b",  # commit hashes, short or full
+        r"\bv?\d+\.\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.]+)?\b",  # version tags: v1.2.3, 2026.10
+        r"\b(?:release|rel|tag)[-_ ]?v?\d[\w.-]*\b",  # release-2026.10, tag_3
+    )
+    return [m.group(0) for pattern in patterns for m in re.finditer(pattern, text, re.IGNORECASE)]
+
+
+def test_release_id_detector_finds_hashes_tags_and_ticket_ids() -> None:
+    for sample in (
+        "0e85d983",
+        "0e85d983a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "since v1.2.3 only",
+        "release 2026.10",
+        "release-2026.10",
+        "REC-070",
+        "rel-3",
+        "REL-3",
+        "see #172",
+    ):
+        assert _release_ids_in(f"reopen with auto ({sample})"), sample
+    clean = (
+        "only once no process of an older release uses this root, set"
+        " RECERTIA_RUNTIME_DB_MIGRATE=auto (the default) and reopen; retry on root_busy"
+    )
+    assert _release_ids_in(clean) == []
+
+
 def test_manual_mode_error_names_only_registered_cli_commands(tmp_path: Path) -> None:
     """#172: the `manual` refusal must not send operators to a missing command.
 
@@ -401,10 +439,12 @@ def test_manual_mode_error_names_only_registered_cli_commands(tmp_path: Path) ->
     ``details["action"]`` must resolve to a registered CLI leaf command. Every
     ``RECERTIA_RUNTIME_DB_*=value`` it names must round-trip through the settings:
     the key is read (a non-default probe changes the setting) and the value is
-    accepted. The advice carries the condition "only once no process of an older
-    release uses this root" (an older ``migrate=off`` writer would lose writes to
-    the import), ``details["action"]`` says to retry on ``root_busy``, and neither
-    text names a release id. The procedure must actually import the pending files.
+    accepted. The condition "only once no process of an older release uses this root"
+    comes before the advice (an older ``migrate=off`` writer would lose writes to the
+    import) and both texts say to stay on ``off`` otherwise; ``details["action"]``
+    says to retry on ``root_busy``. Neither text names a ticket id, issue number,
+    commit hash, version tag or path. The procedure must actually import the pending
+    files.
     """
     import re
 
@@ -439,25 +479,31 @@ def test_manual_mode_error_names_only_registered_cli_commands(tmp_path: Path) ->
     assert capitalised == [["migrate", "apply"]]  # the extraction sees a capitalised command
     assert not list(command.finditer("RECERTIA_RUNTIME_DB_MIGRATE=auto"))
 
-    # Every named setting is read by the settings and its value is accepted.
-    assignments = [
-        (m.group(1), m.group(2))
-        for t in texts
-        for m in re.finditer(r"\b(RECERTIA_RUNTIME_DB_[A-Z_]+)=([^\s;,)]+)", t)
-    ]
-    assert len(assignments) == 2  # the message and the action each name one
-    # The message and the action stay in step: same setting, same value.
-    assert assignments[0] == assignments[1]
+    # Every named setting is read by the settings and its value is accepted. The message
+    # and the action stay in step: the same settings, in the same order.
+    per_text = [re.findall(r"\b(RECERTIA_RUNTIME_DB_[A-Z_]+)=([^\s;,)]+)", t) for t in texts]
+    assert per_text[0] == per_text[1]
+    assignments = per_text[0]
+    assert [value for _key, value in assignments] == ["auto", "off"]  # the advice, then the fallback
+    assert len({key for key, _value in assignments}) == 1
     for key, value in assignments:
         assert load_settings({key: "manual"}).runtime_db_migrate == "manual"  # key is read
         assert load_settings({key: value}).runtime_db_migrate == value  # value accepted
-    assert {value for _key, value in assignments} == {"auto"}
     assert load_settings({}).runtime_db_migrate == "auto"  # "(the default)" is true
 
-    # The advice is conditional on no older-release process, and says to retry.
+    # The condition leads the advice, the fallback is to stay on `off`, and the action
+    # says to retry. No ticket id, issue number, commit hash, version tag or path.
+    assert _release_ids_in(_MANUAL_CONDITION) == []
     for text in texts:
-        assert "only once no process of an older release uses this root" in text
-        assert not re.search(r"REC-\d+", text)  # release ids stay out of runtime text
+        low = text.lower()
+        assert _MANUAL_CONDITION in low
+        assert low.index(_MANUAL_CONDITION) < low.index("reopen")
+        assert low.index(_MANUAL_CONDITION) < low.index("recertia_runtime_db_migrate=auto")
+        assert low.index("recertia_runtime_db_migrate=auto") < low.index("otherwise")
+        assert low.index("otherwise") < low.index("recertia_runtime_db_migrate=off")
+        assert "stay on" in low
+        assert _release_ids_in(text) == [], text
+        assert not re.search(r"[\\/]", text), text
     assert "retry on root_busy" in action
 
     # Following the named procedure imports the pending files; `manual` then opens.
@@ -469,6 +515,81 @@ def test_manual_mode_error_names_only_registered_cli_commands(tmp_path: Path) ->
         assert persistence.checkpoints.latest("run-a") is not None
     finally:
         persistence.close()
+
+
+def _doc_segment(doc: str, start: str, end: str) -> str:
+    assert doc.count(start) == 1, start
+    begin = doc.index(start)
+    stop = doc.index(end, begin + len(start))
+    return doc[begin:stop].lower()
+
+
+def test_manual_mode_advice_is_pinned_in_changelog_and_rel_specs() -> None:
+    """The docs give the same advice as the runtime text, so the MF-2 contradiction (a doc
+    saying to reopen with ``auto`` without the condition) cannot come back by a docs-only
+    edit. Each place that gives the advice must carry the condition before the ``auto``
+    reopen, and say to stay on ``off`` otherwise; the places that describe the whole
+    procedure also carry the ``root_busy`` retry."""
+    import re
+
+    def norm(path: str) -> str:
+        return " ".join((_REPO / path).read_text(encoding="utf-8").split())
+
+    changelog = norm("CHANGELOG.md")
+    specs = norm("docs/plans/remediation/rel-specs.md")
+    auto = "recertia_runtime_db_migrate=auto"
+    stay_env = "stay on `recertia_runtime_db_migrate=off`"
+    # (place, segment, the advice, how it says to stay on `off`, whether it says to retry)
+    places = [
+        (
+            "CHANGELOG REC-070 entry",
+            _doc_segment(changelog, "**`manual` mode named a command that does not exist", " - **"),
+            auto,
+            stay_env,
+            True,
+        ),
+        (
+            "CHANGELOG mixed-version bullet",
+            _doc_segment(changelog, "If you cannot stop every process at once", " Tests: `tests/unit/"),
+            auto,
+            "keep the new processes on `migrate=off`",
+            False,
+        ),
+        (
+            "CHANGELOG REL-3 sentence",
+            _doc_segment(changelog, "**REL-3 runtime.db**", " - **REL-3 FencedRunPersistence**"),
+            "reopen with `recertia_runtime_db_migrate=auto`",
+            stay_env,
+            True,
+        ),
+        (
+            "rel-specs manual row",
+            _doc_segment(specs, "| `manual` | Refuse to start.", " | `off` |"),
+            auto,
+            stay_env,
+            True,
+        ),
+        (
+            "rel-specs status paragraph",
+            _doc_segment(specs, "Status (#172): these `migrate`", " `RECERTIA_RUNTIME_DB_MIGRATE`:"),
+            "the `auto` open",
+            "stay on `off`",
+            False,
+        ),
+        (
+            "rel-specs large-import bullet",
+            _doc_segment(specs, "- Importing a large `checkpoints.db`", " - "),
+            "the `auto` open",
+            "stay on `off`",
+            False,
+        ),
+    ]
+    for name, segment, advice, stay, needs_retry in places:
+        assert _MANUAL_CONDITION in segment, name
+        assert segment.index(_MANUAL_CONDITION) < segment.index(advice), name  # condition leads
+        assert stay in segment, name  # stay on `off` otherwise
+        if needs_retry:
+            assert re.search(r"retry on `?root_busy|on `?root_busy`?, retry", segment), name
 
 
 def test_migrate_off_leftover_open_wait_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

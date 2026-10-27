@@ -101,15 +101,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `checkpoints.db` / `operations.db` still pending, `RECERTIA_RUNTIME_DB_MIGRATE=manual`
   refused to open with "run recertia migrate apply" (message and `details.action`), but
   the CLI has no `migrate apply`; `recertia migrate` has only `run-events`. The error and
-  its `details.action` now give the real procedure: reopen with
-  `RECERTIA_RUNTIME_DB_MIGRATE=auto` (the default), but only once no process of an older
-  release uses this root. An older `migrate=off` writer can lose its later writes to that
-  import (see the upgrade requirement under REC-065 below). The open that gets the locks
-  imports the pending files into `runtime.db`; on `root_busy`, retry. The error type
-  (`MigrationChecksumError`, `state_corrupt`) is unchanged. Tests:
+  its `details.action` now give the real procedure, condition first: only once no process
+  of an older release uses this root, reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto` (the
+  default); otherwise stay on `RECERTIA_RUNTIME_DB_MIGRATE=off`. An older `migrate=off`
+  writer can lose its later writes to that import (see the upgrade requirement under
+  REC-065 below). The open that gets the locks imports the pending files into
+  `runtime.db`; on `root_busy`, retry. The error type (`MigrationChecksumError`,
+  `state_corrupt`) is unchanged. Tests:
   `test_manual_mode_error_names_only_registered_cli_commands` in
-  `tests/unit/persistence/test_import_legacy.py` also pins the condition, the retry hint
-  and that the named setting is read.
+  `tests/unit/persistence/test_import_legacy.py` pins the condition and its place before
+  the advice, the retry hint, the `off` fallback, that the named settings are read, and
+  that the text names no ticket id, commit hash or version tag;
+  `test_manual_mode_advice_is_pinned_in_changelog_and_rel_specs` pins the same condition,
+  the `auto` reopen and the `root_busy` retry in this file and in `rel-specs.md`.
 
 - **`migrate=off` open with pending leftover files has a bounded wait (REC-064, #153)** —
   `open_run_persistence(..., migrate="off")` on a root that still has `checkpoints.db` /
@@ -153,10 +157,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       does not keep a newer import of the same tenant out; neither process reports an
       error.
     - If you cannot stop every process at once: keep the new processes on `migrate=off`
-      or `manual` until every old process is gone. A `manual` open of a tenant whose
-      leftover files are pending refuses with `state_corrupt`; its advice to reopen with
-      `RECERTIA_RUNTIME_DB_MIGRATE=auto` applies only once no process of an older release
-      uses this root, so do not follow it while an old process is still running.
+      until every old process is gone. A `manual` open of a tenant whose leftover files
+      are pending refuses with `state_corrupt` and cannot serve that tenant, so `off` is
+      the only choice there. Only once no process of an older release uses this root is
+      it safe to reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto`; do not follow the
+      `manual` advice while an old process is still running.
 
   Tests: `tests/unit/persistence/test_root_lock_writers.py` (REC-065 section),
   `tests/unit/persistence/test_root_lock_windows_path.py`,
@@ -484,14 +489,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same-thread holder exception; `.lock` stores no pid/tid identity). After
   the holder releases, a fresh open imports leftover plus the holder's
   writes; unequal leftover checkpoints keep dest and still import other
-  seqs. Leftover writers take a shared root lock so import cannot race
-  them.
+  seqs. Leftover writers (`migrate=off` handles) hold the root lock and their
+  tenant lock shared, so an import of the same tenant, which takes its tenant
+  lock exclusive, cannot race them. An older release's handle holds only the
+  root lock shared and does not keep that import out (see the upgrade
+  requirement under REC-065 above).
   `off` keeps unused legacy files for one release; after an import has
   landed, `off` reads `runtime.db` so post-import writes cannot vanish.
   `manual` refuses to start while leftover files are still pending
-  (`state_corrupt`); reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto` to import
-  them, but only once no process of an older release uses this root (retry on
-  `root_busy`). Backup and restore take exclusive `api.lock` then `.lock`.
+  (`state_corrupt`); only once no process of an older release uses this root,
+  reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto` to import them (retry on
+  `root_busy`), otherwise stay on `RECERTIA_RUNTIME_DB_MIGRATE=off`. Backup and
+  restore take exclusive `api.lock` then `.lock`.
   Pending operation sentinels are dropped on import. Readers (list, tabletop,
   operator brief) prefer `runtime.db`.
 - **REL-3 FencedRunPersistence** — checkpoint, operation, and hash-chain
