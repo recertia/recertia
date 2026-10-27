@@ -698,7 +698,7 @@ def test_migrate_off_leftover_open_wait_ends_when_the_holder_leaves(
         result: object
         try:
             result = open_run_persistence(root, migrate="off")
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             result = exc
         outcome.append((result, time.monotonic() - started))
 

@@ -174,7 +174,7 @@ class EmbeddedQueueWorker:
         try:
             outcome = self.worker._run(req)
         except RootBusy:
-            # Retryable (REC-058 MF-C): back to 'queued' without spending an attempt.
+            # Retryable (REC-058): back to 'queued' without spending an attempt.
             self.queue.requeue(claim, delay_s=ROOT_BUSY_RETRY_S, error_code="root_busy")
             return
         except Exception:

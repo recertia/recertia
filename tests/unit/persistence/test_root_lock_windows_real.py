@@ -1,4 +1,4 @@
-"""REC-058 MF-D: the root lock against the real ``kernel32`` on a Windows host.
+"""REC-058: the root lock against the real ``kernel32`` on a Windows host.
 
 ``test_root_lock_windows_path.py`` drives the Windows branch on Linux through a
 fake ``kernel32``. These tests use the real ``LockFileEx`` / ``UnlockFileEx``

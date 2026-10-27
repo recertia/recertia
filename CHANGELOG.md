@@ -155,7 +155,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     of that name anywhere else is user content: it is archived and restored.
   - `recertia tenant export` leaves the tenant's two runs-root lock files
     (`runs/<tenant>/.tenant.lock`, `runs/<tenant>/jobs/.tenant.lock`) out of both
-    `--dry-run` and `--execute`, so the listing names exactly the files the copy writes.
+    `--dry-run` and `--execute`, so the files the listing names are the files the copy writes.
+    The listing also names directories; `--execute` copies files only.
   - **Upgrade requirement: mixed versions can silently lose data.** Before starting any
     REC-065 process on a runtime root, stop every REC-058-or-older process on that root
     (workers, API, CLI). Do not do a rolling restart, and do not mix versions.
@@ -506,8 +507,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflow's only write grant (job-scoped `issues: write` on `GITHUB_TOKEN`); the
   workflow-level `permissions` is now `{}`.
 
-- **Nightly alert and extras hardening (REC-062, #180)** — follow-up to the review
-  of the first nightly-extras pull request (#143, closed and superseded).
+- **Nightly alert and extras hardening (REC-062, #180)** — follow-up to the first
+  nightly-extras pull request (#143, which was closed and superseded).
   The alert job's run-id dedupe now counts only comments by `github-actions`, so a
   visitor's comment carrying the run-id key cannot suppress an alert. Its condition is
   `always() && github.event_name == 'schedule' && needs.import-all.result != 'success'`,

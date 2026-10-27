@@ -178,7 +178,7 @@ def open_run_persistence(
             # migrate=off decided "leftover files" before the lock. A restore that ran
             # meanwhile may have brought back an imported runtime.db, which every later
             # open treats as the source of truth; a write to the leftover files would
-            # be lost (REC-058 MF-B). Fail closed; the retry reads runtime.db.
+            # be lost (REC-058). Fail closed; the retry reads runtime.db.
             shared.release()
             raise RootBusy(
                 f"the runtime root was imported while waiting for the root lock: {shared.root.path}"

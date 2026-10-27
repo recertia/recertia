@@ -21,7 +21,7 @@ _MANIFEST_VERSION = 1
 # The root's own lock files: empty lock targets that backup and restore hold
 # exclusively while they run. They carry no data, so they are neither archived
 # nor extracted. On Windows the locks are mandatory, so reading or overwriting a
-# file through another handle while it is locked can fail (REC-058 MF-D).
+# file through another handle while it is locked can fail (REC-058).
 _ROOT_LOCK_FILES = frozenset({".lock", "api.lock"})
 # A runs root's tenant lock (REC-065), only where a runs root sits: the CLI layout's
 # root itself, ``runs/<tenant>``, and the ``jobs`` runs root under either. A file of

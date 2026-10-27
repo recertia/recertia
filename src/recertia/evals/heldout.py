@@ -10,11 +10,11 @@ ciphertext_sha256, created_at`` (``created_at`` is RFC 3339 with an offset). Thi
 manifest format of its own and does NOT hash the tree. The tree check is Build Bot-rec's WO-06
 ``verify_heldout_tree(manifest_path, root) -> HeldoutManifest`` (CTO-rec M6; interface confirmed
 by Build Bot-rec), imported by ONE from-import of ``verify_heldout_tree``,
-``HeldoutManifestError`` and ``HeldoutManifest`` (the result type, for CTO-rec MF-B's isinstance
+``HeldoutManifestError`` and ``HeldoutManifest`` (the result type, for the isinstance
 check). ``verify_heldout_tree`` is the ONLY WO-06 call: nothing here loads the manifest or
 computes the root hash separately. A ``HeldoutManifestError`` is a fail-closed exit (2) that logs
 main's hash/count-only message verbatim when it is one of WO-06's known messages
-(``LOADER_MESSAGES`` / ``_LOADER_SHAPES``), else ``LOADER_REDACTED`` (MF-A, Lucas-rec #2).
+(``LOADER_MESSAGES`` / ``_LOADER_SHAPES``), else ``LOADER_REDACTED``.
 Anything raised while importing the loader, or a missing name, fails closed with
 ``loader_unavailable`` (exit 2). The manifest ``count`` is WO-06's FILE count, checked by
 ``verify_heldout_tree`` itself. The one field used here before
@@ -69,7 +69,7 @@ from typing import Any, TextIO
 # Build Bot-rec's WO-06 tree verifier (on main since #118, recertia.evals.heldout_manifest):
 #   verify_heldout_tree(manifest_path: Path, root: Path) -> HeldoutManifest
 #   raises HeldoutManifestError on any refusal or mismatch; messages carry hashes and counts only.
-# The tree counts as verified ONLY if the result is a HeldoutManifest instance (CTO-rec MF-B).
+# The tree counts as verified ONLY if the result is a HeldoutManifest instance.
 LOADER_MODULE = "recertia.evals.heldout_manifest"
 HASH_RULE = "sha256-sorted-relpath-v1"
 
@@ -94,7 +94,7 @@ _RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}
 # (Lucas-rec #2). One is logged verbatim if it is one of these fixed messages or fully matches one
 # of these shapes. Anything else (a name, a path, free text, a message WO-06 does not emit) replaces
 # the WHOLE message with LOADER_REDACTED, so an id can never reach the public log through the
-# loader (CTO-rec MF-A). tests/unit/evals/test_heldout.py checks this list against main's module.
+# loader. tests/unit/evals/test_heldout.py checks this list against main's module.
 LOADER_MESSAGES = frozenset(
     {
         "manifest refused: duplicate key",
@@ -286,7 +286,7 @@ def verify_tree(manifest_path: Path, manifest: Mapping[str, Any], staged: Path) 
         raise Refused(loader_reason(exc)) from None
     except Exception:  # noqa: BLE001 - outside the WO-06 contract: still fail closed
         raise Refused("verifier_error") from None
-    # MF-B: only a real HeldoutManifest counts as verified (not 0, "", {"ok": False}, None, ...).
+    # Only a real HeldoutManifest counts as verified (not 0, "", {"ok": False}, None, ...).
     if not isinstance(result, heldout_manifest):
         raise Refused("verifier_error")
     tasks = task_dirs(staged)

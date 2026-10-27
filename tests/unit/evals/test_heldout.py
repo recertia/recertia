@@ -281,7 +281,7 @@ _MISMATCH = (
     ids=["fixed", "keys-shape", "tree", "mismatch-shape", "old-format", "id", "suffix", "bad-hash", "case"],
 )
 def test_loader_reason_allow_list(message: str, want: str) -> None:
-    """Lucas-rec #2 / MF-A: main's WO-06 messages pass verbatim; anything else is redacted whole."""
+    """Main's WO-06 messages pass verbatim; anything else is redacted whole."""
 
     assert heldout.loader_reason(HeldoutManifestError(message)) == want
 

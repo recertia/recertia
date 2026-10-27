@@ -175,7 +175,7 @@ def test_windows_two_run_handles_share_a_root_and_backup_is_refused(
     assert kernel32.held == {}
 
 
-# --- round 3: busy mapping, no _win_prepare, UnlockFileEx result ---
+# --- busy mapping, no _win_prepare, UnlockFileEx result ---
 
 
 def _oserror(code: int, winerror: int | None = None) -> OSError:
@@ -293,7 +293,7 @@ def test_windows_unlock_failure_is_reported_and_the_handle_still_closes(
         os.fstat(fd)  # closed, so the OS drops the lock with the handle
 
 
-# --- round 4 (S-1, refs #153): the blocking migrate=off wait ends in typed RootBusy ---
+# --- refs #153: the blocking migrate=off wait ends in typed RootBusy ---
 
 
 def _state(run_id: str) -> RunState:
@@ -443,11 +443,13 @@ class _SteppedClock:
 
     def __init__(self) -> None:
         self.now = 0.0
+        self.sleeps: list[float] = []
 
     def monotonic(self) -> float:
         return self.now
 
-    def sleep(self, _seconds: float) -> None:
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
         self.now += self.tick_s
 
 
@@ -494,7 +496,8 @@ def test_root_lock_windows_migrate_off_root_busy_closes_the_lock_fd(
     # A 0.25 s wait on a 1/16 s tick polls at 0, 1/16, 2/16, 3/16 and 4/16 s: 5 opens
     # (each one refused and closed) per refused attempt, so 15 for 3 attempts.
     monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
-    monkeypatch.setattr(root_lock, "time", _SteppedClock())
+    clock = _SteppedClock()
+    monkeypatch.setattr(root_lock, "time", clock)
     attempts = 3
     opens_per_attempt = 5
     try:
@@ -504,6 +507,9 @@ def test_root_lock_windows_migrate_off_root_busy_closes_the_lock_fd(
     finally:
         holder.release()
     assert len(opened) == attempts * opens_per_attempt
+    # The stepped clock ignores how long each sleep asks for, so pin the poll interval here:
+    # 4 sleeps (one between each pair of polls) per attempt, every one of 10 ms.
+    assert clock.sleeps == [0.01] * (attempts * (opens_per_attempt - 1))
     assert all(os.path.samestat(st, os.stat(lock_path)) for _fd, st in opened)
     assert [fd for fd, st in opened if _still_open(fd, st)] == []
     assert kernel32.held == {}
