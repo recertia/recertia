@@ -148,8 +148,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Backup and restore are unchanged: they take the root `.lock` exclusive, which every
     tenant import and handle holds shared, so they still refuse while any tenant holds
     its lock.
-  - Backup does not archive `.tenant.lock` files and restore does not extract them, as
-    for `.lock` and `api.lock`.
+  - Backup does not archive a runs root's `.tenant.lock` and restore does not extract it,
+    as for `.lock` and `api.lock`. Only the four runs-root positions match: `.tenant.lock`
+    at the runtime root (the CLI layout), `jobs/.tenant.lock`, `runs/<tenant>/.tenant.lock`
+    and `runs/<tenant>/jobs/.tenant.lock` (restore matches after `\` becomes `/`). A file
+    of that name anywhere else is user content: it is archived and restored.
+  - `recertia tenant export` leaves the tenant's two runs-root lock files
+    (`runs/<tenant>/.tenant.lock`, `runs/<tenant>/jobs/.tenant.lock`) out of both
+    `--dry-run` and `--execute`, so the listing names exactly the files the copy writes.
   - **Upgrade requirement: mixed versions can silently lose data.** Before starting any
     REC-065 process on a runtime root, stop every REC-058-or-older process on that root
     (workers, API, CLI). Do not do a rolling restart, and do not mix versions.
