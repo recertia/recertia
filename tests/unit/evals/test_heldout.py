@@ -1266,8 +1266,8 @@ def test_workflow_cto_must_fixes_m2_to_m5_and_log_scan_job() -> None:
     assert all("write" not in p for p in jobs_perms) and len(jobs_perms) == 2
 
 
-def test_audit_record_goes_to_robs_two_recipients_only() -> None:
-    """Lucas-rec #1 / Harper-rec: the audit record is encrypted to `rob` and `rob-recovery` only.
+def test_audit_record_goes_to_the_owners_two_recipients_only() -> None:
+    """The audit record is encrypted to the owner's key and recovery key only.
 
     No separate operator recipient. The job key stays where it is (the decrypt step), and the
     workflow names recipients only, never key material.

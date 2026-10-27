@@ -2,17 +2,17 @@ name: heldout-operator
 
 # REC-022. Operator-only, reproducible run of the PRIVATE held-out split.
 # The public split under evals/golden/ stays the CI gate (ci.yml). This is not a required check.
-# Design: the access-storage proposal (§3-§5) and manifest spec, its Amendment 1 (golden
-# executor only, no model key) and the review answers (container backend only, container
-# preflight, plan-node guard).
+# Design: the access-storage proposal (§3-§5), the manifest spec and the review decisions
+# (golden executor only with no model key, container backend only, container preflight,
+# plan-node guard).
 #
 # Order. Every step fails closed before any eval runs:
 #   guards (debug logging, non-main ref) -> pull the digest-pinned image (network still up)
 #   -> fetch the ciphertext [TODO] -> verify the ciphertext sha256 against the public manifest
 #   -> decrypt into $RUNNER_TEMP [TODO; ::add-mask:: right after] -> inside `unshare --net`
 #   (setpriv --no-new-privs --clear-groups; docker via a uid ACL): preflight refusals, refuse
-#   paths in the checkout, WO-06 verify_heldout_tree on a copy staged in $RUNNER_TEMP/tmp, the
-#   M1 container preflight with --pull never, the golden executor in --network=none containers
+#   paths in the checkout, verify_heldout_tree on a copy staged in $RUNNER_TEMP/tmp, the
+#   the container preflight with --pull never, the golden executor in --network=none containers
 #   -> scan the captured console for ids -> print it -> wipe (if: always()).
 # Then job `log-scan` re-scans the published `evaluate` job log (proposal §4 item 12).
 # Logs show only counts, hashes, and fixed reasons. No artifacts, no caches, no step summary.
@@ -21,7 +21,7 @@ name: heldout-operator
 # Until then this workflow:
 #   - references NO secret and NO deployment environment (proposal items 8-10),
 #   - has stub steps that exit 1 for fetch, decrypt, and the audit-store sink (both jobs),
-#   - depends on the WO-06 manifest evals/heldout/heldout-repo-chore-v1.manifest.json and
+#   - depends on the manifest evals/heldout/heldout-repo-chore-v1.manifest.json and
 #     verify_heldout_tree (not on main yet; the runner fails closed with loader_unavailable).
 # TODO(REC-022): `environment: heldout-operator` is added to BOTH jobs in the same
 # change that adds the secrets, and only after the owner creates that environment with main-only
@@ -56,7 +56,7 @@ jobs:
     permissions:
       contents: read
     env:
-      # WO-08 Amendment 1: no model key; the provider env stays empty.
+      # No model key: the provider env stays empty.
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
       RECERTIA_NO_NETWORK: "1"
@@ -73,7 +73,7 @@ jobs:
       # workdir on a single-tenant, ephemeral hosted runner.
       RECERTIA_WORKDIR_WORLD_WRITE: "1"
       HELDOUT_MANIFEST: evals/heldout/heldout-repo-chore-v1.manifest.json
-    # TODO(REC-022) M5: environment heldout-operator goes here, with the secrets (see header).
+    # TODO(REC-022): environment heldout-operator goes here, with the secrets (see header).
     steps:
       - name: Refuse debug logging
         env:
@@ -241,7 +241,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-    # TODO(REC-022) M5: environment heldout-operator goes here too, with the secrets.
+    # TODO(REC-022): environment heldout-operator goes here too, with the secrets.
     env:
       HELDOUT_MANIFEST: evals/heldout/heldout-repo-chore-v1.manifest.json
     steps:
@@ -300,7 +300,7 @@ jobs:
           umask 077
           trap 'rm -rf "$KEY_DIR"' EXIT
           # TODO(REC-022): same fetch, ciphertext check and decrypt as `evaluate` (proposal §3
-          # item 9), followed by the same ::add-mask:: lines (M4). Not approved yet.
+          # item 9), followed by the same ::add-mask:: lines. Not approved yet.
           echo "log-scan: FAIL reason=decrypt_not_approved"
           exit 1
 
