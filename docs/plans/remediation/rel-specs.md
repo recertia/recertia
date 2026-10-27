@@ -361,8 +361,8 @@ open below, and `manual` names that procedure instead of a command.
 
 | Value | Behaviour |
 |---|---|
-| `auto` (single-node default) | Apply on first `open_db`, under the exclusive root lock (REL-9). |
-| `manual` | Refuse to start. CLI exits 7. API returns 503 `state_corrupt`. Shipped: `details.action` says to reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto` (#172); `recertia migrate apply` once REL-10 ships it. |
+| `auto` (single-node default) | Apply on first `open_db`, under the root lock shared and the tenant lock exclusive (REC-065). |
+| `manual` | Refuse to start. CLI exits 7. API returns 503 `state_corrupt`. Shipped: `details.action` says to reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto` only once no process of an older release uses the root, and to retry on `root_busy` (#172); `recertia migrate apply` once REL-10 ships it. |
 | `off` | Legacy layout (`checkpoints.db` + `operations.db`) for one release only. Removed in the release after REL-3. |
 
 Multi-node migrations run only as an explicit `recertia migrate apply` by the owner role. Application replicas never run DDL.

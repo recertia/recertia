@@ -229,9 +229,13 @@ def open_run_persistence(
             handle_lock.release()
 
 
+# The condition matters: an older release's `migrate=off` handle keeps only the root lock
+# shared, so a newer import does not see it and its later writes would be lost. A test
+# pins the condition, the retry hint and the setting named here.
 MANUAL_MODE_PENDING_ACTION = (
-    "set RECERTIA_RUNTIME_DB_MIGRATE=auto (the default) and reopen; the first open"
-    " imports the pending files into runtime.db"
+    "set RECERTIA_RUNTIME_DB_MIGRATE=auto (the default) and reopen, but only once no process"
+    " of an older release uses this root. The open that gets the locks imports the pending"
+    " files into runtime.db; retry on root_busy"
 )
 
 
@@ -254,7 +258,8 @@ def _resolve_runtime_db(layout: RunsRootLayout, mode: MigrateMode) -> tuple[bool
             # import. A test checks that every `recertia ...` command named here exists.
             raise MigrationChecksumError(
                 "pending legacy runtime files; reopen with RECERTIA_RUNTIME_DB_MIGRATE=auto"
-                " (the default) to import them",
+                " (the default) to import them, but only once no process of an older release"
+                " uses this root",
                 details={"action": MANUAL_MODE_PENDING_ACTION},
             )
         return True, None

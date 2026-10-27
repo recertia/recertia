@@ -398,9 +398,13 @@ def test_manual_mode_error_names_only_registered_cli_commands(tmp_path: Path) ->
     """#172: the `manual` refusal must not send operators to a missing command.
 
     Every ``recertia <subcommand ...>`` named in the message or in
-    ``details["action"]`` must resolve to a registered CLI leaf command, and the
-    procedure it names instead (``RECERTIA_RUNTIME_DB_MIGRATE=auto``) must be a
-    value the settings accept and must actually import the pending files.
+    ``details["action"]`` must resolve to a registered CLI leaf command. Every
+    ``RECERTIA_RUNTIME_DB_*=value`` it names must round-trip through the settings:
+    the key is read (a non-default probe changes the setting) and the value is
+    accepted. The advice carries the condition "only once no process of an older
+    release uses this root" (an older ``migrate=off`` writer would lose writes to
+    the import), ``details["action"]`` says to retry on ``root_busy``, and neither
+    text names a release id. The procedure must actually import the pending files.
     """
     import re
 
@@ -423,17 +427,38 @@ def test_manual_mode_error_names_only_registered_cli_commands(tmp_path: Path) ->
     assert _registered_cli_path(["migrate", "apply"]) is None
     assert _registered_cli_path(["migrate"]) is None
 
-    named = [
-        m.group(1).split() for t in texts for m in re.finditer(r"\brecertia((?:\s+[a-z][a-z0-9_-]*)+)", t)
-    ]
+    # Case-insensitive, and not the env names (``RECERTIA_...``): no word character or
+    # underscore may follow ``recertia``.
+    command = re.compile(r"(?<![\w-])recertia(?![\w-])((?:\s+[a-z][a-z0-9_-]*)+)", re.IGNORECASE)
+    named = [m.group(1).lower().split() for t in texts for m in command.finditer(t)]
     for words in named:
         assert _registered_cli_path(words) is not None, (
             f"names unregistered command: recertia {' '.join(words)}"
         )
-    for text in texts:
-        assert "RECERTIA_RUNTIME_DB_MIGRATE=auto" in text
-    assert load_settings({"RECERTIA_RUNTIME_DB_MIGRATE": "auto"}).runtime_db_migrate == "auto"
+    capitalised = [m.group(1).lower().split() for m in command.finditer("run Recertia migrate apply")]
+    assert capitalised == [["migrate", "apply"]]  # the extraction sees a capitalised command
+    assert not list(command.finditer("RECERTIA_RUNTIME_DB_MIGRATE=auto"))
+
+    # Every named setting is read by the settings and its value is accepted.
+    assignments = [
+        (m.group(1), m.group(2))
+        for t in texts
+        for m in re.finditer(r"\b(RECERTIA_RUNTIME_DB_[A-Z_]+)=([^\s;,)]+)", t)
+    ]
+    assert len(assignments) == 2  # the message and the action each name one
+    # The message and the action stay in step: same setting, same value.
+    assert assignments[0] == assignments[1]
+    for key, value in assignments:
+        assert load_settings({key: "manual"}).runtime_db_migrate == "manual"  # key is read
+        assert load_settings({key: value}).runtime_db_migrate == value  # value accepted
+    assert {value for _key, value in assignments} == {"auto"}
     assert load_settings({}).runtime_db_migrate == "auto"  # "(the default)" is true
+
+    # The advice is conditional on no older-release process, and says to retry.
+    for text in texts:
+        assert "only once no process of an older release uses this root" in text
+        assert not re.search(r"REC-\d+", text)  # release ids stay out of runtime text
+    assert "retry on root_busy" in action
 
     # Following the named procedure imports the pending files; `manual` then opens.
     persistence = open_run_persistence(tmp_path / "runs", migrate="auto")
