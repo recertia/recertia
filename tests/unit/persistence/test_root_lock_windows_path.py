@@ -431,6 +431,26 @@ def _still_open(fd: int, opened_on: os.stat_result) -> bool:
     return os.path.samestat(now, opened_on)
 
 
+class _SteppedClock:
+    """Stand-in for ``root_lock.time``: the clock moves only when the code sleeps.
+
+    The bounded lock wait polls with ``time.sleep``, so against the real clock the number
+    of polls depends on scheduler and timer granularity. With this clock it is exact. The
+    tick is a power of two, so the arithmetic below is exact in binary floating point.
+    """
+
+    tick_s = 0.0625
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, _seconds: float) -> None:
+        self.now += self.tick_s
+
+
 def test_root_lock_windows_blocking_typed_busy_closes_the_lock_fd(
     tmp_path: Path, kernel32: FakeKernel32, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -471,14 +491,19 @@ def test_root_lock_windows_migrate_off_root_busy_closes_the_lock_fd(
     holder = RootLock(lock_path)
     holder.try_exclusive()
     opened = _record_lock_fds(monkeypatch)
+    # A 0.25 s wait on a 1/16 s tick polls at 0, 1/16, 2/16, 3/16 and 4/16 s: 5 opens
+    # (each one refused and closed) per refused attempt, so 15 for 3 attempts.
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    monkeypatch.setattr(root_lock, "time", _SteppedClock())
+    attempts = 3
+    opens_per_attempt = 5
     try:
-        for _attempt in range(3):
+        for _attempt in range(attempts):
             with pytest.raises(RootBusy):
                 open_run_persistence(root, migrate="off")
     finally:
         holder.release()
-    # Bounded timeout retries many times; just confirm every opened fd is closed.
-    assert len(opened) >= 3
+    assert len(opened) == attempts * opens_per_attempt
     assert all(os.path.samestat(st, os.stat(lock_path)) for _fd, st in opened)
     assert [fd for fd, st in opened if _still_open(fd, st)] == []
     assert kernel32.held == {}

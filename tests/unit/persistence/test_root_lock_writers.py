@@ -786,6 +786,9 @@ def test_migrate_off_open_racing_post_import_restore_does_not_lose_a_write(
     an imported runtime.db. Before MF-B it wrote seq 3 to the leftover checkpoints.db,
     which every later open ignores, so seq 3 was lost."""
 
+    # The restore holds the root lock for at least 0.5 s (the slow extract), the open waits
+    # at most 0.25 s, so the open is always refused with the "root lock is held" message.
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
     src = tmp_path / "src"
     _pending_root(src, "r")
     open_run_persistence(src).close()  # imported; leftover files kept for rollback
@@ -802,11 +805,7 @@ def test_migrate_off_open_racing_post_import_restore_does_not_lose_a_write(
         try:
             p = open_run_persistence(target, migrate="off")  # decided before the restore
         except RootBusy as exc:
-            msg = str(exc)
-            assert (
-                "imported while waiting for the root lock" in msg
-                or "cannot open the runtime root while the root lock is held" in msg
-            ), msg
+            assert "cannot open the runtime root while the root lock is held" in str(exc), exc
             restore.join(_JOIN_BOUND_S)
             p = open_run_persistence(target, migrate="off")  # the caller's retry
     finally:
@@ -1517,7 +1516,7 @@ def test_backup_leaves_out_tenant_lock_files_and_restore_skips_them(tmp_path: Pa
     _assert_imported_once(target, target / "runs" / "tenant-a")
 
 
-# --- REC-058 follow-up to #169, carrying the review of #170 (SF-1, NIT-2) ---
+# --- REC-071: follow-ups from the review of #170 ---
 
 
 def _record_lock_fds(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, os.stat_result]]:
@@ -1606,3 +1605,60 @@ def test_root_lock_backup_keeps_a_tenant_lock_name_outside_a_runs_root(tmp_path:
     target = tmp_path / "target"
     restore_tree(archive, target)
     assert (target / rel).read_bytes() == b"user content"
+
+
+# --- REC-072: follow-ups from the review of #177 ---
+
+
+_TENANT_LOCK_POSITIONS = {
+    "cli-layout-root": lambda layout: layout.local_runs().tenant_lock,
+    "cli-layout-jobs": lambda layout: layout.local_runs().jobs().tenant_lock,
+    "tenant-runs-root": lambda layout: layout.tenant("tenant-a").tenant_lock,
+    "tenant-jobs": lambda layout: layout.tenant("tenant-a").jobs().tenant_lock,
+}
+
+
+@pytest.mark.parametrize("position", sorted(_TENANT_LOCK_POSITIONS))
+def test_root_lock_backup_and_restore_skip_every_runs_root_tenant_lock(tmp_path: Path, position: str) -> None:
+    """Each of the four runs-root positions of ``.tenant.lock`` is a lock file: backup does
+    not archive it, and restore extracts neither a ``/`` nor a ``\\`` crafted member there.
+
+    The runtime root itself (CLI layout) and ``runs/<t>`` are runs roots, each with a
+    ``jobs`` runs root under it."""
+
+    import io
+
+    root = tmp_path / "rt"
+    tdir = _tenant_pending(root, "tenant-a", "r")
+    _worker_shaped_open(root, tdir)
+    lock_path = _TENANT_LOCK_POSITIONS[position](RuntimeLayout(root))
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.touch()
+    rel = lock_path.relative_to(root).as_posix()
+    assert rel in {
+        ".tenant.lock",
+        "jobs/.tenant.lock",
+        "runs/tenant-a/.tenant.lock",
+        "runs/tenant-a/jobs/.tenant.lock",
+    }
+
+    archive = tmp_path / "b.tar.gz"
+    backup_tree(root, archive)
+    with tarfile.open(archive) as tar:
+        names = set(tar.getnames())
+    assert rel not in names, sorted(names)
+    assert "runs/tenant-a/runtime.db" in names  # the backup itself happened
+
+    crafted_body = b"crafted lock content"
+    for index, name in enumerate((rel, rel.replace("/", "\\"))):
+        crafted = tmp_path / "crafted.tar.gz"
+        with tarfile.open(archive) as old, tarfile.open(crafted, "w:gz") as new:
+            for member in old.getmembers():
+                new.addfile(member, old.extractfile(member) if member.isfile() else None)
+            info = tarfile.TarInfo(name)
+            info.size = len(crafted_body)
+            new.addfile(info, io.BytesIO(crafted_body))
+        target = tmp_path / f"target-{index}"
+        restore_tree(crafted, target)
+        written = [p for p in target.rglob("*") if p.is_file() and p.read_bytes() == crafted_body]
+        assert written == [], (name, written)

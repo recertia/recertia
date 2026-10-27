@@ -354,15 +354,16 @@ recertia migrate verify --dsn ...                   # REL-10
 ```
 
 Status (#172): these `migrate` subcommands are planned, not shipped. The CLI ships only
-`recertia migrate run-events`. Until `migrate apply` ships, the import path is the `auto`
-open below, and `manual` names that procedure instead of a command.
+`recertia migrate run-events`. Until `migrate apply` ships, and only once no process of an
+older release uses this root, the import path is the `auto` open below (stay on `off`
+otherwise), and `manual` names that procedure instead of a command.
 
 `RECERTIA_RUNTIME_DB_MIGRATE`:
 
 | Value | Behaviour |
 |---|---|
-| `auto` (single-node default) | Apply on first `open_db`, under the exclusive root lock (REL-9). |
-| `manual` | Refuse to start. CLI exits 7. API returns 503 `state_corrupt`. Shipped: `details.action` says to reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto` (#172); `recertia migrate apply` once REL-10 ships it. |
+| `auto` (single-node default) | Apply on first `open_db`, under the root lock shared and the tenant lock exclusive (REC-065). |
+| `manual` | Refuse to start. CLI exits 7. API returns 503 `state_corrupt`. Shipped: `details.action` says that, only once no process of an older release uses this root, to reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto` and to retry on `root_busy`, and otherwise to stay on `RECERTIA_RUNTIME_DB_MIGRATE=off` (#172); `recertia migrate apply` once REL-10 ships it. |
 | `off` | Legacy layout (`checkpoints.db` + `operations.db`) for one release only. Removed in the release after REL-3. |
 
 Multi-node migrations run only as an explicit `recertia migrate apply` by the owner role. Application replicas never run DDL.
@@ -1275,7 +1276,7 @@ Single node: flock plus `runtime.db`. Multi node: the same tables in Postgres, a
 
 ### Risks
 
-- Importing a large `checkpoints.db` holds the root lock. `recertia migrate apply` is the planned operator path (REL-10, not shipped; #172); until then the `auto` open is the import path, acceptable on single-node because one process opens the file.
+- Importing a large `checkpoints.db` holds the root lock. `recertia migrate apply` is the planned operator path (REL-10, not shipped; #172); until then, and only once no process of an older release uses this root (stay on `off` otherwise), the `auto` open is the import path, acceptable on single-node because one process opens the file.
 - `fingerprint='legacy'` on imported operations means a resume that reaches an old `op_seq` with a newly computed fingerprint raises `OperationFingerprintMismatch`. The migration sets fingerprint to the hash of `result_json` only when the node is `solve` and the result contains `command`; otherwise `legacy` matches any fingerprint for that row and the result is replayed. This is recorded in the migration log so a surprising replay is explainable.
 - Fencing rejects a slow owner after steal. The slow owner's in-flight tool may still finish in the workspace. The workspace lock is held by the new owner, so the old process's next tool call fails `WorkspaceBusy` / `LeaseLost` before it writes. REL-9's container labels let the reaper kill the old container.
 
