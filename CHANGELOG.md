@@ -118,10 +118,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`migrate=off` open with pending leftover files has a bounded wait (REC-064, #153)** —
   `open_run_persistence(..., migrate="off")` on a root that still has `checkpoints.db` /
   `operations.db` took the shared root lock with no bound: against a holder it waited
-  forever on POSIX, and on Windows until the 10 s retry budget ran out in an `OSError`
-  (`EDEADLK`). It now waits at most `RECERTIA_IMPORT_LOCK_TIMEOUT_S` (default 5 s), like
-  the other opens, and then raises typed `RootBusy` (`root_busy`, caused by
-  `RootLockBusy`) without writing anything; a retry after the holder leaves opens the
+  forever on POSIX, and on Windows until the 10 s retry budget ran out, when it raised
+  typed `RootBusy` (the `OSError` with `EDEADLK` was only the cause). It now waits at
+  most `RECERTIA_IMPORT_LOCK_TIMEOUT_S` (default 5 s), like the other opens, on every
+  platform, and then raises typed `RootBusy` (`root_busy`, caused by `RootLockBusy`)
+  without writing anything; a retry after the holder leaves opens the
   leftover files and sees their data. Tests: `test_migrate_off_leftover_open_wait_is_bounded`
   in `tests/unit/persistence/test_import_legacy.py` fails if the bound is removed, zeroed
   or ignores the setting; the real-Windows tests in
