@@ -835,7 +835,7 @@ def test_b1_shared_bucket_at_its_limit_evicts_only_its_own_on_a_full_table() -> 
     assert _pending_for(store, REWRITTEN) == bucket[-PER_CLIENT:]
 
 
-# S1: multi-line X-Forwarded-For through uvicorn
+# Multi-line X-Forwarded-For through uvicorn
 
 
 @pytest.mark.parametrize("star", [False, True])
@@ -855,7 +855,7 @@ def test_s1_uvicorn_multi_line_xff_still_one_key(
     assert app.state.recertia.sessions.take_oidc(v.json()["state"]) is not None
 
 
-# S2: both warnings in one process, exactly once each
+# Both warnings in one process, exactly once each
 
 
 def test_s2_both_warnings_fire_once_each_in_one_process(caplog: pytest.LogCaptureFixture) -> None:
@@ -869,7 +869,7 @@ def test_s2_both_warnings_fire_once_each_in_one_process(caplog: pytest.LogCaptur
     assert len(msgs) == 2
 
 
-# S3: the shared bucket filling up is logged once
+# The shared bucket filling up is logged once
 
 
 def test_s3_shared_bucket_full_warns_once(caplog: pytest.LogCaptureFixture) -> None:
@@ -890,7 +890,7 @@ def test_s3_shared_bucket_full_warns_once(caplog: pytest.LogCaptureFixture) -> N
     assert "all logins fail intermittently behind a proxy" in go_live
 
 
-# S4: wording (X-Forwarded-For is inspected for detection, used for the key only when trusted)
+# Wording (X-Forwarded-For is inspected for detection, used for the key only when trusted)
 
 
 def test_s4_docs_say_used_for_the_key_only_when_trusted() -> None:
@@ -904,7 +904,7 @@ def test_s4_docs_say_used_for_the_key_only_when_trusted() -> None:
     assert "X-Forwarded-For is never used for the client key" in settings_src
 
 
-# PR161 review N-a: the untrusted-peer warning uses the S4 wording
+# PR161 review N-a: the untrusted-peer warning uses the same wording
 
 
 def test_na_untrusted_xff_warning_says_used_for_the_key_only_when_trusted(

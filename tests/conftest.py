@@ -111,7 +111,7 @@ def pytest_unconfigure(config: Any) -> None:
     global _outermost_config
     # The outermost session only, never a nested in-process one. Keyed on the config
     # object, not a counter: pytest unconfigures a config whose pytest_configure
-    # failed before ours ran, so a counter could drift (REC-036 S1).
+    # failed before ours ran, so a counter could drift (REC-036).
     if config is _outermost_config:
         _outermost_config = None
         # Restore the real socket functions here only: a nested in-process session
@@ -135,7 +135,7 @@ def pytest_unconfigure(config: Any) -> None:
 EXIT_GRACE_S = 5.0
 WORKER_THREAD_PREFIXES = ("recertia-run", "recertia-queue")
 _EXIT_STATUS = pytest.StashKey[int]()
-_outermost_config: Any = None  # the config of the outermost session (REC-036 S1)
+_outermost_config: Any = None  # the config of the outermost session (REC-036)
 
 
 def pytest_sessionfinish(session: Any, exitstatus: Any) -> None:
@@ -201,13 +201,13 @@ def pytest_runtest_setup(item: Any) -> None:
 
 
 # Teardown deadline for embedded queue workers and async pool threads. A module
-# attribute so the pytester wiring test (F4) can lower it in a child session.
+# attribute so the pytester wiring test can lower it in a child session.
 TEARDOWN_TIMEOUT_S = 5.0
 
 
 @pytest.hookimpl(wrapper=True, trylast=True)
 def pytest_runtest_teardown(item: Any, nextitem: Any) -> Generator[None, None, None]:
-    """Stop every worker thread a test started (REC-029 N4, S1, S2; REC-031 F1, F3).
+    """Stop every worker thread a test started (REC-029, REC-031).
 
     Apps built with ``create_app`` start a ``recertia-queue`` daemon thread on
     the first create or resume and nothing stopped it, so threads piled up
@@ -217,7 +217,7 @@ def pytest_runtest_teardown(item: Any, nextitem: Any) -> Generator[None, None, N
     ``flush``); a test that waits on the queue across a test boundary without
     one of those would stall.
 
-    A failure is raised only *after* the ``yield`` (F3): pytest's own teardown
+    A failure is raised only *after* the ``yield``: pytest's own teardown
     (fixture finalizers, monkeypatch undo) has run, so the next test does not
     get a collateral "previous item was not torn down properly" error. An
     exception while stopping is reported the same way, never raised before
@@ -251,9 +251,9 @@ def stop_test_workers_report(timeout: float = 5.0) -> str | None:
     """Stop embedded queue workers and join async pool threads, bounded.
 
     Returns a failure message, or None when everything stopped. A queue worker
-    still alive after ``timeout`` would leak into later tests (S2). Async pools
+    still alive after ``timeout`` would leak into later tests. Async pools
     are shut down either way and their threads joined against one deadline of
-    ``timeout`` (S1, F1), so a hung run fails the test instead of hanging the
+    ``timeout``, so a hung run fails the test instead of hanging the
     session.
     """
 
@@ -262,7 +262,7 @@ def stop_test_workers_report(timeout: float = 5.0) -> str | None:
 
     # Queue workers first, then pools: a live queue worker can
     # still submit a run, and a submit into a pool that shutdown_all already
-    # closed silently starts a new pool (F2) whose thread outlives teardown.
+    # closed silently starts a new pool whose thread outlives teardown.
     queue_stopped = EmbeddedQueueWorker.stop_all(timeout=timeout)
     pools_stopped = AsyncRunWorker.shutdown_all(timeout=timeout)
     problems = []

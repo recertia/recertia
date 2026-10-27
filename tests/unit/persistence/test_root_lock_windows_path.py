@@ -1,4 +1,4 @@
-"""REC-058 S2: the Windows lock path has a real shared mode (``LockFileEx``).
+"""REC-058: the Windows lock path has a real shared mode (``LockFileEx``).
 
 CI runs on Linux, so these tests drive ``root_lock``'s Windows branch with
 ``_IS_WINDOWS`` forced on and a fake ``kernel32`` that models Windows
@@ -151,7 +151,7 @@ def test_windows_blocking_call_keeps_a_bounded_retry(
 def test_windows_two_run_handles_share_a_root_and_backup_is_refused(
     tmp_path: Path, kernel32: FakeKernel32, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The S2 regression: a worker run plus an API read on one root (Windows API host)."""
+    """The regression: a worker run plus an API read on one root (Windows API host)."""
 
     monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
     root = tmp_path / "runs"

@@ -1,4 +1,4 @@
-"""REC-031 F3, F4: the suite teardown hook, exercised through a real pytest session.
+"""REC-031: the suite teardown hook, exercised through a real pytest session.
 
 Each test runs a child pytest in a subprocess with ``tests.conftest`` loaded as
 a plugin, so the hook wiring (not only ``stop_test_workers``) is covered. A
@@ -28,7 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEADLINE_S = 1.0  # TEARDOWN_TIMEOUT_S in the child session
 MARGIN_S = 3.0
 CHILD_TIMEOUT_S = 45.0  # a hang shows up as Pytester.TimeoutExpired, before the 60s pytest-timeout
-TEST_BUDGET_S = 2.0  # pytest-timeout in the D2 child session
+TEST_BUDGET_S = 2.0  # pytest-timeout in the child session
 STOP_HANG_S = 10.0  # a worker stop that outlives that budget
 
 CHILD_CONFTEST = f"""
@@ -113,7 +113,7 @@ def _teardown_times(pytester: pytest.Pytester) -> dict[str, float]:
 def test_hung_run_fails_teardown_within_the_deadline(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F1 through the real hook: a hung run is an ERROR at teardown, not a hang.
+    """Through the real hook: a hung run is an ERROR at teardown, not a hang.
 
     Against the unbounded ``shutdown_all`` (``wait=True``) the child blocks in
     teardown until ``CHILD_TIMEOUT_S`` and this test fails with TimeoutExpired.
@@ -149,7 +149,7 @@ def test_hung_run_fails_teardown_within_the_deadline(
     result.stdout.no_fnmatch_line("*previous item was not torn down properly*")
     times = _teardown_times(pytester)
     assert DEADLINE_S * 0.9 <= times["test_leaves_a_hung_run"] < DEADLINE_S + MARGIN_S
-    # F2: the straggler's worker left the registry, so later teardowns do not wait on it again.
+    # The straggler's worker left the registry, so later teardowns do not wait on it again.
     assert times["test_next_test_is_clean"] < DEADLINE_S
     assert wall < CHILD_TIMEOUT_S
 
@@ -157,7 +157,7 @@ def test_hung_run_fails_teardown_within_the_deadline(
 def test_stuck_queue_worker_fails_teardown_without_a_collateral_error(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F3 through the real hook: one ERROR for the leaking test, none for the next."""
+    """Through the real hook: one ERROR for the leaking test, none for the next."""
 
     pytester.makepyfile(
         test_child="""
@@ -224,7 +224,7 @@ def test_error_while_stopping_workers_does_not_cascade(
 def test_timeout_while_stopping_workers_does_not_skip_teardown(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """REC-044 D2: a pytest-timeout while stopping workers is one teardown ERROR, not a cascade.
+    """REC-044: a pytest-timeout while stopping workers is one teardown ERROR, not a cascade.
 
     pytest-timeout's signal method raises ``pytest.fail.Exception``, a
     BaseException, wherever the main thread is. Landing in the worker stop, it

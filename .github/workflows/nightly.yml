@@ -103,7 +103,7 @@ jobs:
             pip install -e ".[$NIGHTLY_EXTRAS]"
           fi
 
-      # REC-062 S2: the extras must import, and psycopg must use the [binary] package's
+      # REC-062: the extras must import, and psycopg must use the [binary] package's
       # bundled libpq. Without [binary], psycopg falls back to the pure-Python wrapper
       # (or fails to import if no system libpq), and nothing else in the nightly
       # imports psycopg or pypdf, so this step is what makes a dropped [binary] loud.
@@ -148,7 +148,7 @@ jobs:
   alert:
     name: alert on scheduled failure
     needs: import-all
-    # REC-062 S3: any import-all result but success (failure, cancelled, which is also
+    # REC-062: any import-all result but success (failure, cancelled, which is also
     # what a timeout-minutes hit reports, or skipped) alerts on a scheduled run.
     if: ${{ always() && github.event_name == 'schedule' && needs.import-all.result != 'success' }}
     runs-on: ubuntu-latest
@@ -187,7 +187,7 @@ jobs:
             gh issue create --title "$TITLE" --body "$body"
             exit 0
           fi
-          # REC-062 S1: only the bot's own text counts. The issue body is the bot's (the
+          # REC-062: only the bot's own text counts. The issue body is the bot's (the
           # list above filters on author); comments count only if GraphQL reports their
           # author as "github-actions" (the bot's login there; no user account has it), so a
           # visitor's comment that carries the run-id key cannot suppress this alert.

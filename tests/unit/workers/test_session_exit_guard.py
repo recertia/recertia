@@ -186,7 +186,7 @@ def test_clean_session_exits_zero_without_os_exit(
     result.stderr.no_fnmatch_line("*recertia exit guard*")
 
 
-# --- Nested in-process sessions (REC-036 S1) ------------------------------------------
+# --- Nested in-process sessions (REC-036) ------------------------------------------
 # The guard must run for the outermost session only. pytest unconfigures a config
 # whose pytest_configure raised before tests.conftest's ran, so a session counter
 # could drift: an inner session failing during configure either fired the guard
@@ -302,7 +302,7 @@ def test_leaves_a_stuck_worker():
     result.stderr.fnmatch_lines(["*recertia exit guard*recertia-queue-stuck*"])
 
 
-# --- Unconfigure order and exit status (REC-036 N1, N4) --------------------------------
+# --- Unconfigure order and exit status (REC-036) --------------------------------
 
 HUNG_SOURCE = """
 def test_leaves_a_run_that_never_ends(hung_run):
@@ -313,7 +313,7 @@ def test_leaves_a_run_that_never_ends(hung_run):
 def test_plugins_registered_earlier_unconfigure_before_the_guard_exits(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``trylast`` on the guard's unconfigure lets earlier plugins finish first (N1).
+    """``trylast`` on the guard's unconfigure lets earlier plugins finish first.
 
     Hooks run in reverse registration order, so without ``trylast`` the guard
     (registered after ``early_marker``) would ``os._exit`` before
@@ -340,7 +340,7 @@ def test_plugins_registered_earlier_unconfigure_before_the_guard_exits(
 def test_nonzero_session_status_is_kept_by_the_guard(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A session status other than 0 is passed to ``os._exit`` as is, not forced to 1 (N4)."""
+    """A session status other than 0 is passed to ``os._exit`` as is, not forced to 1."""
 
     result, wall = _run_child(
         pytester,
@@ -364,7 +364,7 @@ def test_then_exit_with_status_3():
 def test_guard_fires_with_the_network_guard_opted_out(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``RECERTIA_NO_NETWORK=0`` (CI unset) skips the network guard, never the exit guard (D-N1).
+    """``RECERTIA_NO_NETWORK=0`` (CI unset) skips the network guard, never the exit guard.
 
     ``_outermost_config`` must be set before the opt-out return in
     ``pytest_configure``. The stuck thread ends after ``STUCK_S``, so a missing

@@ -198,7 +198,7 @@ class _FailFirstCleanup(tempfile.TemporaryDirectory[str]):
 
 @pytest.mark.parametrize("raises", [False, True], ids=["returns", "raises"])
 def test_removal_is_retried_once(raises: bool, private_tmp: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """N1: a first removal that fails is retried, so the dir goes and nothing is raised or noted."""
+    """A first removal that fails is retried, so the dir goes and nothing is raised or noted."""
 
     monkeypatch.setattr(_FailFirstCleanup, "made", [])
     monkeypatch.setattr(tempfile, "TemporaryDirectory", _FailFirstCleanup)
@@ -227,7 +227,7 @@ def _sleeper(seconds: float) -> None:
 
 
 def test_reap_spares_children_alive_before_entry(private_tmp: Path, tmp_path: Path) -> None:
-    """N2: only children started inside the scenario are reaped, not ones alive before it."""
+    """Only children started inside the scenario are reaped, not ones alive before it."""
 
     elder = probe._spawn().Process(target=_sleeper, args=(30.0,), name="rec052-elder", daemon=True)
     elder.start()

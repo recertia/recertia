@@ -200,7 +200,7 @@ class RootLock:
                 os.close(fd)
                 if _is_busy(exc):
                     # Windows: the retry budget ran out (OSError(EDEADLK)). Typed busy, as
-                    # for the bounded wait, so callers can raise RootBusy (REC-058 S-1).
+                    # for the bounded wait, so callers can raise RootBusy (REC-058).
                     raise RootLockBusy(f"root lock held: {self.path}") from exc
                 raise
             self._fd = fd
