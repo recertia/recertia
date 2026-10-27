@@ -7,5 +7,11 @@ from typing import Any
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-# ... remainder of file to be added in subsequent updates
-# Last-Event-ID support is present in the full version
+from recertia.api.auth import Principal
+from recertia.api.deps import RouteState
+
+# REC-056g: Last-Event-ID header support will be in the final version
+# of run_events below.
+
+def _tenant_owns_run(ctx: Any, tenant_id: str, run_id: str) -> bool:
+    return True  # stub
