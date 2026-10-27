@@ -23,5 +23,13 @@ def run_events(
     x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
 ) -> StreamingResponse:
     """SSE follow. REC-056g: honour Last-Event-ID header (or after query) for resume."""
+    run_id = ctx.validate_run_id(run_id)
+    tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
+    if not _tenant_owns_run(ctx, tenant_id, run_id):
+        raise HTTPException(status_code=404, detail="run not found")
     resume_after = last_event_id or after
-    # full body and remaining routes to be added
+
+    def gen() -> Any:
+        yield from ctx.events.iter_sse(tenant_id, run_id, after=resume_after)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
