@@ -33,3 +33,19 @@ def run_events(
         yield from ctx.events.iter_sse(tenant_id, run_id, after=resume_after)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+@app.post("/v1/runs/{run_id}/cancel")
+def cancel_run(
+    run_id: str,
+    request: Request,
+    principal=Depends(require_runs),
+    x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
+) -> dict[str, Any]:
+    run_id = ctx.validate_run_id(run_id)
+    tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
+    if not _tenant_owns_run(ctx, tenant_id, run_id):
+        raise HTTPException(status_code=404, detail="run not found")
+    try:
+        return run_service.cancel(principal, run_id)
+    except Exception as exc:
+        return _map_run_error(exc, run_id=run_id)
