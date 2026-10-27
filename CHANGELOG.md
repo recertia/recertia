@@ -247,6 +247,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/unit/persistence/test_root_lock_windows_real.py` (real `kernel32`, run by the
   `root lock (windows-latest)` job).
 
+- **psycopg floor (REC-057, #179)** — the `postgres` extra's floor is now `psycopg[binary]>=3.2.1`.
+  psycopg 3.2.0's `binary` extra requires `psycopg-binary==3.2.0.dev1`, which was never
+  uploaded to PyPI, so `psycopg[binary]==3.2.0` cannot be installed. 3.2.1 (published the
+  next day) requires `psycopg-binary==3.2.1`. Found once the nightly lowest arm started
+  pinning the `postgres` floor. No other floor changes.
+
 - **CLI tests read stderr at the click floor (REC-053)** — the `dev` extra gains
   `click>=8.2`. Six CLI tests read `result.stderr` from a default `CliRunner()`, and
   before click 8.2 that runner mixes stderr into stdout, so the read raised
@@ -478,6 +484,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lowest-direct floors, py3.13 at newest) now run `pytest -v` the way `ci.yml` does, with
   the same env and the suite-wide pytest-timeout, after the import-all step. The job
   timeout is 20 minutes.
+- **Nightly extras, checkout token, failure alert (REC-057, #180)** — both `nightly.yml`
+  arms now install the `postgres`, `pdf` and `otel` extras along with `dev`, and the lowest
+  arm pins their floors too (psycopg 3.2.1, pypdf 4, opentelemetry-api 1.20). The pin
+  script drops a requirement's extras from its constraint and stops on a marker or a
+  conflicting floor. `actions/checkout` runs with `persist-credentials: false`. A new
+  `alert` job runs only when a scheduled run fails or is cancelled: it opens one issue
+  titled "nightly: scheduled run failing" (found by exact title, bot author and a marker
+  line), or comments on it if it is already open, and skips a run id it already reported.
+  The body is run metadata only. The job has no checkout and no `uses:` actions. It is the
+  workflow's only write grant (job-scoped `issues: write` on `GITHUB_TOKEN`); the
+  workflow-level `permissions` is now `{}`.
+
+- **Nightly alert and extras hardening (REC-062, #180)** — follow-up to the #143 review.
+  The alert job's run-id dedupe now counts only comments by `github-actions`, so a
+  visitor's comment carrying the run-id key cannot suppress an alert. Its condition is
+  `always() && github.event_name == 'schedule' && needs.import-all.result != 'success'`,
+  so a job that hits `timeout-minutes` (reported as cancelled) also alerts. A new
+  `Extras import` step imports psycopg, pypdf and opentelemetry and fails unless
+  psycopg uses the `binary` implementation, so dropping `[binary]` is loud.
+  `NIGHTLY_EXTRAS` gains `api`, so the pin script's conflicting-floor check now
+  compares the `api` and `dev` floors. The script matches names by PEP 503
+  normalisation. Comments note the 60-day schedule auto-disable, the 100-item `gh`
+  fetch limit and the psycopg 3.2.1 wheel range (cp312 at most).
 
 - **REL-3 runtime.db** — `open_run_persistence` imports leftover
   `checkpoints.db` / `operations.db` into `runtime.db` when

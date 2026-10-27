@@ -141,7 +141,7 @@ jobs:
   # MARKER line in its body. It opens that issue, or comments on it if it is already
   # open, and skips a run id that is already reported (for example a re-run attempt).
   # Closing the issue is a human step. Manual dispatches never alert.
-  # Hardening (CTO-rec rulings): schedule-only `if:`; no checkout and no `uses:` actions,
+  # Hardening: schedule-only `if:`; no checkout and no `uses:` actions,
   # only the runner's `gh` CLI; every `${{ }}` value enters through `env:` and the body
   # holds run metadata only. This job holds the workflow's only write grant: job-scoped
   # `issues: write` on the built-in GITHUB_TOKEN. No secret is used.
