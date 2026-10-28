@@ -262,7 +262,6 @@ class RunService:
         still included.
         """
         from recertia.runtime.cursor import decode_cursor, encode_cursor
-        from recertia.runtime.errors import InvalidCursor
         from recertia.runtime.registry import RunRegistry
 
         created_at_before = run_id_before = None
