@@ -31,6 +31,10 @@ def quota_from_env() -> TenantQuota:
 
 
 class QuotaStore:
+    """API-process-only store (REC-066).
+
+    Covered by the API shared ``api.lock``.
+    """
     """SQLite-backed per-tenant daily counters + in-flight gauge."""
 
     def __init__(self, path: Path | str, *, defaults: TenantQuota | None = None) -> None:

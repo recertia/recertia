@@ -99,6 +99,11 @@ def _hkdf_sha256(ikm: bytes, *, info: bytes, length: int = 32) -> bytes:
 
 
 class ApiKeyStore:
+    """API-process-only store (REC-066).
+
+    Covered by the API shared ``api.lock``. CLI key commands take no root lock
+    and are documented as operator-only.
+    """
     """SQLite-backed key registry.
 
     New keys are HMAC-SHA256 with a pepper. Existing PBKDF2 rows stay valid and

@@ -50,6 +50,10 @@ class JobRunRecord:
 
 
 class JobRunStore:
+    """API-process-only store (REC-066).
+
+    Covered by the API shared ``api.lock``.
+    """
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)

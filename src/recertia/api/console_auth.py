@@ -181,6 +181,10 @@ def pkce_challenge(verifier: str) -> str:
 
 
 class SessionStore:
+    """API-process-only store (REC-066).
+
+    Covered by the API shared ``api.lock``.
+    """
     """Cookie v2 carries a session id. Roles live in sqlite (or an in-memory row)."""
 
     def __init__(self, secret: str | None = None, *, path: Path | None = None) -> None:

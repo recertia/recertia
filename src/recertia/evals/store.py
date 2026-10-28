@@ -78,6 +78,12 @@ def reported_resolution(stored: str | None) -> str:
 
 
 class EvalStore:
+    """SQLite eval store (REC-066).
+
+    Opened by the API (covered by api.lock) and by CLI/worker paths.
+    CLI callers are operator-only and take no root lock; a concurrent
+    backup may see a partial evals.db. Documented exception.
+    """
     """SQLite store keyed by snapshot so baselines survive across library versions."""
 
     def __init__(self, path: Path | str) -> None:
