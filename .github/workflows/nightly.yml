@@ -1,7 +1,7 @@
 name: nightly
 
 # Not a required check. Python 3.11 at lowest-direct deps and 3.13 at newest:
-# the batched import-all test (bugs 12 and 13), then the full test suite the way
+# the batched import-all test, then the full test suite the way
 # ci.yml runs it (REC-051).
 #
 # pip has no --resolution flag (that is uv). This repo's CI uses pip, so the

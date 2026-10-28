@@ -1,4 +1,4 @@
-"""GitHub heading-id contract for scripts/check_cross_refs.py (bug 4).
+"""GitHub heading-id contract for scripts/check_cross_refs.py.
 
 GitHub's rendered HTML (contents API, Accept: application/vnd.github.html) uses
 ``user-content-`` prefixed ids whose suffix is: lowercase, punctuation dropped
