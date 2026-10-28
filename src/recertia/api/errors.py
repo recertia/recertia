@@ -10,7 +10,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-_RETRYABLE_CODES = frozenset({"rate_limited", "lock_timeout", "worker_busy"})
+_RETRYABLE_CODES = frozenset({"rate_limited", "lock_timeout", "worker_busy", "root_busy"})
 
 _STATUS_CODES: dict[int, str] = {
     400: "bad_request",
