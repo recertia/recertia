@@ -47,6 +47,7 @@ import errno
 import os
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Protocol
 
@@ -182,14 +183,24 @@ class RootBusy(RootLockBusy, RecertiaError):
     retryable = True
     exit_code = 6
 
-    def __init__(self, message: str, **kwargs) -> None:
-        # Cooperative init: RootLockBusy (RuntimeError) then RecertiaError attributes.
-        super().__init__(message)
-        # RecertiaError sets message/run_id/details/retry_after_s after the RuntimeError base.
-        self.message = message
-        self.run_id = kwargs.get("run_id")
-        self.details = dict(kwargs.get("details") or {})
-        self.retry_after_s = kwargs.get("retry_after_s")
+    def __init__(
+        self,
+        message: str,
+        *,
+        run_id: str | None = None,
+        details: Mapping[str, object] | None = None,
+        retry_after_s: float | None = None,
+    ) -> None:
+        # ``super().__init__`` would stop at RuntimeError (it comes before RecertiaError
+        # in the MRO), so call the base init by name. It sets ``message``, ``run_id``,
+        # ``details`` and ``retry_after_s`` and passes ``message`` on to ``Exception``.
+        RecertiaError.__init__(
+            self,
+            message,
+            run_id=run_id,
+            details=details,
+            retry_after_s=retry_after_s,
+        )
 
 
 class RootLock:
