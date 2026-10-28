@@ -2,15 +2,15 @@
 
 - **Status:** accepted
 - **Date:** 2026-10-22
-- **Accepted:** 2026-10-22, accepted by the owner on the reviewer's recommendation
+- **Accepted:** 2026-10-22, accepted by the owner
 - **Decides:** [#138](https://github.com/recertia/recertia/issues/138) (REC-056h). It re-scopes and unblocks [#139](https://github.com/recertia/recertia/issues/139) (REC-056b2).
 - **Related:** [ADR-0003](0003-criteria-preregistration.md), [ADR-0020](0020-store-receipts.md) (backup/restore unit), [ADR-0021](0021-deployment-model.md) (D2: local execution only in `single_node`, behind the break-glass)
 - **Plan:** REC-056 re-slice of closed [#91](https://github.com/recertia/recertia/pull/91) (rows REC-056h and REC-056b2)
-- **Evidence:** The reviewer's review (accepted text, revision REC056h), sha256 `2f3d3f3971cfffa534ca5d9568e2c9c14088c46d07b33589e20d37e070cb8679`; the reviewer's review (amended text, revision REC056i), sha256 `62934eae72452c5bfa73d05ca5cf47eb3c2ea49e96c5c4273837dcf8abb6fac5`; independent verification by the verifier, sha256 `fdfff9d6b92518193c9b0f3e2d60ca56ec3dda96260a2fa1a02075895d7b9625`; independent spot-check of the amended text (revision REC056i) by the verifier, PASS with no blocking findings, sha256 `db1adc8b4b8ddb9eb920c5ec36d7089887e37d7e4f029cbe37d8076838876a5b`
+- **Evidence:** Independent verification of the accepted text passed, and an independent spot-check of the amended text passed with no blocking findings.
 - **Reviewed assertion text:** the b2 prototype patch, sha256 `84886788a0a9084c0cd2438ee41f970ec261b506fe62fc921ad86085a8ce695b`, a test-only `git diff` of four files against main `49619a6cf0436c11c5c784f6b97a4e1e1777f2d8`. It lands as the test commit(s) of the #139 PR.
 - **Follow-ups:** [#144](https://github.com/recertia/recertia/issues/144) (REC-058), [#145](https://github.com/recertia/recertia/issues/145) (REC-059), [#146](https://github.com/recertia/recertia/issues/146) (REC-060), [#147](https://github.com/recertia/recertia/issues/147) (REC-061), plus one proposed new item (Follow-ups, item 5)
 
-**Amendment (2026-10-22).** After acceptance, the done-when item 4 guard was hardened per independent verification by the verifier. That verification reported one blocker (B-1): a new `tests/unit/graph/conftest.py` whose `pytest_runtest_makereport` hookwrapper turns failed reports into passes, combined with a `src/` mutation, kept the item 4 guard at exit 0 and the 6 / 12 node IDs green. The amendment adds done-when item 10 (the PR's file set must equal an exact six-path allowlist), which closes B-1, and items 11–13 (the guard rejects any `RESULTS` mutation in the busy block, pins the added definitions by full sha256, and pins every rewritten or added body by full sha256). It also corrects the b1 PR number to [#151](https://github.com/recertia/recertia/pull/151). The decision itself and the reviewed assertion text are unchanged.
+**Amendment (2026-10-22).** After acceptance, the done-when item 4 guard was hardened per independent verification. That verification reported one blocker: a new `tests/unit/graph/conftest.py` whose `pytest_runtest_makereport` hookwrapper turns failed reports into passes, combined with a `src/` mutation, kept the item 4 guard at exit 0 and the 6 / 12 node IDs green. The amendment adds done-when item 10 (the PR's file set must equal an exact six-path allowlist), which closes that blocker, and items 11–13 (the guard rejects any `RESULTS` mutation in the busy block, pins the added definitions by full sha256, and pins every rewritten or added body by full sha256). It also corrects the b1 PR number to [#151](https://github.com/recertia/recertia/pull/151). The decision itself and the reviewed assertion text are unchanged.
 
 **Where the cites point.**
 - Every line cite is at main `49619a6cf0436c11c5c784f6b97a4e1e1777f2d8` unless stated. Main is REC-051 `e25ecfa6`, then REC-052 (`f5ab94b8`, `87bbc1ae`), then REC-056b1 as [#151](https://github.com/recertia/recertia/pull/151) (merge `49619a6c`). [#148](https://github.com/recertia/recertia/pull/148), with the same code as #151, is still open and superseded; it did not land.
@@ -141,14 +141,14 @@ b2 is a **six-file PR**: four test files (the reviewed patch) plus the ADR doc `
 | `tests/probes/rel3_probe_r4.py` | T1 and T2 rewritten; imports `busy_open`; T3–T5 untouched |
 | `tests/unit/graph/test_rel3_probe.py` | removes the six `pytest.mark.skip(…)` blocks; L/M names updated in `_busy_records` and the two wrappers; module docstring gains the ADR-0022 exception (CRLF kept) |
 
-**Base and order.** b1 (REC-056b1) landed on main as [#151](https://github.com/recertia/recertia/pull/151) (merge `49619a6c`), and b2 is based on it. Every "byte-identical" / "no diff" check below is against **origin/main `49619a6c`** (or later main, re-checked by the reviewer).
+**Base and order.** b1 (REC-056b1) landed on main as [#151](https://github.com/recertia/recertia/pull/151) (merge `49619a6c`), and b2 is based on it. Every "byte-identical" / "no diff" check below is against **origin/main `49619a6c`** (or later main, re-checked).
 
 The patch was first built on #148 head `95d29e48` (on `e25ecfa6`). Main then took REC-052 (`f5ab94b8`, `87bbc1ae`, a probe temp-dir cleanup), which touches `CHANGELOG.md` and the probe files but not the asserted behaviour. Rebasing onto `49619a6c`:
 - `git apply -3` applies three files cleanly (`rel3_probe.py` at an offset of 86–87 lines);
 - `rel3_probe_busy.py` has one known one-line import conflict. Resolution: `from tests.probes.rel3_probe import state, record, RESULTS, owned_root, busy_open`;
 - there is no other difference: the rebased patch equals the original apart from `index`/hunk-offset lines and that import line.
 
-Any other rebase difference needs the reviewer re-review (item 8).
+Any other rebase difference goes back to review (item 8).
 
 1. **The six pass:** 6 passed, 0 skipped, 0 xfail, each recorded name exactly as in the table:
    ```
@@ -196,22 +196,22 @@ Any other rebase difference needs the reviewer re-review (item 8).
    - the full suite is green (rebased prototype on `49619a6c`: 1804 passed, 3 skipped, 1 xfailed);
    - `ci` is green at the PR head;
    - line endings are unchanged (`git ls-files --eol`): `test_rel3_probe.py`, `rel3_probe_r3.py` and `test_import_legacy.py` stay CRLF, and the three other probe files stay LF.
-8. **The reviewer's review before b2 starts.** The reviewed patch is the assertion text. The implementer applies it as-is, apart from the rebase resolution named above. Any other deviation goes to the reviewer before code is written, and the reviewer signs off on the final six-file PR diff (the four-file test assertion diff plus the ADR doc and `CHANGELOG.md`; no `src/`) before the PR is opened.
-9. **Mutations** (the verifier): each of A–F must turn exactly the tests listed under Prototype red, with F red only in `test_import_legacy.py`.
-10. **File-set allowlist (closes B-1).** In the b2 PR, against origin/main (`49619a6c` or later main):
+8. **Review before b2 starts.** The reviewed patch is the assertion text. The implementer applies it as-is, apart from the rebase resolution named above. Any other deviation goes to review before code is written, and the final six-file PR diff (the four-file test assertion diff plus the ADR doc and `CHANGELOG.md`; no `src/`) is signed off before the PR is opened.
+9. **Mutations** (verification): each of A–F must turn exactly the tests listed under Prototype red, with F red only in `test_import_legacy.py`.
+10. **File-set allowlist (closes the conftest hookwrapper blocker).** In the b2 PR, against origin/main (`49619a6c` or later main):
     - **(a) Exact file set.** `git diff --name-only origin/main...HEAD` equals **exactly** these six paths, nothing more and nothing less:
       - the four files the patch touches: `tests/probes/rel3_probe.py`, `tests/probes/rel3_probe_busy.py`, `tests/probes/rel3_probe_r4.py`, `tests/unit/graph/test_rel3_probe.py`;
       - the two docs paths: `docs/adr/0022-rootbusy-no-leftover-overlay.md` (this record; if it is renumbered or renamed, this exact path changes by amendment, never by glob) and `CHANGELOG.md`.
     - **(b) Commit split.** The two docs paths are in their own commit, and that commit touches only those two paths. The patch commit(s) touch only the four patch files. Exactly one docs commit; no merge commits in `origin/main..HEAD`.
     - **(c) Docs are inert to pytest.** Neither docs path is a pytest config or a collected file: both are `.md`, outside `testpaths = ["tests"]`, and `pyproject.toml` (which carries `[tool.pytest.ini_options]`) is not in the set.
     - This shuts out any new or edited `conftest.py` (at any level), `pytest.ini`, `pyproject.toml`, `setup.cfg`, `tox.ini` or other pytest config or plugin, and any `src/` change, whatever its content. Item 4's guard only inspects the four files, so this item is what closes the rest of the tree. The check (see "File-set check" below) must exit 0.
-    - **Item 10 is not sufficient on its own; the guard run is mandatory.** the verifier's spot-check showed that a hook placed in an allowlisted file (`tests/probes/rel3_probe.py` plus `pytest_plugins`) gets past item 10 and hides mutation B; only the guard catches it. The guard (items 4 and 11–13) must be run on the b2 PR head and exit 0, in addition to the file-set check.
-11. **Guard: no `RESULTS` mutation in the busy block** (checked in the reviewer's b2 review). The item 4 guard as run on the b2 PR must reject any statement added inside `rel3_probe_busy.py`'s `with owned_root() as root:` block that mutates `RESULTS` beyond the reviewed append form. The only reviewed form is a `record(name, ok, detail)` call, which appends inside the pinned `record()`; the reviewed L/M text never names `RESULTS`. So a new with-block statement that references `RESULTS` at all fails, including slice assignment (`RESULTS[:] = …`), item assignment, `RESULTS.__setitem__(…)`, `.extend` / `.insert` / `.pop` / `.remove` / `.clear` / `.sort`, `del RESULTS[…]`, augmented assignment (`RESULTS += …`), rebinding and aliasing. Indirect reach (`__import__(…).RESULTS`, `getattr`/`setattr`, `globals()`, `vars()`, `sys.modules`) in a new statement also fails. The guard as accepted (before this amendment) did **not** meet this: a `RESULTS[:] = …` or `RESULTS.__setitem__(…)` line after the L `record` got `OK: 0 difference(s)` and flipped L from fail to pass (proof under Prototype).
-12. **Guard: full sha256 pins** (checked in the reviewer's b2 review). The guard pins the three added definitions, `BUSY_BOUND_S` included, by their full 64-hex sha256, not a prefix (the guard as accepted truncated to 16 hex; the guard now compares the full digest for all three). The full values, computed on the rebased prototype with the same LF source-segment rule as item 13:
+    - **Item 10 is not sufficient on its own; the guard run is mandatory.** A spot-check showed that a hook placed in an allowlisted file (`tests/probes/rel3_probe.py` plus `pytest_plugins`) gets past item 10 and hides mutation B; only the guard catches it. The guard (items 4 and 11–13) must be run on the b2 PR head and exit 0, in addition to the file-set check.
+11. **Guard: no `RESULTS` mutation in the busy block** (checked in the b2 review). The item 4 guard as run on the b2 PR must reject any statement added inside `rel3_probe_busy.py`'s `with owned_root() as root:` block that mutates `RESULTS` beyond the reviewed append form. The only reviewed form is a `record(name, ok, detail)` call, which appends inside the pinned `record()`; the reviewed L/M text never names `RESULTS`. So a new with-block statement that references `RESULTS` at all fails, including slice assignment (`RESULTS[:] = …`), item assignment, `RESULTS.__setitem__(…)`, `.extend` / `.insert` / `.pop` / `.remove` / `.clear` / `.sort`, `del RESULTS[…]`, augmented assignment (`RESULTS += …`), rebinding and aliasing. Indirect reach (`__import__(…).RESULTS`, `getattr`/`setattr`, `globals()`, `vars()`, `sys.modules`) in a new statement also fails. The guard as accepted (before this amendment) did **not** meet this: a `RESULTS[:] = …` or `RESULTS.__setitem__(…)` line after the L `record` got `OK: 0 difference(s)` and flipped L from fail to pass (proof under Prototype).
+12. **Guard: full sha256 pins** (checked in the b2 review). The guard pins the three added definitions, `BUSY_BOUND_S` included, by their full 64-hex sha256, not a prefix (the guard as accepted truncated to 16 hex; the guard now compares the full digest for all three). The full values, computed on the rebased prototype with the same LF source-segment rule as item 13:
     - `BUSY_BOUND_S`: `082e5ba9669d4957e3cccec1b19da8cf7713de92ccc99716ff813fd8f28b5273`
     - `db_snapshot`: `e7014e6f699a86558811581e7d2c3e43bfa0179acd6699ed8e9bf53019b2fca4`
     - `busy_open`: `19544f62f5db2406fb87ed126edb482f10fb2d5b843d67068dc45059cffe089f`
-13. **Guard: full sha256 pins of every rewritten or added body** (checked in the reviewer's b2 review). The guard also pins, by full 64-hex sha256, each top-level function the patch rewrites or adds, and the one module-level block it rewrites. That closes the gap that the rewritten bodies were otherwise unchecked, so any edit to them fails, including a `RESULTS` edit. Normalization is the one the guard uses for the byte-identical check of unrewritten functions: the `ast.get_source_segment` of the top-level node on the CRLF→LF-normalized source, UTF-8 encoded. That runs from `def` (or `with`) to the last body line, with decorators excluded, since G1 checks them. Each pin equals that text in patch `84886788a0a9084c0cd2438ee41f970ec261b506fe62fc921ad86085a8ce695b` applied to `49619a6c`. The list is complete: it was derived by comparing every top-level def and `with` block of the four files between `49619a6c` and the patched tree, giving 13 functions plus the busy block. Four of the 13 (`test_probe_i_no_state_lost_across_concurrent_import`, `test_probe_m2_root_openable_after_conflict`, `test_probe_t1_same_thread_ops_not_rerun`, `test_probe_t2_same_thread_ghost_write_rejected`) only lost their `pytest.mark.skip` decorator: their pinned text is identical to `49619a6c`, and the pin locks it against later edits.
+13. **Guard: full sha256 pins of every rewritten or added body** (checked in the b2 review). The guard also pins, by full 64-hex sha256, each top-level function the patch rewrites or adds, and the one module-level block it rewrites. That closes the gap that the rewritten bodies were otherwise unchecked, so any edit to them fails, including a `RESULTS` edit. Normalization is the one the guard uses for the byte-identical check of unrewritten functions: the `ast.get_source_segment` of the top-level node on the CRLF→LF-normalized source, UTF-8 encoded. That runs from `def` (or `with`) to the last body line, with decorators excluded, since G1 checks them. Each pin equals that text in patch `84886788a0a9084c0cd2438ee41f970ec261b506fe62fc921ad86085a8ce695b` applied to `49619a6c`. The list is complete: it was derived by comparing every top-level def and `with` block of the four files between `49619a6c` and the patched tree, giving 13 functions plus the busy block. Four of the 13 (`test_probe_i_no_state_lost_across_concurrent_import`, `test_probe_m2_root_openable_after_conflict`, `test_probe_t1_same_thread_ops_not_rerun`, `test_probe_t2_same_thread_ghost_write_rejected`) only lost their `pytest.mark.skip` decorator: their pinned text is identical to `49619a6c`, and the pin locks it against later edits.
     - `tests/probes/rel3_probe.py`:
       - `subprocess_exclusive` (docstring only): `1af9ac64bff6bff250a7c6f3c11fd6acf5a6486dc776c7e85cec6aba08184b75`
       - `db_snapshot` (added): `e7014e6f699a86558811581e7d2c3e43bfa0179acd6699ed8e9bf53019b2fca4`
@@ -231,11 +231,11 @@ Any other rebase difference needs the reviewer re-review (item 8).
       - `test_probe_t2_same_thread_ghost_write_rejected` (skip removed): `e0b8d0faa66bda4719c776ab86c115c29ed6b141fffce8a64f882fc831103d1d`
     - `db_snapshot` and `busy_open` are also pinned by item 12 (same full values). `BUSY_BOUND_S` is a constant, not a function, and stays under item 12. The module docstrings and the `busy_open` import additions stay under G2.
 
-Items 10–13 are binding. Items 11–13 are requirements on the guard the reviewer runs in the b2 review. Running the guard (exit 0) and the file-set check (exit 0) on the b2 PR head are both mandatory; neither replaces the other. The reviewed patch is unchanged by the amendment and stays the reference assertion text.
+Items 10–13 are binding. Items 11–13 are requirements on the guard run in the b2 review. Running the guard (exit 0) and the file-set check (exit 0) on the b2 PR head are both mandatory; neither replaces the other. The reviewed patch is unchanged by the amendment and stays the reference assertion text.
 
 ### Guard and file-set check (run in review, not committed)
 
-Both checks are mandatory: they are run by the reviewer in the b2 review and by the verifier in verification, from the repo root of the b2 branch, and each must exit 0. Neither is added to the repo: item 10 allows exactly six paths.
+Both checks are mandatory: they are run in the b2 review and in verification, from the repo root of the b2 branch, and each must exit 0. Neither is added to the repo: item 10 allows exactly six paths.
 
 **Guard** (done-when items 4 and 11–13), invoked with the base commit:
 - parses the four patch files at the base (`git show <base>:<path>`) and in the working tree, both CRLF→LF-normalized, with `ast`;
@@ -246,7 +246,7 @@ Both checks are mandatory: they are run by the reviewer in the b2 review and by 
 - prints one line per check and `OK: 0 difference(s)` with exit 0, or `FAIL: n difference(s)` with exit 1.
 
 **File-set check** (done-when item 10), invoked with the base commit:
-- runs with `LC_ALL=C` exported, so the `sort` and `comm` comparisons below do not depend on the reviewer's locale;
+- runs with `LC_ALL=C` exported, so the `sort` and `comm` comparisons below do not depend on the locale;
 - (a) compares the sorted `git diff --name-only <base>...HEAD` with the six allowlisted paths and prints any extra or missing path;
 - (b) walks `git rev-list --reverse <base>..HEAD`, fails on any merge commit, classifies each commit as a docs commit (touches exactly the two docs paths) or a patch commit (touches only the four patch files), fails any other commit, and requires exactly one docs commit;
 - (c) fails if either docs path is a `conftest.py`, `pytest.ini`, `pyproject.toml`, `setup.cfg`, `tox.ini` or `*.py`, or sits under `tests/`;
@@ -282,11 +282,11 @@ Both checks are mandatory: they are run by the reviewer in the b2 review and by 
 - Python 3.12.15, `pip install -e ".[dev]"`, ruff 0.17.1, mypy 2.4.0;
 - the reviewed patch applied: 4 test files, +84/−66, **no `src/` change**.
 
-An earlier run on #148 head `95d29e48` with the pre-rebase patch gave a full suite of 1783 passed, 3 skipped, 1 xfailed, and a 60-function guard exit 0. The verifier independently reproduced those results (verification cited in the header).
+An earlier run on #148 head `95d29e48` with the pre-rebase patch gave a full suite of 1783 passed, 3 skipped, 1 xfailed, and a 60-function guard exit 0. Those results were independently reproduced (verification cited in the header).
 
 | Check | Result |
 |---|---|
-| Six node IDs (main `49619a6c`, skips removed only) | **6 failed**, as described in Context. The verifier reproduced this on the earlier base. |
+| Six node IDs (main `49619a6c`, skips removed only) | **6 failed**, as described in Context. This was independently reproduced on the earlier base. |
 | Six node IDs (patch) | **6 passed**. Each busy open reports e.g. `RootBusy after 0.25s; db files unchanged=True (['checkpoints.db', 'operations.db'])`. |
 | 12 O/M3/M4 node IDs (patch) | **12 passed** |
 | `test_rel3_probe.py` + `test_import_legacy.py` (patch) | **65 passed**, 0 skipped |
@@ -330,12 +330,12 @@ The earlier guard caught only the T3b body change. It ignored decorators (`ast.g
 
 F is why done-when item 3 keeps `test_import_legacy.py` unchanged and passing. Tightening `BUSY_BOUND_S` in the probes is not proposed: it would duplicate a unit-level timing bound in a probe and make the probes flaky on slow CI.
 
-**B-1 proof (amendment).** Fresh clone, branch at `49619a6c`, rebased prototype applied and committed; guard and file-set check as described above, both against base `49619a6c`. "Mutation B" is `raise RootBusy(` → `raise RuntimeError(` in `import_legacy.py`.
+**Conftest hookwrapper proof (amendment).** Fresh clone, branch at `49619a6c`, rebased prototype applied and committed; guard and file-set check as described above, both against base `49619a6c`. "Mutation B" is `raise RootBusy(` → `raise RuntimeError(` in `import_legacy.py`.
 
 | Tree on top of the patch commit | Guard exit | 6 / 12 | Item 10 |
 |---|---|---|---|
 | clean patch + docs commit (placeholder `docs/adr/0022-rootbusy-no-leftover-overlay.md`, one `CHANGELOG.md` line) | 0 | 6 passed / 12 passed | **exit 0**: (a) six-file set, (b) one patch commit + one docs commit, (c) ok |
-| B-1: `tests/unit/graph/conftest.py` hookwrapper (`if rep.failed: rep.outcome = "passed"`) + mutation B, then docs commit | **0** | **6 passed / 12 passed** (with the hook removed: 4 failed / 3 failed) | **exit 1**: (a) extra `src/…/import_legacy.py`, `tests/unit/graph/conftest.py`; (b) commit touches them |
+| Blocker: `tests/unit/graph/conftest.py` hookwrapper (`if rep.failed: rep.outcome = "passed"`) + mutation B, then docs commit | **0** | **6 passed / 12 passed** (with the hook removed: 4 failed / 3 failed) | **exit 1**: (a) extra `src/…/import_legacy.py`, `tests/unit/graph/conftest.py`; (b) commit touches them |
 | conftest hook only (no `src/` diff, so item 6 is silent), then docs commit | 0 | — | **exit 1**: (a) extra `tests/unit/graph/conftest.py` |
 | conftest hook smuggled into the docs commit | 0 | — | **exit 1**: (a) extra conftest; (b) no docs-only commit |
 | clean patch with the docs files squashed into the patch commit | 0 | — | **exit 1**: (b) mixed commit, no docs-only commit |
@@ -353,14 +353,14 @@ F is why done-when item 3 keeps `test_import_legacy.py` unchanged and passing. T
 
 ## Verification plan (the verifier)
 
-The accepted text was verified PASS (independent verification by the verifier, sha256 `fdfff9d6b92518193c9b0f3e2d60ca56ec3dda96260a2fa1a02075895d7b9625`), and the amended text passed the verifier's independent spot-check (sha256 `db1adc8b4b8ddb9eb920c5ec36d7089887e37d7e4f029cbe37d8076838876a5b`). For the b2 PR:
+The accepted text was verified PASS by independent verification, and the amended text passed an independent spot-check. For the b2 PR:
 
 1. Check that the patch matches sha256 `84886788a0a9084c0cd2438ee41f970ec261b506fe62fc921ad86085a8ce695b` and applies cleanly to main `49619a6c` (`git apply --check`), touching only the four test files.
 2. Run done-when items 1–7 on `49619a6c` with the rebased patch applied: 6 / 12 / 23 passed; hardened guard exit 0, and non-zero for each guard mutation in the Prototype table; 0 unconditional skips; empty `src/` diff against `49619a6c`; ruff clean; ratchet at 197; full suite green; EOL unchanged.
 3. Run mutations A–F as in the Prototype table. Each must turn exactly the listed tests red. F must pass the 18 and fail only `test_import_legacy.py:520`.
 4. On the b2 branch (rebased on origin/main, `49619a6c` or later), repeat steps 2–3, including the REC-052 import-line resolution.
-5. Run done-when item 10 (file-set check against origin/main, exit 0) on the b2 branch, and confirm it exits 1 for the B-1 conftest attack. The reviewer checks items 11–13 against the guard it runs in the b2 review; for item 13, the guard exits 0 on the b2 branch, reports all 14 `pin13` lines, and exits 1 for a `RESULTS` edit inside any pinned body.
-6. Record pass/fail per step in the verification report for the reviewer's pre-start sign-off (done-when item 8).
+5. Run done-when item 10 (file-set check against origin/main, exit 0) on the b2 branch, and confirm it exits 1 for the conftest hookwrapper attack. Items 11–13 are checked against the guard run in the b2 review; for item 13, the guard exits 0 on the b2 branch, reports all 14 `pin13` lines, and exits 1 for a `RESULTS` edit inside any pinned body.
+6. Record pass/fail per step in the verification report for the pre-start sign-off (done-when item 8).
 
 ## Follow-ups and open questions
 
@@ -374,9 +374,9 @@ The accepted text was verified PASS (independent verification by the verifier, s
 5. **Proposed new REC item: `migrate=off` with pending leftovers blocks without a bound.**
    - When `use_runtime` is false (`migrate=off` with leftovers still pending), `open_run_persistence` calls `leftover_lock.acquire_shared()` at `graph/persistence.py:130` with no timeout.
    - If backup/restore or an importer holds the exclusive `.lock`, the open blocks until release instead of raising typed `RootBusy` within `RECERTIA_IMPORT_LOCK_TIMEOUT_S`. That is Option C's failure mode (worker or API stall, DoS by any lock holder) on the legacy path.
-   - The verifier reproduced it (verification cited in the header).
+   - It was independently reproduced (verification cited in the header).
    - **Proposal:** a new REC item, the owner to assign. The shared acquire there should take the same bounded wait and raise `RootBusy`, with a unit test that `migrate=off` + pending leftovers + a held exclusive lock raises `RootBusy` within the bound and writes nothing.
    - It is out of scope for #138/#139 because R4's probes all run with `migrate=auto`.
 6. **#139 wording.** The default done-when in #139 still says "no change to the probe assertions". It is re-scoped to this record's done-when.
 
-**Acceptance (resolved).** Accepted by the owner, 2026-10-22, on the reviewer's recommendation. #139 still starts only after the reviewer's sign-off on the assertion diff (done-when item 8).
+**Acceptance (resolved).** Accepted by the owner, 2026-10-22. #139 still starts only after sign-off on the assertion diff (done-when item 8).
