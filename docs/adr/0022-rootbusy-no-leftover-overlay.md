@@ -38,7 +38,7 @@ The shipped contract says the same thing:
 
 **The conflict.** Two families of REL-3 probes encode opposite rules for the same moment (an open while another holder has the exclusive root lock):
 
-1. **The R3 rulings (green on main).** `tests/probes/rel3_probe_r3.py:62-65`: "open under exclusive RootLock must either raise a typed *Busy* error within BUSY_T, or block and succeed only after release. Nothing may be written during the busy window".
+1. **The R3 probes (green on main).** `tests/probes/rel3_probe_r3.py:62-65`: "open under exclusive RootLock must either raise a typed *Busy* error within BUSY_T, or block and succeed only after release. Nothing may be written during the busy window".
    - An open that succeeds while the lock is held is recorded as a failure: "open SUCCEEDED while lock held -- busy window not honoured" (`rel3_probe_r3.py:165-166`).
    - These are the 12 node IDs O/M3/M4 a–d at `tests/unit/graph/test_rel3_probe.py:288-409`.
    - T3/T3b/T4/T5 (`test_rel3_probe.py:506-531`; `tests/probes/rel3_probe_r4.py:44-102`) also require that no lock identity exists. T4/T5 additionally require that an unrelated opener on the holder's own thread (an asyncio coroutine, or a pool worker) gets `RootBusy`.
@@ -189,7 +189,7 @@ Any other rebase difference needs the reviewer re-review (item 8).
 
    The guard is a Python AST comparison of the four files against the base commit (see "Guard" below). On the rebased prototype it reports 95 functions `same` (6 of them with the body rewritten by design, decorators checked), the `rel3_probe_busy.py` block `same` outside L/M, 3 additions `pinned`, both files `identical`, 14 item 13 pins matching, and `OK: 0 difference(s)`. The mutation table under Prototype shows what it catches.
 5. **No skips:** `grep -c "pytest.mark.skip(" tests/unit/graph/test_rel3_probe.py` returns 0 (main has 6), and `pytest tests/unit/graph/test_rel3_probe.py` reports 0 skipped. The conditional `skipif` decorators stay.
-6. **No `src/` diff:** `git diff origin/main -- src/` is empty. Any `src/` change in b2 needs a reviewer ruling first.
+6. **No `src/` diff:** `git diff origin/main -- src/` is empty. Any `src/` change in b2 needs a maintainer decision first.
 7. **Gates:**
    - the `ruff check contracts/ src/ scripts/ tests/ conftest.py` CI step is clean;
    - `python3 scripts/mypy_ratchet.py` holds at 197 errors;

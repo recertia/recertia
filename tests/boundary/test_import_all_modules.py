@@ -47,7 +47,7 @@ def _cold(code: str, *, cwd: Path) -> subprocess.CompletedProcess[str]:
 
 
 def test_import_workers_on_a_cold_interpreter(tmp_path: Path) -> None:
-    """Bug 12: ``import recertia.workers`` used to raise a circular ImportError."""
+    """Regression: ``import recertia.workers`` used to raise a circular ImportError."""
 
     proc = _cold("import recertia.workers; print(recertia.workers.AsyncRunWorker)", cwd=tmp_path)
     assert proc.returncode == 0, proc.stderr or proc.stdout

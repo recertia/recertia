@@ -2,7 +2,7 @@ name: heldout-operator
 
 # REC-022. Operator-only, reproducible run of the PRIVATE held-out split.
 # The public split under evals/golden/ stays the CI gate (ci.yml). This is not a required check.
-# Design: the access-storage proposal (§3-§5), the manifest spec and the review decisions
+# Design: the access-storage proposal (§3-§5), the manifest spec and the design decisions
 # (golden executor only with no model key, container backend only, container preflight,
 # plan-node guard).
 #

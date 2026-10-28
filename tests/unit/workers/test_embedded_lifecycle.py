@@ -1,4 +1,4 @@
-"""REC-029: EmbeddedQueueWorker start/stop transitions (review nits on #106).
+"""REC-029: EmbeddedQueueWorker start/stop transitions.
 
 ensure_started() while stop() is still waiting for an in-flight item must
 not strand later work, and must not leave two threads polling.
