@@ -66,6 +66,8 @@ class OperationLedger:
         self._lease_db = Path(lease_db) if lease_db is not None else self._db_path
         self._tenant_id = tenant_id
         self._lock = threading.Lock()
+        # Kept for constructor compatibility. Live in-process owners are never
+        # reclaimed by this timer (F7); abandoned pending rows are reclaimed immediately.
         self._pending_timeout_s = pending_timeout_s
         self._pending_poll_s = pending_poll_s
         self._live_claims: dict[OpKey, _LiveClaim] = {}
@@ -79,7 +81,268 @@ class OperationLedger:
     def close(self) -> None:
         self._conn.close()
 
-    # ... (other methods unchanged for this edit)
+    def get(
+        self,
+        run_id: str,
+        attempt_no: int,
+        node: str,
+        op_seq: int,
+        *,
+        incarnation: int = 1,
+    ) -> tuple[bool, object]:
+        """Returns ``(already_applied, result)``. ``result`` is ``None`` when not applied.
+
+        A crash-left ``__pending__`` sentinel is treated as not applied so resume can retry.
+        """
+
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT result_json FROM operations "
+                "WHERE run_id=? AND incarnation=? AND attempt_no=? AND node=? AND op_seq=?",
+                (run_id, incarnation, attempt_no, node, op_seq),
+            ).fetchone()
+        if row is None:
+            return False, None
+        result = json.loads(row[0])
+        if _is_pending(result):
+            return False, None
+        return True, result
+
+    def put(
+        self,
+        run_id: str,
+        attempt_no: int,
+        node: str,
+        op_seq: int,
+        result: object,
+        *,
+        incarnation: int = 1,
+    ) -> None:
+        if _is_pending(result):
+            raise ValueError("refusing to persist pending sentinel as a durable result")
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO operations "
+                    "(run_id, incarnation, attempt_no, node, op_seq, result_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (run_id, incarnation, attempt_no, node, op_seq, json.dumps(result)),
+                )
+                self._conn.commit()
+            except sqlite3.IntegrityError as exc:
+                self._conn.rollback()
+                raise OperationConflict(
+                    f"operation ({run_id!r}, incarnation={incarnation}, attempt_no={attempt_no}, "
+                    f"node={node!r}, op_seq={op_seq}) already exists"
+                ) from exc
+
+    def run_once(
+        self,
+        run_id: str,
+        attempt_no: int,
+        node: str,
+        op_seq: int,
+        fn: Callable[[], T],
+        *,
+        fencing_token: int | None = None,
+        incarnation: int = 1,
+    ) -> T:
+        """Execute ``fn`` only if ``(run_id, incarnation, attempt_no, node, op_seq)`` has not already run.
+
+        ``fn``'s return value MUST be JSON-serialisable — it is the durable record that lets a
+        resumed run skip re-executing the side effect.
+
+        Concurrent waiters block while a claim is ``__pending__`` and this process still has a
+        live holder. There is no timer reclaim of a live in-process owner (F7). A crash-left
+        pending row with no live holder is reclaimed immediately so resume can retry
+        (at-least-once). Callers that observe a durable pending via ``get`` see it as not
+        applied.
+        """
+
+        key: OpKey = (run_id, incarnation, attempt_no, node, op_seq)
+        wait_deadline = time.monotonic() + max(30.0, float(self._pending_timeout_s) * 6.0)
+        while True:
+            claimed = False
+            wait_for: threading.Event | None = None
+            with self._lock:
+                self._prepare_lease_attach(fencing_token)
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._require_fence(run_id, fencing_token)
+                    row = self._conn.execute(
+                        "SELECT result_json FROM operations "
+                        "WHERE run_id=? AND incarnation=? AND attempt_no=? AND node=? AND op_seq=?",
+                        (run_id, incarnation, attempt_no, node, op_seq),
+                    ).fetchone()
+                    if row is not None:
+                        stored = json.loads(row[0])
+                        if not _is_pending(stored):
+                            self._conn.execute("COMMIT")
+                            return stored  # type: ignore[no-any-return]
+                        live = self._live_wait_event(key)
+                        if live is not None:
+                            wait_for = live
+                            self._conn.execute("COMMIT")
+                        else:
+                            self._conn.execute(
+                                "UPDATE operations SET result_json=? "
+                                "WHERE run_id=? AND incarnation=? AND attempt_no=? "
+                                "AND node=? AND op_seq=?",
+                                (
+                                    json.dumps(_PENDING_SENTINEL),
+                                    run_id,
+                                    incarnation,
+                                    attempt_no,
+                                    node,
+                                    op_seq,
+                                ),
+                            )
+                            self._conn.execute("COMMIT")
+                            self._install_claim(key)
+                            claimed = True
+                    else:
+                        self._conn.execute(
+                            "INSERT INTO operations "
+                            "(run_id, incarnation, attempt_no, node, op_seq, result_json) "
+                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            (
+                                run_id,
+                                incarnation,
+                                attempt_no,
+                                node,
+                                op_seq,
+                                json.dumps(_PENDING_SENTINEL),
+                            ),
+                        )
+                        self._conn.execute("COMMIT")
+                        self._install_claim(key)
+                        claimed = True
+                except Exception:
+                    self._conn.execute("ROLLBACK")
+                    raise
+
+            if claimed:
+                break
+            if time.monotonic() >= wait_deadline:
+                # Safety valve: a waiter must not spin forever if a live claim
+                # record is stale. Drop the claim and reclaim on the next pass.
+                with self._lock:
+                    stale = self._live_claims.pop(key, None)
+                    if stale is not None:
+                        stale.done.set()
+                wait_deadline = time.monotonic() + max(30.0, float(self._pending_timeout_s) * 6.0)
+                continue
+            if wait_for is not None:
+                wait_for.wait(timeout=self._pending_poll_s)
+            else:
+                time.sleep(self._pending_poll_s)
+
+        try:
+            result = fn()
+            if _is_pending(result):
+                raise ValueError("operation fn must not return the pending sentinel")
+            with self._lock:
+                self._prepare_lease_attach(fencing_token)
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._require_fence(run_id, fencing_token)
+                    self._conn.execute(
+                        "UPDATE operations SET result_json=?, fencing_token=? "
+                        "WHERE run_id=? AND incarnation=? AND attempt_no=? AND node=? AND op_seq=?",
+                        (
+                            json.dumps(result),
+                            fencing_token,
+                            run_id,
+                            incarnation,
+                            attempt_no,
+                            node,
+                            op_seq,
+                        ),
+                    )
+                    self._conn.execute("COMMIT")
+                    self._release_claim(key)
+                except Exception:
+                    self._conn.execute("ROLLBACK")
+                    raise
+            return result
+        except Exception:
+            with self._lock:
+                self._conn.execute(
+                    "DELETE FROM operations "
+                    "WHERE run_id=? AND incarnation=? AND attempt_no=? AND node=? "
+                    "AND op_seq=? AND result_json=?",
+                    (
+                        run_id,
+                        incarnation,
+                        attempt_no,
+                        node,
+                        op_seq,
+                        json.dumps(_PENDING_SENTINEL),
+                    ),
+                )
+                self._conn.commit()
+                self._release_claim(key)
+            raise
+
+    def count_for_node(
+        self, run_id: str, attempt_no: int, node: str, *, incarnation: int = 1
+    ) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM operations WHERE run_id=? AND incarnation=? "
+                "AND attempt_no=? AND node=? AND result_json != ?",
+                (run_id, incarnation, attempt_no, node, json.dumps(_PENDING_SENTINEL)),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def _prepare_lease_attach(self, fencing_token: int | None) -> None:
+        del fencing_token
+        from recertia.graph.lease import attach_lease_schema, lease_paths_equal
+
+        if not self._lease_db.exists():
+            return
+        if lease_paths_equal(self._lease_db, self._db_path):
+            return
+        attach_lease_schema(self._conn, self._lease_db)
+
+    def _require_fence(self, run_id: str, fencing_token: int | None) -> None:
+        from recertia.graph.lease import require_lease_token
+
+        missing_row: Literal["reject", "allow"] = (
+            "allow" if fencing_token is None else "reject"
+        )
+        require_lease_token(
+            self._lease_db,
+            tenant_id=self._tenant_id,
+            run_id=run_id,
+            fencing_token=fencing_token,
+            conn=self._conn if self._lease_db.exists() else None,
+            missing_row=missing_row,
+        )
+
+    def _live_wait_event(self, key: OpKey) -> threading.Event | None:
+        """Return the wait event for a live in-process holder, or ``None`` to reclaim."""
+
+        claim = self._live_claims.get(key)
+        if claim is None:
+            return None
+        if claim.done.is_set() or not claim.owner.is_alive():
+            self._live_claims.pop(key, None)
+            claim.done.set()
+            return None
+        return claim.done
+
+    def _install_claim(self, key: OpKey) -> None:
+        stale = self._live_claims.pop(key, None)
+        if stale is not None:
+            stale.done.set()
+        self._live_claims[key] = _LiveClaim()
+
+    def _release_claim(self, key: OpKey) -> None:
+        claim = self._live_claims.pop(key, None)
+        if claim is not None:
+            claim.done.set()
+
 
 _OPERATIONS_DDL = """
 CREATE TABLE operations (
@@ -99,8 +362,11 @@ def _init_operations_table(conn: sqlite3.Connection, db_path: Path) -> None:
     """Create or rebuild ``operations`` so incarnation is in the primary key.
 
     The rebuild is exclusive under the runtime root lock and runs in one SQLite
-    transaction. Bounded wait: RECERTIA_IMPORT_LOCK_TIMEOUT_S (default 5s).
-    Raises typed RootBusy if the lock cannot be taken; nothing is written.
+    transaction (``isolation_level=None`` so Python 3.11 does not autocommit DDL).
+    A crash that left ``operations_rel3`` is dropped and retried.
+
+    Bounded wait: ``RECERTIA_IMPORT_LOCK_TIMEOUT_S`` (default 5s). Raises typed
+    ``RootBusy`` if the lock cannot be taken; nothing is written while refused.
     """
 
     if _operations_schema_ready(conn):
@@ -120,6 +386,12 @@ def _init_operations_table(conn: sqlite3.Connection, db_path: Path) -> None:
 
 
 def ensure_operations_schema(conn: sqlite3.Connection) -> None:
+    """Rebuild ``operations`` if needed without taking the root lock.
+
+    Used when the caller already holds the lock, or must open ``runtime.db``
+    while another holder has it (busy lock must not fall back to legacy files).
+    """
+
     if not _operations_schema_ready(conn):
         _rebuild_operations_table(conn)
 
@@ -153,9 +425,11 @@ def _rebuild_operations_table(conn: sqlite3.Connection) -> None:
         try:
             names = _table_names(conn)
             if "operations_rel3" in names and "operations" not in names:
+                # Crash after DROP operations, before RENAME: finish the rename.
                 conn.execute("ALTER TABLE operations_rel3 RENAME TO operations")
                 names = _table_names(conn)
             elif "operations_rel3" in names:
+                # Crash after CREATE operations_rel3 while `operations` still holds rows.
                 conn.execute("DROP TABLE operations_rel3")
                 names = _table_names(conn)
             if "operations" not in names:
