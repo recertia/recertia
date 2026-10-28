@@ -130,7 +130,6 @@ class RunEventLog:
                         event = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    eid = event.get("event_id", "")
                     yield f"id: {offset}\nevent: {event.get('type','')}\ndata: {json.dumps(event)}\n\n"
             # Terminal check: last event type ends the follow.
             if path.is_file():
