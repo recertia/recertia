@@ -186,7 +186,9 @@ def register_runs_routes(app: FastAPI, rs: RouteState) -> None:
         request: Request,
         principal=Depends(require_runs),
         after: str | None = None,
+        follow: int | None = None,
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
+        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     ) -> StreamingResponse:
         run_id = ctx.validate_run_id(run_id)
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
@@ -194,7 +196,14 @@ def register_runs_routes(app: FastAPI, rs: RouteState) -> None:
             raise HTTPException(status_code=404, detail="run not found")
 
         def gen() -> Any:
-            yield from ctx.events.iter_sse(tenant_id, run_id, after=after)
+            if follow:
+                try:
+                    offset = int(last_event_id) if last_event_id else 0
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="invalid Last-Event-ID")
+                yield from ctx.events.follow(tenant_id, run_id, after_offset=offset)
+            else:
+                yield from ctx.events.iter_sse(tenant_id, run_id, after=after)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 

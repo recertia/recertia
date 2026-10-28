@@ -87,3 +87,54 @@ class RunEventLog:
             yield f"id: {event['event_id']}\nevent: {event['type']}\ndata: {json.dumps(event)}\n\n"
         if last_id:
             yield f": cursor {last_id}\n\n"
+
+
+    def follow(
+        self,
+        tenant_id: str,
+        run_id: str,
+        *,
+        after_offset: int = 0,
+        max_seconds: float = 30.0,
+        poll_s: float = 0.25,
+    ) -> Iterator[str]:
+        """Yield SSE from ``after_offset`` then newly appended events (REC-056g).
+
+        ``after_offset`` is a byte offset into the event log. A mid-line offset
+        is advanced to the next newline so a fragment is never parsed.
+        Stops when the run is terminal or ``max_seconds`` elapses.
+        """
+        import time
+
+        path = self._path(tenant_id, run_id)
+        if not path.is_file():
+            return
+        deadline = time.monotonic() + max_seconds
+        offset = max(0, after_offset)
+        # Advance a mid-line offset to the next newline.
+        data = path.read_bytes()
+        if offset > len(data):
+            offset = len(data)
+        elif offset > 0 and data[offset - 1:offset] != b"\n":
+            nl = data.find(b"\n", offset)
+            offset = nl + 1 if nl != -1 else len(data)
+        while time.monotonic() < deadline:
+            data = path.read_bytes()
+            if offset < len(data):
+                chunk = data[offset:]
+                offset = len(data)
+                for line in chunk.splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    eid = event.get("event_id", "")
+                    yield f"id: {offset}\nevent: {event.get('type','')}\ndata: {json.dumps(event)}\n\n"
+            # Terminal check: last event type ends the follow.
+            if path.is_file():
+                tail = path.read_bytes()[-200:]
+                if b'"type": "terminal"' in tail or b'"terminal"' in tail:
+                    break
+            time.sleep(poll_s)
