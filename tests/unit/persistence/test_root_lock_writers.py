@@ -1,12 +1,13 @@
 """REC-058 (#144): writers on a runtime root honour backup/restore's exclusive root lock.
 
 Kept out of ``test_import_legacy.py`` so that file stays byte-identical to the
-ADR-0022 baseline (N3 guard).
+ADR-0022 baseline.
 """
 
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import tarfile
 import threading
@@ -245,7 +246,7 @@ def test_two_handles_on_an_imported_root_are_open_together(tmp_path: Path) -> No
         first.close()
 
 
-# --- MF1: worker handles lock the runtime root that backup/restore lock ---
+# --- worker handles lock the runtime root that backup/restore lock ---
 
 
 def _worker_claim(run_id: str) -> object:
@@ -360,7 +361,7 @@ def test_async_worker_run_is_refused_while_backup_holds_root_lock(
         opened.close()
 
 
-# --- MF2: leftover files that a restore brings back while an open waits ---
+# --- leftover files that a restore brings back while an open waits ---
 
 
 def _pending_root(root: Path, run_id: str) -> None:
@@ -451,7 +452,7 @@ def test_open_racing_restore_does_not_lose_a_leftover_seq(
     assert (seen, history) == (2, [(1, "n1"), (2, "n2")])
 
 
-# --- MF3 / S3: the handle's lock is not leaked on a failure ---
+# --- the handle's lock is not leaked on a failure ---
 
 
 def test_orchestrator_wiring_failure_releases_root_lock(
@@ -516,7 +517,7 @@ def test_lock_released_when_close_raises(tmp_path: Path) -> None:
     assert _backup_locks_free(root)
 
 
-# --- MF5: ruling condition (4); REC-065 (#158) lifted the cross-tenant RootBusy ---
+# --- REC-065 (#158) lifted the cross-tenant RootBusy ---
 
 
 def test_cross_tenant_pending_import_proceeds_while_other_tenant_handle_open(
@@ -561,7 +562,7 @@ def test_cross_tenant_pending_import_proceeds_while_other_tenant_handle_open(
         pa.close()
 
 
-# --- MF-A (round 3): API-process run handles lock <root>/.lock like workers ---
+# --- API-process run handles lock <root>/.lock like workers ---
 
 
 def _tenant_pending(root: Path, tenant: str, run_id: str) -> Path:
@@ -694,7 +695,7 @@ def test_api_reader_import_is_root_busy_while_worker_imports_same_tenant(
 def test_concurrent_api_and_worker_imports_on_one_tenant_exclude_each_other(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Both start at once. Before MF-A both entered the import, and one could raise
+    """Both start at once. Before the fix both entered the import, and one could raise
     ``sqlite3.IntegrityError`` (schema_migrations.version). Now one imports and the
     other gets typed ``RootBusy`` or finds the import done."""
 
@@ -757,7 +758,7 @@ def test_api_transcript_route_takes_the_runtime_root_lock(
     _assert_imported_once(root, tdir)
 
 
-# --- MF-B (round 3): migrate=off re-checks its decision under the lock ---
+# --- migrate=off re-checks its decision under the lock ---
 
 
 def _start_slow_restore_of(archive: Path, target: Path, monkeypatch: pytest.MonkeyPatch) -> threading.Thread:
@@ -783,9 +784,12 @@ def test_migrate_off_open_racing_post_import_restore_does_not_lose_a_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target_kind: str
 ) -> None:
     """An off-mode open decides "leftover files", then waits while a restore brings back
-    an imported runtime.db. Before MF-B it wrote seq 3 to the leftover checkpoints.db,
+    an imported runtime.db. Before the fix it wrote seq 3 to the leftover checkpoints.db,
     which every later open ignores, so seq 3 was lost."""
 
+    # The restore holds the root lock for at least 0.5 s (the slow extract), the open waits
+    # at most 0.25 s, so the open is always refused with the "root lock is held" message.
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
     src = tmp_path / "src"
     _pending_root(src, "r")
     open_run_persistence(src).close()  # imported; leftover files kept for rollback
@@ -802,11 +806,7 @@ def test_migrate_off_open_racing_post_import_restore_does_not_lose_a_write(
         try:
             p = open_run_persistence(target, migrate="off")  # decided before the restore
         except RootBusy as exc:
-            msg = str(exc)
-            assert (
-                "imported while waiting for the root lock" in msg
-                or "cannot open the runtime root while the root lock is held" in msg
-            ), msg
+            assert "cannot open the runtime root while the root lock is held" in str(exc), exc
             restore.join(_JOIN_BOUND_S)
             p = open_run_persistence(target, migrate="off")  # the caller's retry
     finally:
@@ -850,7 +850,7 @@ def test_migrate_off_open_refused_by_recheck_leaves_the_lock_free(
     assert _backup_locks_free(root)
 
 
-# --- MF-C (round 3): a RootBusy claim is re-queued, not failed ---
+# --- a RootBusy claim is re-queued, not failed ---
 
 
 def _enqueue(root: Path, tenant: str, run_id: str, payload: dict[str, object]) -> None:
@@ -914,7 +914,7 @@ def _hold_root(root: Path, holder: str) -> object:
 def test_queue_worker_requeues_a_root_busy_claim_without_spending_an_attempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holder: str
 ) -> None:
-    """``recertia worker`` (serve.run_once): RootBusy is retryable (ruling condition 1).
+    """``recertia worker`` (serve.run_once): RootBusy is retryable.
 
     Tenant-b has a pending leftover import. With ``same_tenant_import`` another import
     of tenant-b holds its tenant lock, so this one is refused. (Until REC-065 the holder
@@ -1030,7 +1030,7 @@ def test_embedded_worker_requeues_a_root_busy_claim_while_the_same_tenant_import
 def test_embedded_worker_requeues_a_root_busy_raised_mid_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str
 ) -> None:
-    """REC-058 S-2: ``RootBusy`` raised during ``start``/``resume``, after the orchestrator
+    """REC-058: ``RootBusy`` raised during ``start``/``resume``, after the orchestrator
     was built, is retryable too. ``AsyncRunWorker._run`` records ``root_busy`` and
     re-raises, and the embedded queue worker re-queues the claim. Without that ``except``
     the error fell into ``run_failed`` (mutant C3), and no other test noticed."""
@@ -1084,7 +1084,7 @@ def test_embedded_worker_requeues_a_root_busy_raised_mid_run(
 def test_root_busy_requeue_backs_off_for_root_busy_retry_s(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str
 ) -> None:
-    """REC-058 S-3: a refused claim is due again exactly ``ROOT_BUSY_RETRY_S`` (2 s) after
+    """REC-058: a refused claim is due again exactly ``ROOT_BUSY_RETRY_S`` (2 s) after
     the refusal, and a worker that polls inside that window claims nothing. The older
     checks (``due > started``, a second ``run_once`` returns 0) also held with no back-off,
     because the item was re-claimed, refused again and re-queued (mutant C6)."""
@@ -1134,7 +1134,7 @@ def test_root_busy_requeue_backs_off_for_root_busy_retry_s(
         release()  # type: ignore[operator]
 
 
-# --- MF-D (round 3): backup/restore leave the root's own lock files alone ---
+# --- backup/restore leave the root's own lock files alone ---
 
 
 def test_backup_leaves_out_the_root_lock_files(tmp_path: Path) -> None:
@@ -1161,8 +1161,6 @@ def test_restore_does_not_extract_root_lock_files_from_an_older_archive(tmp_path
     """An archive written before this change has ``.lock`` / ``api.lock`` members;
     restore must not write over the files it is holding locked."""
 
-    import io
-
     src = _imported_root(tmp_path)
     archive = tmp_path / "old.tar.gz"
     backup_tree(src, archive)
@@ -1187,7 +1185,7 @@ def test_restore_does_not_extract_root_lock_files_from_an_older_archive(tmp_path
         opened.close()
 
 
-# --- S-d (round 3): a KeyboardInterrupt during wiring still releases the lock ---
+# --- a KeyboardInterrupt during wiring still releases the lock ---
 
 
 def test_keyboard_interrupt_in_orchestrator_wiring_releases_root_lock(
@@ -1450,7 +1448,7 @@ def test_tenant_lock_refused_on_the_tenant_lock_holds_nothing(
     layout.runs_root.mkdir(parents=True)
     first = TenantLock(RuntimeLayout(root).root_lock, layout.tenant_lock)
     first.acquire(exclusive=True, timeout_s=0)
-    # #169 N-1 for TenantLock: a refused acquire closes the fds it opened at the OS level
+    # #169, for TenantLock: a refused acquire closes the fds it opened at the OS level
     # (``_fd is None`` also holds when an fd leaks). Checked right after each refusal,
     # before a later open can reuse the fd number on the same file.
     opened = _record_lock_fds(monkeypatch)
@@ -1491,8 +1489,6 @@ def test_tenant_lock_refused_on_the_tenant_lock_holds_nothing(
 def test_backup_leaves_out_tenant_lock_files_and_restore_skips_them(tmp_path: Path) -> None:
     """``.tenant.lock`` files are locks only, like ``.lock``: not archived, not restored."""
 
-    import io
-
     root = tmp_path / "rt"
     tdir = _tenant_pending(root, "tenant-a", "r")
     _worker_shaped_open(root, tdir)
@@ -1517,7 +1513,7 @@ def test_backup_leaves_out_tenant_lock_files_and_restore_skips_them(tmp_path: Pa
     _assert_imported_once(target, target / "runs" / "tenant-a")
 
 
-# --- REC-058 follow-up to #169, carrying the review of #170 (SF-1, NIT-2) ---
+# --- REC-071: follow-ups from the review of #170 ---
 
 
 def _record_lock_fds(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, os.stat_result]]:
@@ -1547,7 +1543,7 @@ def _still_open(fd: int, opened_on: os.stat_result) -> bool:
 
 @pytest.mark.parametrize("exclusive", [True, False])
 def test_root_lock_tenant_lock_one_deadline_covers_both_waits(tmp_path: Path, exclusive: bool) -> None:
-    """SF-1: ``TenantLock.acquire(timeout_s=T)`` waits at most ``T`` in total. The root
+    """``TenantLock.acquire(timeout_s=T)`` waits at most ``T`` in total. The root
     lock is held exclusive for most of ``T`` (backup, released by a timer) and the tenant
     lock is held throughout, so the tenant wait gets only what is left of ``T``. With a
     fresh ``T`` for the tenant wait (mutant M7) the call takes about ``T`` + the root wait."""
@@ -1588,7 +1584,7 @@ def test_root_lock_tenant_lock_one_deadline_covers_both_waits(tmp_path: Path, ex
     ],
 )
 def test_root_lock_backup_keeps_a_tenant_lock_name_outside_a_runs_root(tmp_path: Path, rel: str) -> None:
-    """NIT-2: only a runs root's ``.tenant.lock`` is a lock file. A file of that name
+    """Only a runs root's ``.tenant.lock`` is a lock file. A file of that name
     anywhere else is user content: backup archives it and restore brings it back."""
 
     root = tmp_path / "rt"
@@ -1606,3 +1602,58 @@ def test_root_lock_backup_keeps_a_tenant_lock_name_outside_a_runs_root(tmp_path:
     target = tmp_path / "target"
     restore_tree(archive, target)
     assert (target / rel).read_bytes() == b"user content"
+
+
+# --- REC-072: follow-ups from the review of #177 ---
+
+
+_TENANT_LOCK_POSITIONS = {
+    "cli-layout-root": lambda layout: layout.local_runs().tenant_lock,
+    "cli-layout-jobs": lambda layout: layout.local_runs().jobs().tenant_lock,
+    "tenant-runs-root": lambda layout: layout.tenant("tenant-a").tenant_lock,
+    "tenant-jobs": lambda layout: layout.tenant("tenant-a").jobs().tenant_lock,
+}
+
+
+@pytest.mark.parametrize("position", sorted(_TENANT_LOCK_POSITIONS))
+def test_root_lock_backup_and_restore_skip_every_runs_root_tenant_lock(tmp_path: Path, position: str) -> None:
+    """Each of the four runs-root positions of ``.tenant.lock`` is a lock file: backup does
+    not archive it, and restore extracts neither a ``/`` nor a ``\\`` crafted member there.
+
+    The runtime root itself (CLI layout) and ``runs/<t>`` are runs roots, each with a
+    ``jobs`` runs root under it."""
+
+    root = tmp_path / "rt"
+    tdir = _tenant_pending(root, "tenant-a", "r")
+    _worker_shaped_open(root, tdir)
+    lock_path = _TENANT_LOCK_POSITIONS[position](RuntimeLayout(root))
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.touch()
+    rel = lock_path.relative_to(root).as_posix()
+    assert rel in {
+        ".tenant.lock",
+        "jobs/.tenant.lock",
+        "runs/tenant-a/.tenant.lock",
+        "runs/tenant-a/jobs/.tenant.lock",
+    }
+
+    archive = tmp_path / "b.tar.gz"
+    backup_tree(root, archive)
+    with tarfile.open(archive) as tar:
+        names = set(tar.getnames())
+    assert rel not in names, sorted(names)
+    assert "runs/tenant-a/runtime.db" in names  # the backup itself happened
+
+    crafted_body = b"crafted lock content"
+    for index, name in enumerate((rel, rel.replace("/", "\\"))):
+        crafted = tmp_path / "crafted.tar.gz"
+        with tarfile.open(archive) as old, tarfile.open(crafted, "w:gz") as new:
+            for member in old.getmembers():
+                new.addfile(member, old.extractfile(member) if member.isfile() else None)
+            info = tarfile.TarInfo(name)
+            info.size = len(crafted_body)
+            new.addfile(info, io.BytesIO(crafted_body))
+        target = tmp_path / f"target-{index}"
+        restore_tree(crafted, target)
+        written = [p for p in target.rglob("*") if p.is_file() and p.read_bytes() == crafted_body]
+        assert written == [], (name, written)

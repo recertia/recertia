@@ -1,8 +1,8 @@
-"""REC-029: EmbeddedQueueWorker start/stop transitions (CTO-rec nits N1, N2 on #106).
+"""REC-029: EmbeddedQueueWorker start/stop transitions.
 
-N1: ensure_started() while stop() is still waiting for an in-flight item must
+ensure_started() while stop() is still waiting for an in-flight item must
 not strand later work, and must not leave two threads polling.
-N2: stop() reports a join timeout.
+stop() reports a join timeout.
 
 Interleavings are forced with events, not sleeps: the in-flight item blocks
 on ``release`` until the test lets it finish.
@@ -93,7 +93,7 @@ def _new_queue_threads(before: set[threading.Thread]) -> list[threading.Thread]:
     return [t for t in threading.enumerate() if t.name == "recertia-queue" and t not in before]
 
 
-def test_n1_ensure_started_during_stop_does_not_strand_work(rig: Any) -> None:
+def test_ensure_started_during_stop_does_not_strand_work(rig: Any) -> None:
     rig.queue.set_max_in_flight("t1", 4)
     _enqueue(rig.queue, "gate")
     rig.embedded.ensure_started()
@@ -115,7 +115,7 @@ def test_n1_ensure_started_during_stop_does_not_strand_work(rig: Any) -> None:
     assert len(_new_queue_threads(rig.before)) == 1
 
 
-def test_n1_repeated_ensure_started_during_stop_starts_one_thread(rig: Any) -> None:
+def test_repeated_ensure_started_during_stop_starts_one_thread(rig: Any) -> None:
     rig.queue.set_max_in_flight("t1", 4)
     _enqueue(rig.queue, "gate")
     rig.embedded.ensure_started()
@@ -134,7 +134,7 @@ def test_n1_repeated_ensure_started_during_stop_starts_one_thread(rig: Any) -> N
     assert len(_new_queue_threads(rig.before)) == 1
 
 
-def test_n1_stop_after_ensure_started_wins(rig: Any) -> None:
+def test_stop_after_ensure_started_wins(rig: Any) -> None:
     """stop() → ensure_started() → stop(): the last call wins, nothing keeps polling."""
 
     _enqueue(rig.queue, "gate")
@@ -150,7 +150,7 @@ def test_n1_stop_after_ensure_started_wins(rig: Any) -> None:
     assert _status(rig.queue, "after-final-stop") == "queued"
 
 
-def test_n2_stop_reports_join_timeout(rig: Any, caplog: pytest.LogCaptureFixture) -> None:
+def test_stop_reports_join_timeout(rig: Any, caplog: pytest.LogCaptureFixture) -> None:
     _enqueue(rig.queue, "gate")
     rig.embedded.ensure_started()
     assert rig.worker.entered.wait(5)
@@ -162,7 +162,7 @@ def test_n2_stop_reports_join_timeout(rig: Any, caplog: pytest.LogCaptureFixture
     assert _status(rig.queue, "gate") == "succeeded"  # in-flight item finished, not abandoned
 
 
-def test_n2_stop_returns_true_when_idle_or_never_started(rig: Any) -> None:
+def test_stop_returns_true_when_idle_or_never_started(rig: Any) -> None:
     assert rig.embedded.stop() is True
     rig.embedded.ensure_started()
     assert rig.embedded.is_running()
@@ -187,7 +187,7 @@ def test_stop_all_stops_every_live_instance(tmp_path: Path) -> None:
 
 
 def test_teardown_fails_when_a_queue_worker_does_not_stop(rig: Any) -> None:
-    """S2: the suite teardown fails the test instead of leaking the thread."""
+    """The suite teardown fails the test instead of leaking the thread."""
 
     from tests.conftest import stop_test_workers
 
@@ -202,7 +202,7 @@ def test_teardown_fails_when_a_queue_worker_does_not_stop(rig: Any) -> None:
 
 
 def test_teardown_joins_idle_async_pool_threads() -> None:
-    """S1: idle ``recertia-run`` pool threads are joined, not left for a later fork."""
+    """Idle ``recertia-run`` pool threads are joined, not left for a later fork."""
 
     from recertia.workers.run_worker import AsyncRunWorker
     from tests.conftest import stop_test_workers
@@ -221,7 +221,7 @@ class _NullEvents:
 
 
 def test_shutdown_all_is_bounded_when_a_run_hangs() -> None:
-    """F1: a hung run makes ``shutdown_all`` return False at its deadline, not block."""
+    """A hung run makes ``shutdown_all`` return False at its deadline, not block."""
 
     from recertia.workers.run_worker import AsyncRunWorker
 
@@ -253,7 +253,7 @@ def test_shutdown_all_is_bounded_when_a_run_hangs() -> None:
 
 
 def test_shutdown_prunes_the_registry_and_the_worker_is_reusable() -> None:
-    """F2: shut-down workers leave ``_instances``; a reused worker gets a new pool."""
+    """Shut-down workers leave ``_instances``; a reused worker gets a new pool."""
 
     from recertia.workers.run_worker import AsyncRunWorker
 
@@ -289,11 +289,11 @@ def test_shutdown_all_ignores_a_patched_time_monotonic(monkeypatch: pytest.Monke
 
 
 def test_teardown_stops_queue_workers_before_pools(monkeypatch: pytest.MonkeyPatch) -> None:
-    """CTO-rec S3: a queue worker's last submit must not leak a pool past teardown.
+    """A queue worker's last submit must not leak a pool past teardown.
 
     The stand-in ``stop_all`` submits a run, as a queue worker can while it
     stops. Queue first, then pools: ``shutdown_all`` closes the pool that
-    submit used. Pools first: the submit restarts a closed pool (F2) after
+    submit used. Pools first: the submit restarts a closed pool after
     ``shutdown_all`` ran, so a ``recertia-run`` thread and a registered worker
     outlive teardown.
     """

@@ -1,4 +1,4 @@
-"""REC-058 S2: the Windows lock path has a real shared mode (``LockFileEx``).
+"""REC-058: the Windows lock path has a real shared mode (``LockFileEx``).
 
 CI runs on Linux, so these tests drive ``root_lock``'s Windows branch with
 ``_IS_WINDOWS`` forced on and a fake ``kernel32`` that models Windows
@@ -138,7 +138,7 @@ def test_windows_blocking_call_keeps_a_bounded_retry(
     monkeypatch.setattr(root_lock, "_WIN_BLOCKING_RETRY_S", 0.2)
     holder.try_exclusive()
     started = time.monotonic()
-    # REC-058 S-1: the budget's OSError(EDEADLK) is typed busy (it was raised as is).
+    # REC-058: the budget's OSError(EDEADLK) is typed busy (it was raised as is).
     with pytest.raises(RootLockBusy) as info:
         waiter.acquire_shared()
     assert isinstance(info.value.__cause__, OSError)
@@ -151,7 +151,7 @@ def test_windows_blocking_call_keeps_a_bounded_retry(
 def test_windows_two_run_handles_share_a_root_and_backup_is_refused(
     tmp_path: Path, kernel32: FakeKernel32, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The S2 regression: a worker run plus an API read on one root (Windows API host)."""
+    """The regression: a worker run plus an API read on one root (Windows API host)."""
 
     monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
     root = tmp_path / "runs"
@@ -175,7 +175,7 @@ def test_windows_two_run_handles_share_a_root_and_backup_is_refused(
     assert kernel32.held == {}
 
 
-# --- round 3: busy mapping, no _win_prepare, UnlockFileEx result ---
+# --- busy mapping, no _win_prepare, UnlockFileEx result ---
 
 
 def _oserror(code: int, winerror: int | None = None) -> OSError:
@@ -293,7 +293,7 @@ def test_windows_unlock_failure_is_reported_and_the_handle_still_closes(
         os.fstat(fd)  # closed, so the OS drops the lock with the handle
 
 
-# --- round 4 (S-1, refs #153): the blocking migrate=off wait ends in typed RootBusy ---
+# --- refs #153: the blocking migrate=off wait ends in typed RootBusy ---
 
 
 def _state(run_id: str) -> RunState:
@@ -403,7 +403,7 @@ def test_windows_tenants_on_one_root_lock_apart_and_backup_is_refused(
     api_lock.release()
 
 
-# --- review of #169: N-1 the refused fd is closed, N-3 non-busy errors ---
+# --- review of #169: the refused fd is closed, non-busy errors ---
 
 
 def _record_lock_fds(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, os.stat_result]]:
@@ -431,10 +431,32 @@ def _still_open(fd: int, opened_on: os.stat_result) -> bool:
     return os.path.samestat(now, opened_on)
 
 
+class _SteppedClock:
+    """Stand-in for ``root_lock.time``: the clock moves only when the code sleeps.
+
+    The bounded lock wait polls with ``time.sleep``, so against the real clock the number
+    of polls depends on scheduler and timer granularity. With this clock it is exact. The
+    tick is a power of two, so the arithmetic below is exact in binary floating point.
+    """
+
+    tick_s = 0.0625
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += self.tick_s
+
+
 def test_root_lock_windows_blocking_typed_busy_closes_the_lock_fd(
     tmp_path: Path, kernel32: FakeKernel32, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """N-1: when the blocking ``acquire_shared`` runs out of its ``LockFileEx`` budget and
+    """When the blocking ``acquire_shared`` runs out of its ``LockFileEx`` budget and
     raises typed ``RootLockBusy``, the fd it opened is closed, not leaked."""
 
     monkeypatch.setattr(root_lock, "_WIN_BLOCKING_RETRY_S", 0.1)
@@ -456,7 +478,7 @@ def test_root_lock_windows_blocking_typed_busy_closes_the_lock_fd(
 def test_root_lock_windows_migrate_off_root_busy_closes_the_lock_fd(
     tmp_path: Path, kernel32: FakeKernel32, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """N-1 through ``open_run_persistence``: the ``migrate=off`` wait that ends in typed
+    """Through ``open_run_persistence``: the ``migrate=off`` wait that ends in typed
     ``RootBusy`` closes the root-lock fd it opened, so a worker that re-queues the claim
     does not leak one handle per refused attempt."""
 
@@ -471,14 +493,23 @@ def test_root_lock_windows_migrate_off_root_busy_closes_the_lock_fd(
     holder = RootLock(lock_path)
     holder.try_exclusive()
     opened = _record_lock_fds(monkeypatch)
+    # A 0.25 s wait on a 1/16 s tick polls at 0, 1/16, 2/16, 3/16 and 4/16 s: 5 opens
+    # (each one refused and closed) per refused attempt, so 15 for 3 attempts.
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
+    clock = _SteppedClock()
+    monkeypatch.setattr(root_lock, "time", clock)
+    attempts = 3
+    opens_per_attempt = 5
     try:
-        for _attempt in range(3):
+        for _attempt in range(attempts):
             with pytest.raises(RootBusy):
                 open_run_persistence(root, migrate="off")
     finally:
         holder.release()
-    # Bounded timeout retries many times; just confirm every opened fd is closed.
-    assert len(opened) >= 3
+    assert len(opened) == attempts * opens_per_attempt
+    # The stepped clock ignores how long each sleep asks for, so pin the poll interval here:
+    # 4 sleeps (one between each pair of polls) per attempt, every one of 10 ms.
+    assert clock.sleeps == [0.01] * (attempts * (opens_per_attempt - 1))
     assert all(os.path.samestat(st, os.stat(lock_path)) for _fd, st in opened)
     assert [fd for fd, st in opened if _still_open(fd, st)] == []
     assert kernel32.held == {}
@@ -509,7 +540,7 @@ def test_root_lock_windows_error_other_than_33_is_oserror_not_busy(
     call: str,
     winerror: int,
 ) -> None:
-    """N-3: a ``LockFileEx`` error other than ``ERROR_LOCK_VIOLATION`` (33) whose errno is
+    """A ``LockFileEx`` error other than ``ERROR_LOCK_VIOLATION`` (33) whose errno is
     not ``EACCES`` / ``EDEADLOCK`` propagates as ``OSError`` with its ``winerror`` on every
     entry point, including the blocking typed path; it is never ``RootLockBusy``. The fd
     is closed either way."""
@@ -539,7 +570,7 @@ def test_root_lock_windows_access_denied_with_busy_errno_is_oserror_not_busy(
     monkeypatch: pytest.MonkeyPatch,
     call: str,
 ) -> None:
-    """N-3, the case that tells winerror and errno apart: ``ERROR_ACCESS_DENIED`` (5)
+    """The case that tells winerror and errno apart: ``ERROR_ACCESS_DENIED`` (5)
     carries errno ``EACCES``, which is busy for an errno-only error. The ``winerror``
     decides, so every entry point, the blocking typed path included, raises that
     ``OSError`` once, never ``RootLockBusy``, and closes the fd. On Windows
@@ -579,7 +610,7 @@ def test_root_lock_windows_open_error_other_than_33_is_oserror_not_root_busy(
     monkeypatch: pytest.MonkeyPatch,
     migrate: Literal["off", "auto"],
 ) -> None:
-    """N-3 through ``open_run_persistence``: with ``migrate=off`` (pending leftover files,
+    """Through ``open_run_persistence``: with ``migrate=off`` (pending leftover files,
     the blocking wait) and with the bounded runtime-db wait, a non-busy ``LockFileEx``
     error is raised as that ``OSError``, not as ``RootBusy``, which a worker would
     re-queue forever instead of failing the claim with the real cause."""

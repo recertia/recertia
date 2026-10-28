@@ -15,9 +15,12 @@ class CheckpointReader:
     """Latest checkpoint, history, and AuditedTaskState. Does not write.
 
     The API reads ``<root>/runs/<tenant>`` and passes ``runtime_root=<root>``, so
-    the handle locks ``<root>/.lock`` like workers, backup and restore. Without it
-    the handle locks ``<root>/runs/<tenant>/.lock``, and a leftover import it runs
-    does not exclude a worker's import on the same tenant (REC-058).
+    the handle takes ``<root>/.lock`` shared, like workers, backup and restore, and
+    then its tenant lock ``<root>/runs/<tenant>/.tenant.lock`` shared. Without it the
+    handle locks ``<root>/runs/<tenant>/.lock`` instead, which backup and restore do
+    not take, so they do not exclude it. The tenant lock is the same file either way,
+    so a leftover import it runs still excludes a worker's import of the same tenant
+    (REC-065).
     """
 
     def latest(

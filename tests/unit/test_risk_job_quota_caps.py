@@ -58,7 +58,7 @@ def test_exhausted_cap_rejects_positive_tokens(job: str) -> None:
 
 @pytest.mark.parametrize("job", JOBS)
 def test_exhausted_cap_rejects_zero_token_admission(job: str) -> None:
-    """Bug 7 (CTO_REVIEW §4): tokens=0 must not bypass a fully spent weekly cap."""
+    """Regression: tokens=0 must not bypass a fully spent weekly cap."""
     q = JobQuota(weekly_token_cap=100, tokens_spent=100)
     assert q.can_admit(job) is False  # type: ignore[arg-type]
 

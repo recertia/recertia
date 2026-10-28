@@ -178,7 +178,7 @@ def open_run_persistence(
             # migrate=off decided "leftover files" before the lock. A restore that ran
             # meanwhile may have brought back an imported runtime.db, which every later
             # open treats as the source of truth; a write to the leftover files would
-            # be lost (REC-058 MF-B). Fail closed; the retry reads runtime.db.
+            # be lost (REC-058). Fail closed; the retry reads runtime.db.
             shared.release()
             raise RootBusy(
                 f"the runtime root was imported while waiting for the root lock: {shared.root.path}"
@@ -229,9 +229,15 @@ def open_run_persistence(
             handle_lock.release()
 
 
+# The condition comes first and matters: an older release's `migrate=off` handle keeps only
+# the root lock shared, so a newer import does not see it and its later writes would be
+# lost. Otherwise the caller stays on `off`. A test pins the order, the condition, the
+# retry hint and the settings named here.
 MANUAL_MODE_PENDING_ACTION = (
-    "set RECERTIA_RUNTIME_DB_MIGRATE=auto (the default) and reopen; the first open"
-    " imports the pending files into runtime.db"
+    "Only once no process of an older release uses this root, set"
+    " RECERTIA_RUNTIME_DB_MIGRATE=auto (the default) and reopen; the open that gets the"
+    " locks imports the pending files into runtime.db, so retry on root_busy. Otherwise set"
+    " RECERTIA_RUNTIME_DB_MIGRATE=off and stay on it until no older-release process is left"
 )
 
 
@@ -253,8 +259,9 @@ def _resolve_runtime_db(layout: RunsRootLayout, mode: MigrateMode) -> tuple[bool
             # No CLI subcommand runs this import yet (#172); the `auto` open is the
             # import. A test checks that every `recertia ...` command named here exists.
             raise MigrationChecksumError(
-                "pending legacy runtime files; reopen with RECERTIA_RUNTIME_DB_MIGRATE=auto"
-                " (the default) to import them",
+                "pending legacy runtime files; only once no process of an older release"
+                " uses this root, reopen with RECERTIA_RUNTIME_DB_MIGRATE=auto (the default)"
+                " to import them; otherwise stay on RECERTIA_RUNTIME_DB_MIGRATE=off",
                 details={"action": MANUAL_MODE_PENDING_ACTION},
             )
         return True, None

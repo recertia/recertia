@@ -35,7 +35,7 @@ def _load(path: Path) -> dict:
 
 
 def _run_blocks(doc: dict) -> list[str]:
-    """Every ``run:`` string in every job step, parsed with yaml.safe_load (CTO-rec N3)."""
+    """Every ``run:`` string in every job step, parsed with yaml.safe_load."""
 
     blocks: list[str] = []
     for job in (doc.get("jobs") or {}).values():
@@ -79,7 +79,7 @@ def test_no_eval_output_artifact() -> None:
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
 def test_no_inline_expressions_in_any_workflow_run(path: Path) -> None:
-    """CTO-rec #103 M1: every workflow, not only weekly-ops. Contexts go through ``env:``."""
+    """#103: every workflow, not only weekly-ops. Contexts go through ``env:``."""
 
     assert _inline_expressions(_load(path)) == []
 
@@ -135,7 +135,7 @@ def test_summary_prints_only_allowlisted_aggregates(tmp_path: Path) -> None:
 
 
 def test_summary_string_fields_are_closed_enums(tmp_path: Path) -> None:
-    """CTO-rec N2: an id-shaped token in a string field is omitted, not printed."""
+    """An id-shaped token in a string field is omitted, not printed."""
 
     mod = _summary_module()
     art = tmp_path / "artifacts"

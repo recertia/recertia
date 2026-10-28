@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uvicorn should run with `--no-proxy-headers` (the documented launch commands now pass
   it). In-memory telemetry readers (dashboard, `missing_required`) see only the newest
   1024 events, process-wide.
-- **Gap A fixture-id leak (REC-009)** — a golden-gate refusal is now decision-only for
+- **Fixture-id leak (REC-009)** — a golden-gate refusal is now decision-only for
   proposers. `PromotionError` carries `refusal_kind` (`golden_gate` |
   `predecessor_non_regression` | `gate_error` | `audit_unavailable`), `failing_count` and an
   opaque `audit_ref`. Fixture ids, golden paths, result rows and raw error text go to an
@@ -101,11 +101,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `checkpoints.db` / `operations.db` still pending, `RECERTIA_RUNTIME_DB_MIGRATE=manual`
   refused to open with "run recertia migrate apply" (message and `details.action`), but
   the CLI has no `migrate apply`; `recertia migrate` has only `run-events`. The error and
-  its `details.action` now give the real procedure: reopen with
-  `RECERTIA_RUNTIME_DB_MIGRATE=auto` (the default), whose first open imports the pending
-  files into `runtime.db`. The error type (`MigrationChecksumError`, `state_corrupt`) is
-  unchanged. Test: `test_manual_mode_error_names_only_registered_cli_commands` in
-  `tests/unit/persistence/test_import_legacy.py`.
+  its `details.action` now give the real procedure, condition first: only once no process
+  of an older release uses this root, reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto` (the
+  default); otherwise stay on `RECERTIA_RUNTIME_DB_MIGRATE=off`. An older `migrate=off`
+  writer can lose its later writes to that import (see the upgrade requirement under
+  REC-065 below). The open that gets the locks imports the pending files into
+  `runtime.db`; on `root_busy`, retry. The error type (`MigrationChecksumError`,
+  `state_corrupt`) is unchanged. Tests:
+  `test_manual_mode_error_names_only_registered_cli_commands` in
+  `tests/unit/persistence/test_import_legacy.py` pins the condition and its place before
+  the advice, the retry hint, the `off` fallback, that the named settings are read, and
+  that the text names no ticket id, commit hash or version tag;
+  `test_manual_mode_advice_is_pinned_in_changelog_and_rel_specs` pins the same condition,
+  the `auto` reopen and the `root_busy` retry in this file and in `rel-specs.md`.
+
+- **`migrate=off` open with pending leftover files has a bounded wait (REC-064, #153)** —
+  `open_run_persistence(..., migrate="off")` on a root that still has `checkpoints.db` /
+  `operations.db` took the shared root lock with no bound: against a holder it waited
+  forever on POSIX, and on Windows until the 10 s retry budget ran out, when it raised
+  typed `RootBusy` (the chain was `OSError(EDEADLK)`, wrapped in `RootLockBusy`, wrapped
+  in `RootBusy`). It now waits at most `RECERTIA_IMPORT_LOCK_TIMEOUT_S` (default 5 s),
+  like the other opens, on every platform, and then raises typed `RootBusy`
+  (`root_busy`, caused by `RootLockBusy`) without writing anything; a retry after the
+  holder leaves opens the leftover files and sees their data. Tests:
+  `test_migrate_off_leftover_open_wait_is_bounded`
+  in `tests/unit/persistence/test_import_legacy.py` fails if the bound is removed, zeroed
+  or ignores the setting; the real-Windows tests in
+  `tests/unit/persistence/test_root_lock_windows_real.py` expect the bounded wait (a
+  `BlockingIOError(EAGAIN)` cause, one lock-file open per try, all closed).
 
 - **Per-tenant root locking: tenants on one root no longer exclude each other (REC-065,
   #158)** — each runs root gets its own lock file, `<runs_root>/.tenant.lock`
@@ -115,8 +138,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The leftover import takes the root `.lock` shared, then its tenant lock exclusive
     (before: the root `.lock` exclusive). A run handle (`open_run_persistence`) takes the
     root `.lock` shared, then its tenant lock shared, for the handle's lifetime. Both
-    waits share the one `RECERTIA_IMPORT_LOCK_TIMEOUT_S` bound, except the `migrate=off`
-    leftover path (#153).
+    waits, and the `migrate=off` leftover path since REC-064 (#153), share the one
+    `RECERTIA_IMPORT_LOCK_TIMEOUT_S` bound.
   - So an open handle or an import on one tenant, including a long worker run, no longer
     makes another tenant's pending import raise `RootBusy`, and imports of different
     tenants run at the same time. A second import of the same tenant, or an import while
@@ -125,8 +148,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Backup and restore are unchanged: they take the root `.lock` exclusive, which every
     tenant import and handle holds shared, so they still refuse while any tenant holds
     its lock.
-  - Backup does not archive `.tenant.lock` files and restore does not extract them, as
-    for `.lock` and `api.lock`.
+  - Backup does not archive a runs root's `.tenant.lock` and restore does not extract it,
+    as for `.lock` and `api.lock`. Only the four runs-root positions match: `.tenant.lock`
+    at the runtime root (the CLI layout), `jobs/.tenant.lock`, `runs/<tenant>/.tenant.lock`
+    and `runs/<tenant>/jobs/.tenant.lock` (restore matches after `\` becomes `/`). A file
+    of that name anywhere else is user content: it is archived and restored.
+  - `recertia tenant export` leaves the tenant's two runs-root lock files
+    (`runs/<tenant>/.tenant.lock`, `runs/<tenant>/jobs/.tenant.lock`) out of both
+    `--dry-run` and `--execute`, so the files the listing names are the files the copy writes.
+    The listing also names directories; `--execute` copies files only.
   - **Upgrade requirement: mixed versions can silently lose data.** Before starting any
     REC-065 process on a runtime root, stop every REC-058-or-older process on that root
     (workers, API, CLI). Do not do a rolling restart, and do not mix versions.
@@ -136,7 +166,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       does not keep a newer import of the same tenant out; neither process reports an
       error.
     - If you cannot stop every process at once: keep the new processes on `migrate=off`
-      or `manual` until every old process is gone.
+      until every old process is gone. A `manual` open of a tenant whose leftover files
+      are pending refuses with `state_corrupt` and cannot serve that tenant, so `off` is
+      the only choice there. Only once no process of an older release uses this root is
+      it safe to reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto`; while an old process is
+      still running, ignore the `manual` error's advice to reopen with `auto` and stay on
+      `off`.
 
   Tests: `tests/unit/persistence/test_root_lock_writers.py` (REC-065 section),
   `tests/unit/persistence/test_root_lock_windows_path.py`,
@@ -209,10 +244,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     REC-065 (above) adds per-tenant locks and lifts this limit.
   - `RootBusy` is not yet the `root_busy` API/CLI error (#145): the API returns a generic
     error for it.
-  - The leftover path (`migrate=off` with pending files) still waits without a bound
-    (#153). On Windows that wait ends after 10 s in typed `RootBusy`, which both worker
-    paths re-queue; before, it ended in an untyped `OSError(EDEADLK)`, so a worker failed
-    the claim.
+  - The leftover path (`migrate=off` with pending files) waited without a bound (#153).
+    Since REC-064 (above) it waits at most `RECERTIA_IMPORT_LOCK_TIMEOUT_S` and raises
+    typed `RootBusy` on every platform, which both worker paths re-queue.
   - The operations-schema exclusive lock is unbounded and the faithfulness command's
     orchestrator is not closed on every path (#160).
   - Worker imports on older releases lock `<root>/runs/<tenant>/.lock`, so mixed-version
@@ -222,6 +256,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/unit/persistence/test_root_lock_windows_path.py` (Linux, fake `kernel32`),
   `tests/unit/persistence/test_root_lock_windows_real.py` (real `kernel32`, run by the
   `root lock (windows-latest)` job).
+
+- **psycopg floor (REC-057, #179)** — the `postgres` extra's floor is now `psycopg[binary]>=3.2.1`.
+  psycopg 3.2.0's `binary` extra requires `psycopg-binary==3.2.0.dev1`, which was never
+  uploaded to PyPI, so `psycopg[binary]==3.2.0` cannot be installed. 3.2.1 (published the
+  next day) requires `psycopg-binary==3.2.1`. Found once the nightly lowest arm started
+  pinning the `postgres` floor. No other floor changes.
 
 - **CLI tests read stderr at the click floor (REC-053)** — the `dev` extra gains
   `click>=8.2`. Six CLI tests read `result.stderr` from a default `CliRunner()`, and
@@ -437,7 +477,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **REL-3 R4 probes rewritten to typed `RootBusy` (REC-056b2, #139; ADR-0022)** — the six
   REL-3 probes that were skipped on main (I, L, M, M2, T1, T2) now run. They expected an open
   under the held exclusive root lock to succeed and overlay the leftover `checkpoints.db` /
-  `operations.db`, which contradicted the green R3 rulings (O/M3/M4) and the shipped contract.
+  `operations.db`, which contradicted the green R3 probes and the shipped contract.
   [ADR-0022](docs/adr/0022-rootbusy-no-leftover-overlay.md) keeps main's behaviour: on the
   leftover-import path, an open that finds the lock held raises typed `RootBusy` within
   `RECERTIA_IMPORT_LOCK_TIMEOUT_S` and writes nothing; there is no overlay, no same-thread
@@ -454,6 +494,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lowest-direct floors, py3.13 at newest) now run `pytest -v` the way `ci.yml` does, with
   the same env and the suite-wide pytest-timeout, after the import-all step. The job
   timeout is 20 minutes.
+- **Nightly extras, checkout token, failure alert (REC-057, #180)** — both `nightly.yml`
+  arms now install the `postgres`, `pdf` and `otel` extras along with `dev`, and the lowest
+  arm pins their floors too (psycopg 3.2.1, pypdf 4, opentelemetry-api 1.20). The pin
+  script drops a requirement's extras from its constraint and stops on a marker or a
+  conflicting floor. `actions/checkout` runs with `persist-credentials: false`. A new
+  `alert` job runs only when a scheduled run does not succeed (it fails, is cancelled or
+  is skipped): it opens one issue titled "nightly: scheduled run failing" (found by exact
+  title, bot author and a marker line), or comments on it if it is already open,
+  and skips a run id it already reported.
+  The body is run metadata only. The job has no checkout and no `uses:` actions. It is the
+  workflow's only write grant (job-scoped `issues: write` on `GITHUB_TOKEN`); the
+  workflow-level `permissions` is now `{}`.
+
+- **Nightly alert and extras hardening (REC-062, #180)** — follow-up to the first
+  nightly-extras pull request (#143, which was closed and superseded).
+  The alert job's run-id dedupe now counts only comments by `github-actions`, so a
+  visitor's comment carrying the run-id key cannot suppress an alert. Its condition is
+  `always() && github.event_name == 'schedule' && needs.import-all.result != 'success'`,
+  so a job that hits `timeout-minutes` (reported as cancelled) also alerts. A new
+  `Extras import` step imports psycopg, pypdf and opentelemetry and fails unless
+  psycopg uses the `binary` implementation, so dropping `[binary]` is loud.
+  `NIGHTLY_EXTRAS` gains `api`, so the pin script's conflicting-floor check now
+  compares the `api` and `dev` floors. The script matches names by PEP 503
+  normalisation. Comments note the 60-day schedule auto-disable, the 100-item `gh`
+  fetch limit and the psycopg 3.2.1 wheel range (cp312 at most).
 
 - **REL-3 runtime.db** — `open_run_persistence` imports leftover
   `checkpoints.db` / `operations.db` into `runtime.db` when
@@ -465,16 +530,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same-thread holder exception; `.lock` stores no pid/tid identity). After
   the holder releases, a fresh open imports leftover plus the holder's
   writes; unequal leftover checkpoints keep dest and still import other
-  seqs. Leftover writers take a shared root lock so import cannot race
-  them.
+  seqs. Leftover writers (`migrate=off` handles) hold the root lock and their
+  tenant lock shared, so an import of the same tenant, which takes its tenant
+  lock exclusive, cannot race them. An older release's handle holds only the
+  root lock shared and does not keep that import out (see the upgrade
+  requirement under REC-065 above).
   `off` keeps unused legacy files for one release; after an import has
   landed, `off` reads `runtime.db` so post-import writes cannot vanish.
   `manual` refuses to start while leftover files are still pending
-  (`state_corrupt`; reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto` to import
-  them). Backup and restore
-  take exclusive `api.lock` then `.lock`. Pending operation sentinels are
-  dropped on import. Readers (list, tabletop, operator brief) prefer
-  `runtime.db`.
+  (`state_corrupt`); only once no process of an older release uses this root,
+  reopen with `RECERTIA_RUNTIME_DB_MIGRATE=auto` to import them (retry on
+  `root_busy`), otherwise stay on `RECERTIA_RUNTIME_DB_MIGRATE=off`. Backup and
+  restore take exclusive `api.lock` then `.lock`.
+  Pending operation sentinels are dropped on import. Readers (list, tabletop,
+  operator brief) prefer `runtime.db`.
 - **REL-3 FencedRunPersistence** — checkpoint, operation, and hash-chain
   writes compare the caller's fencing token to `run_leases`. A stale token
   raises `LeaseLost` (409, exit 6). `CheckpointStore.save` re-checks the

@@ -164,3 +164,43 @@ def test_tenant_export_execute_skips_the_runs_root_tenant_lock_files(tmp_path: P
     assert not (dest / "runs" / "acme" / "jobs" / ".tenant.lock").exists()
     assert (dest / "runs" / "acme" / "notes" / ".tenant.lock").read_text(encoding="utf-8") == "data\n"
     assert "copied 3 files" in copied.output
+
+
+def test_tenant_export_dry_run_lists_exactly_the_files_execute_copies(tmp_path: Path) -> None:
+    """REC-072: ``--dry-run`` predicts ``--execute``. The files it lists are the files the
+    copy writes, so the runs roots' two tenant lock files are left out of both, and a file
+    of that name elsewhere in the tenant tree is in both."""
+
+    root = tmp_path / ".recertia"
+    _seed(root)
+    runs = root / "runs" / "acme"
+    (runs / "jobs").mkdir()
+    (runs / ".tenant.lock").touch()
+    (runs / "jobs" / ".tenant.lock").touch()
+    (runs / "jobs" / "job.json").write_text("{}\n", encoding="utf-8")
+    (runs / "notes").mkdir()
+    (runs / "notes" / ".tenant.lock").write_text("data\n", encoding="utf-8")
+    dest = root / "exports" / "acme"
+
+    listed = runner.invoke(app, ["tenant", "export", "--tenant", "acme", "--root", str(root), "--dry-run"])
+    assert listed.exit_code == 0, listed.output
+    listed_files = {
+        Path(line).relative_to(root).as_posix() for line in listed.output.splitlines() if Path(line).is_file()
+    }
+
+    copied = runner.invoke(
+        app,
+        ["tenant", "export", "--tenant", "acme", "--root", str(root), "--execute", "--dest", str(dest)],
+    )
+    assert copied.exit_code == 0, copied.output
+    out = copied.output.splitlines()
+    assert out[-1] == f"copied {len(out) - 1} files"
+    copied_files = {Path(line).relative_to(dest).as_posix() for line in out[:-1]}
+
+    assert listed_files == copied_files
+    assert copied_files == {
+        "runs/acme/note.txt",
+        "runs/acme/jobs/job.json",
+        "runs/acme/notes/.tenant.lock",
+        "blobs/acme/obj",
+    }

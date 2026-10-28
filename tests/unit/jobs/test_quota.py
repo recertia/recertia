@@ -18,7 +18,7 @@ def test_runner_skips_hex_when_quota_exhausted(tmp_path) -> None:
     result = runner.run("practice_hex", fn, budget=JobBudget(max_tokens=10))
     assert result.skipped
     assert called["n"] == 0
-    # Bug 7 (CTO_REVIEW §4): a fully spent weekly cap admits nothing, even a 0-token job.
+    # Regression: a fully spent weekly cap admits nothing, even a 0-token job.
     result = runner.run("fail_cluster_author", fn, budget=JobBudget(max_tokens=0))
     assert result.skipped == "quota refused fail_cluster_author"
     assert called["n"] == 0

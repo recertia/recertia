@@ -155,7 +155,7 @@ def _sha256(path: Path) -> str:
 
 
 def test_manifest_hashes_match_the_files_on_disk() -> None:
-    """M1: every MANIFEST.sha256 entry is the sha256 of that file, so no frozen file can change silently."""
+    """Every MANIFEST.sha256 entry is the sha256 of that file, so no frozen file can change silently."""
 
     rows = [
         line.split("  ", 1)
@@ -183,7 +183,7 @@ def _strings(value: Any) -> Iterator[str]:
 
 
 def test_frozen_results_contain_no_absolute_temp_paths() -> None:
-    """M3: the frozen PREFREEZE results are path-independent (no scratch or temp dirs)."""
+    """The frozen PREFREEZE results are path-independent (no scratch or temp dirs)."""
 
     temp_roots = {"/tmp", "/var/tmp", "/private/var", "/var/folders", tempfile.gettempdir()}
     temp_path = re.compile(
@@ -248,7 +248,7 @@ def _promote_v2(tmp: Path, skill_id: str, v2: dict[str, Any]) -> Exception | Non
 def test_gate_refuses_each_plant_and_approves_its_v1_control(
     skill_id: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """M2: the real golden gate (local backend) refuses each plant as frozen, and approves the
+    """The real golden gate (local backend) refuses each plant as frozen, and approves the
     same v2 envelope with v1's steps restored, so the refusal is caused by the plant."""
 
     monkeypatch.setenv("RECERTIA_EXECUTION_BACKEND", "local")

@@ -1,6 +1,6 @@
 """REC-009: the held-out split stays out of the repo and out of golden discovery.
 
-Only the manifest schema (and, from WO-07, one public manifest) may be committed under
+Only the manifest schema (and one public manifest) may be committed under
 ``evals/heldout/``. Golden discovery and the plan-acceptance glob are rooted at
 ``evals/golden/`` and never reach ``evals/heldout/``. All fixtures here are synthetic.
 """

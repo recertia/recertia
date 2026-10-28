@@ -1,4 +1,4 @@
-"""REC-009 (Gap A): a promotion refusal never shows proposers a failing fixture id.
+"""REC-009: a promotion refusal never shows proposers a failing fixture id.
 
 The skill and the fixture have different names (skill ``leak-probe``, failing fixture
 dir ``HELDOUT-x``), so "absent" means ``HELDOUT-x`` and its golden path occur nowhere in
@@ -134,7 +134,7 @@ class _SpyGate:
 
 
 def test_promotion_without_an_audit_sink_refuses_before_the_gate(tmp_path: Path) -> None:
-    """M1: no sink means no gate run, no log, no lifecycle change (fail closed)."""
+    """No sink means no gate run, no log, no lifecycle change (fail closed)."""
 
     store = SkillStore(tmp_path / "skills")
     store.write_candidate(_skill(1, command="true", criterion_run="true"))
@@ -200,7 +200,7 @@ GATE_ERRORS = ("oserror_names_the_path", "validation_error_echoes_the_input")
 
 @pytest.mark.parametrize("case", GATE_ERRORS)
 def test_gate_error_detail_goes_to_the_audit_sink_only(case: str, tmp_path: Path) -> None:
-    """M5: the gate error's own text names the fixture and its path; proposers never see it.
+    """The gate error's own text names the fixture and its path; proposers never see it.
 
     The audit record must contain the fixture id and path, which proves the planted
     error really echoes them (a vacuous error would let a re-appended message pass).
@@ -405,7 +405,7 @@ class _ExplodingGate:
 def test_promote_route_internal_error_text_never_reaches_proposers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """M5: the generic 400 path keeps the raw exception text in the audit store only."""
+    """The generic 400 path keeps the raw exception text in the audit store only."""
 
     client, app = _app(tmp_path, monkeypatch)
     ctx = app.state.recertia
@@ -438,7 +438,7 @@ def test_promote_route_internal_error_text_never_reaches_proposers(
 def test_promote_route_returns_404_for_a_missing_skill_or_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Q3/S3: unknown skill or version -> 404 with a fixed message, no path, no job."""
+    """Unknown skill or version -> 404 with a fixed message, no path, no job."""
 
     client, app = _app(tmp_path, monkeypatch)
     ctx = app.state.recertia
@@ -465,7 +465,7 @@ AUDIT_CASES = ("unset", "inside_api_root", "inside_runs_root", "open_error")
 def test_promote_route_refuses_before_the_gate_without_a_usable_audit_store(
     case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """M1: unset, refused or failing-to-open sink -> 503 before the gate; job failed."""
+    """Unset, refused or failing-to-open sink -> 503 before the gate; job failed."""
 
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
@@ -518,7 +518,7 @@ def test_promote_route_refuses_before_the_gate_without_a_usable_audit_store(
 def test_promote_route_audit_write_failure_mid_way_fails_the_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """M1: the gate ran and refused, then the sink write fails -> 503, job failed."""
+    """The gate ran and refused, then the sink write fails -> 503, job failed."""
 
     client, app = _app(tmp_path, monkeypatch)
     ctx = app.state.recertia

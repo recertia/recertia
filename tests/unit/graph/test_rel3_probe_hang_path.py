@@ -1,4 +1,4 @@
-"""REC-044 D1: the REL-3 probe's own hang path runs before the pytest-timeout backstop.
+"""REC-044: the REL-3 probe's own hang path runs before the pytest-timeout backstop.
 
 The suite-wide pytest-timeout (``timeout`` in pyproject.toml) covers setup, call
 and teardown. When a probe child hangs, ``_join_or_fail`` must give up first, so

@@ -1,4 +1,4 @@
-"""Execution kill switches must stay latched (GROVE test_kills style)."""
+"""Execution kill switches must stay latched."""
 
 from __future__ import annotations
 

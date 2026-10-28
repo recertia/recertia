@@ -394,13 +394,87 @@ def _registered_cli_path(words: list[str]) -> list[str] | None:
     return path if path and not is_group else None
 
 
+_MANUAL_CONDITION = "only once no process of an older release uses this root"
+_REPO = Path(__file__).resolve().parents[3]
+
+
+def _release_ids_in(text: str) -> list[str]:
+    """Ticket ids, issue numbers, commit hashes and version tags found in ``text``."""
+    import re
+
+    patterns = (
+        r"\b(?:REC|REL|ADR)-\d+\b",  # ticket ids
+        r"(?<![\w&])#\d+\b",  # issue or pull request numbers: #172
+        r"\b(?:pr|pull request|issue|gh)[-_ ]?#?\d+\b",  # PR 172, pull request 172, issue 9
+        # Commit hashes, short or full: 6 to 40 hex digits with at least one digit and one
+        # letter (so "defaced" and "300000" are not hashes), or 12+ letters a-f alone.
+        r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{6,40}\b",
+        r"\b[a-f]{12,40}\b",
+        r"\bv\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.]+)?\b",  # version tags: v3, v1.2, v1.2.3
+        r"\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?\b",  # three-part versions: 1.2.3
+        r"\b(?:19|20)\d{2}\.\d{1,2}\b",  # calendar versions: 2026.10 (not "0.3 s")
+        r"\b(?:release|rel|tag)[-_ ]?v?\d[\w.-]*\b",  # release-2026.10, tag_3
+    )
+    return [m.group(0) for pattern in patterns for m in re.finditer(pattern, text, re.IGNORECASE)]
+
+
+def test_release_id_detector_finds_hashes_tags_and_ticket_ids() -> None:
+    for sample in (
+        "0e85d983",
+        "0e85d983a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "since v1.2.3 only",
+        "v3",
+        "v1.2",
+        "1.2.3",
+        "2026.10",
+        "0e85d9",
+        "a1b2c3",
+        "deadbeefcafe",
+        "PR 172",
+        "pr172",
+        "pull request 172",
+        "issue 9",
+        "release 2026.10",
+        "release-2026.10",
+        "REC-070",
+        "rel-3",
+        "REL-3",
+        "see #172",
+    ):
+        assert _release_ids_in(f"reopen with auto ({sample})"), sample
+    for innocent in (
+        "waits 0.3 s",
+        "at most 2.5 s",
+        "defaced",
+        "facade",
+        "decade",
+        "beaded",
+        "300000",
+        "1000000 ms",
+        "root_busy",
+        "the 5 s default",
+    ):
+        assert _release_ids_in(f"reopen with auto ({innocent})") == [], innocent
+    clean = (
+        "only once no process of an older release uses this root, set"
+        " RECERTIA_RUNTIME_DB_MIGRATE=auto (the default) and reopen; retry on root_busy"
+    )
+    assert _release_ids_in(clean) == []
+
+
 def test_manual_mode_error_names_only_registered_cli_commands(tmp_path: Path) -> None:
     """#172: the `manual` refusal must not send operators to a missing command.
 
     Every ``recertia <subcommand ...>`` named in the message or in
-    ``details["action"]`` must resolve to a registered CLI leaf command, and the
-    procedure it names instead (``RECERTIA_RUNTIME_DB_MIGRATE=auto``) must be a
-    value the settings accept and must actually import the pending files.
+    ``details["action"]`` must resolve to a registered CLI leaf command. Every
+    ``RECERTIA_RUNTIME_DB_*=value`` it names must round-trip through the settings:
+    the key is read (a non-default probe changes the setting) and the value is
+    accepted. The condition "only once no process of an older release uses this root"
+    comes before the advice (an older ``migrate=off`` writer would lose writes to the
+    import) and both texts say to stay on ``off`` otherwise; ``details["action"]``
+    says to retry on ``root_busy``. Neither text names a ticket id, issue number,
+    commit hash, version tag or path. The procedure must actually import the pending
+    files.
     """
     import re
 
@@ -423,17 +497,44 @@ def test_manual_mode_error_names_only_registered_cli_commands(tmp_path: Path) ->
     assert _registered_cli_path(["migrate", "apply"]) is None
     assert _registered_cli_path(["migrate"]) is None
 
-    named = [
-        m.group(1).split() for t in texts for m in re.finditer(r"\brecertia((?:\s+[a-z][a-z0-9_-]*)+)", t)
-    ]
+    # Case-insensitive, and not the env names (``RECERTIA_...``): no word character or
+    # underscore may follow ``recertia``.
+    command = re.compile(r"(?<![\w-])recertia(?![\w-])((?:\s+[a-z][a-z0-9_-]*)+)", re.IGNORECASE)
+    named = [m.group(1).lower().split() for t in texts for m in command.finditer(t)]
     for words in named:
         assert _registered_cli_path(words) is not None, (
             f"names unregistered command: recertia {' '.join(words)}"
         )
-    for text in texts:
-        assert "RECERTIA_RUNTIME_DB_MIGRATE=auto" in text
-    assert load_settings({"RECERTIA_RUNTIME_DB_MIGRATE": "auto"}).runtime_db_migrate == "auto"
+    capitalised = [m.group(1).lower().split() for m in command.finditer("run Recertia migrate apply")]
+    assert capitalised == [["migrate", "apply"]]  # the extraction sees a capitalised command
+    assert not list(command.finditer("RECERTIA_RUNTIME_DB_MIGRATE=auto"))
+
+    # Every named setting is read by the settings and its value is accepted. The message
+    # and the action stay in step: the same settings, in the same order.
+    per_text = [re.findall(r"\b(RECERTIA_RUNTIME_DB_[A-Z_]+)=([^\s;,)]+)", t) for t in texts]
+    assert per_text[0] == per_text[1]
+    assignments = per_text[0]
+    assert [value for _key, value in assignments] == ["auto", "off"]  # the advice, then the fallback
+    assert len({key for key, _value in assignments}) == 1
+    for key, value in assignments:
+        assert load_settings({key: "manual"}).runtime_db_migrate == "manual"  # key is read
+        assert load_settings({key: value}).runtime_db_migrate == value  # value accepted
     assert load_settings({}).runtime_db_migrate == "auto"  # "(the default)" is true
+
+    # The condition leads the advice, the fallback is to stay on `off`, and the action
+    # says to retry. No ticket id, issue number, commit hash, version tag or path.
+    assert _release_ids_in(_MANUAL_CONDITION) == []
+    for text in texts:
+        low = text.lower()
+        assert _MANUAL_CONDITION in low
+        assert low.index(_MANUAL_CONDITION) < low.index("reopen")
+        assert low.index(_MANUAL_CONDITION) < low.index("recertia_runtime_db_migrate=auto")
+        assert low.index("recertia_runtime_db_migrate=auto") < low.index("otherwise")
+        assert low.index("otherwise") < low.index("recertia_runtime_db_migrate=off")
+        assert "stay on" in low
+        assert _release_ids_in(text) == [], text
+        assert not re.search(r"[\\/]", text), text
+    assert "retry on root_busy" in action
 
     # Following the named procedure imports the pending files; `manual` then opens.
     persistence = open_run_persistence(tmp_path / "runs", migrate="auto")
@@ -444,6 +545,182 @@ def test_manual_mode_error_names_only_registered_cli_commands(tmp_path: Path) ->
         assert persistence.checkpoints.latest("run-a") is not None
     finally:
         persistence.close()
+
+
+def _doc_segment(doc: str, start: str, end: str) -> str:
+    assert doc.count(start) == 1, start
+    begin = doc.index(start)
+    stop = doc.index(end, begin + len(start))
+    return doc[begin:stop].lower()
+
+
+def test_manual_mode_advice_is_pinned_in_changelog_and_rel_specs() -> None:
+    """The docs give the same advice as the runtime text, so the contradiction (a doc
+    saying to reopen with ``auto`` without the condition) cannot come back by a docs-only
+    edit. Each place that gives the advice must carry the condition before the ``auto``
+    reopen, and say to stay on ``off`` otherwise; the places that describe the whole
+    procedure also carry the ``root_busy`` retry."""
+    import re
+
+    def norm(path: str) -> str:
+        return " ".join((_REPO / path).read_text(encoding="utf-8").split())
+
+    changelog = norm("CHANGELOG.md")
+    specs = norm("docs/plans/remediation/rel-specs.md")
+    auto = "recertia_runtime_db_migrate=auto"
+    stay_env = "stay on `recertia_runtime_db_migrate=off`"
+    # (place, segment, the advice, how it says to stay on `off`, whether it says to retry)
+    places = [
+        (
+            "CHANGELOG REC-070 entry",
+            _doc_segment(changelog, "**`manual` mode named a command that does not exist", " - **"),
+            auto,
+            stay_env,
+            True,
+        ),
+        (
+            "CHANGELOG mixed-version bullet",
+            _doc_segment(changelog, "If you cannot stop every process at once", " Tests: `tests/unit/"),
+            auto,
+            "keep the new processes on `migrate=off`",
+            False,
+        ),
+        (
+            "CHANGELOG REL-3 sentence",
+            _doc_segment(changelog, "**REL-3 runtime.db**", " - **REL-3 FencedRunPersistence**"),
+            "reopen with `recertia_runtime_db_migrate=auto`",
+            stay_env,
+            True,
+        ),
+        (
+            "rel-specs manual row",
+            _doc_segment(specs, "| `manual` | Refuse to start.", " | `off` |"),
+            auto,
+            stay_env,
+            True,
+        ),
+        (
+            "rel-specs status paragraph",
+            _doc_segment(specs, "Status (#172): these `migrate`", " `RECERTIA_RUNTIME_DB_MIGRATE`:"),
+            "the `auto` open",
+            "stay on `off`",
+            False,
+        ),
+        (
+            "rel-specs large-import bullet",
+            _doc_segment(specs, "- Importing a large `checkpoints.db`", " - "),
+            "the `auto` open",
+            "stay on `off`",
+            False,
+        ),
+    ]
+    for name, segment, advice, stay, needs_retry in places:
+        assert _MANUAL_CONDITION in segment, name
+        assert segment.index(_MANUAL_CONDITION) < segment.index(advice), name  # condition leads
+        assert stay in segment, name  # stay on `off` otherwise
+        if needs_retry:
+            assert re.search(r"retry on `?root_busy|on `?root_busy`?, retry", segment), name
+
+
+def test_migrate_off_leftover_open_wait_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """REC-064 (#153): ``migrate=off`` with pending leftover files waits for the root lock
+    at most ``RECERTIA_IMPORT_LOCK_TIMEOUT_S`` and then raises typed ``RootBusy``, writing
+    nothing. Before, this path waited without a bound. The open runs in a thread so a
+    missing bound fails the test instead of hanging it; the bound is the env value (0.3 s),
+    well under the 5 s default, so a read of the wrong variable fails too."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.3")
+    root = tmp_path / "runs"
+    layout = RuntimeLayout(root).local_runs()
+    store = CheckpointStore(layout.checkpoints_db)
+    try:
+        store.save("run-a", 0, "intake", None, _state("run-a"))
+    finally:
+        store.close()
+    outcome: list[tuple[BaseException | None, float]] = []
+
+    def attempt() -> None:
+        started = time.monotonic()
+        try:
+            open_run_persistence(root, migrate="off").close()
+            error: BaseException | None = None
+        except BaseException as exc:  # noqa: BLE001
+            error = exc
+        outcome.append((error, time.monotonic() - started))
+
+    held = RootLock(layout.parent.root_lock)
+    held.try_exclusive()
+    worker = threading.Thread(target=attempt, daemon=True)
+    try:
+        worker.start()
+        worker.join(timeout=2.5)
+        finished = not worker.is_alive()
+    finally:
+        held.release()
+        worker.join(timeout=15)
+    assert finished, "the migrate=off open is still waiting: its wait is not bounded"
+    ((error, elapsed),) = outcome
+    assert isinstance(error, RootBusy)
+    assert isinstance(error.__cause__, RootLockBusy)
+    assert 0.25 <= elapsed <= 2.0  # not a single try, and not the 5 s default
+    assert layout.checkpoints_db.is_file()
+    assert not layout.runtime_db.exists()  # nothing was written elsewhere
+    # After the holder is gone, the retry opens the leftover files and sees the data.
+    persistence = open_run_persistence(root, migrate="off")
+    try:
+        assert persistence.checkpoints.latest("run-a") is not None
+    finally:
+        persistence.close()
+
+
+def test_migrate_off_leftover_open_wait_ends_when_the_holder_leaves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``migrate=off`` wait polls: when the holder leaves mid-wait, the open succeeds
+    soon after, not at the end of the bound. A wait that sleeps the whole bound and then
+    tries once passes the test above (the holder stays) but fails this one: the bound is
+    6 s, the holder leaves after 0.2 s, and the open must finish well inside the bound."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "6")
+    root = tmp_path / "runs"
+    layout = RuntimeLayout(root).local_runs()
+    store = CheckpointStore(layout.checkpoints_db)
+    try:
+        store.save("run-a", 0, "intake", None, _state("run-a"))
+    finally:
+        store.close()
+    waiting = threading.Event()
+    outcome: list[tuple[object, float]] = []
+
+    def attempt() -> None:
+        started = time.monotonic()
+        waiting.set()
+        result: object
+        try:
+            result = open_run_persistence(root, migrate="off")
+        except BaseException as exc:
+            result = exc
+        outcome.append((result, time.monotonic() - started))
+
+    held = RootLock(layout.parent.root_lock)
+    held.try_exclusive()
+    worker = threading.Thread(target=attempt, daemon=True)
+    try:
+        worker.start()
+        assert waiting.wait(timeout=10)
+        time.sleep(0.2)
+    finally:
+        held.release()
+        worker.join(timeout=15)
+    assert not worker.is_alive()
+    ((result, elapsed),) = outcome
+    assert not isinstance(result, BaseException), result
+    persistence = result
+    try:
+        assert persistence.checkpoints.latest("run-a") is not None  # type: ignore[attr-defined]
+    finally:
+        persistence.close()  # type: ignore[attr-defined]
+    assert 0.1 <= elapsed < 3.0  # it did wait, and it did not wait out the 6 s bound
 
 
 def test_open_run_persistence_auto_imports_then_reads(tmp_path: Path) -> None:
@@ -571,7 +848,7 @@ def _legacy_row_snapshot(root: Path) -> tuple[tuple[object, ...], tuple[object, 
 def test_busy_open_raises_root_busy_without_mutating_sqlite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """O/M3/M4 ruling: typed RootBusy, no writes during the busy window."""
+    """A busy open raises typed RootBusy and writes nothing during the busy window."""
 
     monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
     root = tmp_path / "runs"

@@ -1,8 +1,8 @@
-"""Import every recertia and contracts module in-process (nightly / bug 12+13).
+"""Import every recertia and contracts module in-process (nightly).
 
 One subprocess per module is too slow for required ci. This test batches the
 walk in the current interpreter, fails on ImportError, and uses a short
-subprocess only for the two bugs that need a cold interpreter (circular import
+subprocess only for the two failure modes that need a cold interpreter (circular import
 and import-time cwd write).
 """
 
@@ -47,7 +47,7 @@ def _cold(code: str, *, cwd: Path) -> subprocess.CompletedProcess[str]:
 
 
 def test_import_workers_on_a_cold_interpreter(tmp_path: Path) -> None:
-    """Bug 12: ``import recertia.workers`` used to raise a circular ImportError."""
+    """Regression: ``import recertia.workers`` used to raise a circular ImportError."""
 
     proc = _cold("import recertia.workers; print(recertia.workers.AsyncRunWorker)", cwd=tmp_path)
     assert proc.returncode == 0, proc.stderr or proc.stdout

@@ -72,8 +72,8 @@ def test_empty_week_is_recorded_not_counted(tmp_path: Path) -> None:
 
 
 def test_zero_trials_never_counts_as_an_observation() -> None:
-    """A summary value with zero recorded trials must not count as a soak week (bug 8:
-    observation_count() used to floor at 1 whenever first_attempt_success was set)."""
+    """A summary value with zero recorded trials must not count as a soak week (it used to, because
+    observation_count() floored at 1 whenever first_attempt_success was set)."""
     week = classify_week(
         {
             "report": {

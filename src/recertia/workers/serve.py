@@ -158,7 +158,7 @@ def run_once(root: Path, *, worker: str, capacity: int = 1) -> int:
             return 1
         except RootBusy:
             # Backup, restore, an import or another tenant's open handle holds the
-            # runtime root lock. Nothing ran; the run is not at fault (REC-058 MF-C).
+            # runtime root lock. Nothing ran; the run is not at fault (REC-058).
             queue.requeue(claim, delay_s=ROOT_BUSY_RETRY_S, error_code="root_busy")
             return 0
         except Exception:

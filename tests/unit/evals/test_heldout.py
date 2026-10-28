@@ -2,7 +2,7 @@
 
 The tree checks run against main's REAL WO-06 module (#118, ``heldout.LOADER_MODULE``):
 ``verify_heldout_tree(manifest_path, root) -> HeldoutManifest``, raising ``HeldoutManifestError``
-with hash/count-only messages (Lucas-rec #3). There is no stand-in verifier. The ``calls`` fixture
+with hash/count-only messages. There is no stand-in verifier. The ``calls`` fixture
 only wraps the real function to record call order. Tests that need a loader outside the contract
 (missing, broken, wrong result) patch the real module with monkeypatch.
 """
@@ -232,7 +232,7 @@ class _RaisingModule(types.ModuleType):
 
 
 def test_non_import_error_at_loader_import_exits_2(tmp_path: Path, capsys, monkeypatch) -> None:
-    """CTO-rec N-F: anything raised while importing the loader is loader_unavailable, exit 2."""
+    """Anything raised while importing the loader is loader_unavailable, exit 2."""
 
     monkeypatch.setitem(sys.modules, heldout.LOADER_MODULE, _RaisingModule(heldout.LOADER_MODULE))
     manifest, ct, split = _build(tmp_path)
@@ -248,7 +248,7 @@ def test_heldout_manifest_error_logs_its_hash_message(tmp_path: Path, capsys, ca
     assert _run(tmp_path, manifest, ct, split, spy) == heldout.EXIT_VERIFY_FAILED
     out = capsys.readouterr()
     _assert_no_leak(out.out + out.err)
-    # Lucas-rec #2: main's message is hash/count-only, so it is printed verbatim (both hashes).
+    # Main's message is hash/count-only, so it is printed verbatim (both hashes).
     want = f"held-out hash mismatch: manifest root_sha256={expected} count=5; tree root_sha256={got} count=5"
     assert f"heldout: FAIL {want} executed=0" in out.out
     assert "execute" not in calls and "container_preflight" not in calls
@@ -281,7 +281,7 @@ _MISMATCH = (
     ids=["fixed", "keys-shape", "tree", "mismatch-shape", "old-format", "id", "suffix", "bad-hash", "case"],
 )
 def test_loader_reason_allow_list(message: str, want: str) -> None:
-    """Lucas-rec #2 / MF-A: main's WO-06 messages pass verbatim; anything else is redacted whole."""
+    """Main's WO-06 messages pass verbatim; anything else is redacted whole."""
 
     assert heldout.loader_reason(HeldoutManifestError(message)) == want
 
@@ -415,7 +415,7 @@ def test_created_at_accepts_z_and_numeric_offsets(tmp_path: Path, capsys, calls)
 
 
 def test_only_verify_heldout_tree_is_used_from_wo06() -> None:
-    """CTO-rec: #102 calls ONLY verify_heldout_tree; no separate load or root-hash call."""
+    """#102 calls ONLY verify_heldout_tree; no separate load or root-hash call."""
 
     forbidden = ("load_heldout" + "_manifest", "compute_root" + "_sha256")
     src = REPO / "src/recertia/evals/heldout.py"
@@ -493,7 +493,7 @@ class _RecordingModule(types.ModuleType):
 def test_only_three_wo06_names_are_read_at_runtime(
     tmp_path: Path, capsys, monkeypatch, calls, fake_docker
 ) -> None:
-    """Runtime proof for N-B: a full good run reads only the three from-import names from the
+    """Runtime proof: a full good run reads only the three from-import names from the
     loader module, however the access is spelled (the static check is the AST test above)."""
 
     seen: list[str] = []
@@ -607,7 +607,7 @@ def test_count_mismatch_logs_counts_only(tmp_path: Path, capsys, calls) -> None:
 
 
 def test_file_count_is_not_compared_with_task_dirs(tmp_path: Path, capsys, calls, fake_docker) -> None:
-    """Lucas-rec #2: the manifest count is WO-06's FILE count, so 5 files / 2 task dirs runs."""
+    """The manifest count is WO-06's FILE count, so 5 files / 2 task dirs runs."""
 
     manifest, ct, split = _build(tmp_path)
     assert json.loads(manifest.read_text())["count"] == 5
@@ -650,7 +650,7 @@ def test_split_root_inside_public_evals_is_refused(tmp_path: Path, capsys, monke
 def test_split_root_inside_checkout_is_refused(
     tmp_path: Path, capsys, monkeypatch, calls, where: str
 ) -> None:
-    """CTO-rec M2 / P6: a split root anywhere in the checkout is refused before any read."""
+    """A split root anywhere in the checkout is refused before any read."""
 
     manifest, ct, split = _build(tmp_path)
     env = dict(CLEAN_ENV)
@@ -785,7 +785,7 @@ def test_network_reachable_reads_interfaces_and_fails_closed(tmp_path: Path) -> 
     assert heldout.network_reachable(net_dev) is True
 
 
-# ------------------------------------------------------------------ container preflight (M1)
+# ------------------------------------------------------------------ container preflight
 
 
 def test_container_preflight_failure_fails_closed(tmp_path: Path, capsys, calls) -> None:
@@ -815,7 +815,7 @@ DIGEST_IMAGE = "python:3.12-slim@sha256:" + "a" * 64
 
 
 def test_real_container_preflight_missing_image_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The M1 probe path (container.py:176) with --pull never: a missing image raises."""
+    """The probe path (container.py:176) with --pull never: a missing image raises."""
 
     from recertia.solver import container
     from recertia.solver.sandbox import SandboxError
@@ -854,7 +854,7 @@ def test_real_container_preflight_refuses_tag_only_image_and_no_runtime(monkeypa
 
 @pytest.mark.parametrize("runtime", ["podman", None], ids=["podman", "unset"])
 def test_container_preflight_requires_docker_runtime(monkeypatch, runtime: str | None) -> None:  # noqa: ANN001
-    """CTO-rec N-E: the runtime is pinned to docker; podman or an unpinned runtime is refused."""
+    """The runtime is pinned to docker; podman or an unpinned runtime is refused."""
 
     from recertia.solver import container
     from recertia.solver.sandbox import SandboxError
@@ -978,7 +978,7 @@ def test_plan_node_lazy_import_is_guarded(tmp_path: Path, capsys, calls, fake_do
 
 
 def test_subclass_skipping_super_init_is_still_refused(tmp_path: Path, capsys, calls, fake_docker) -> None:
-    """CTO-rec N3 / P8-nosuper: ``__new__`` is guarded, not only ``ModelClient.__init__``."""
+    """``__new__`` is guarded, not only ``ModelClient.__init__``."""
 
     from recertia.solver.model import ModelClient, StubModelClient
 
@@ -1078,7 +1078,7 @@ def test_log_scan_fails_on_fixture_ids(tmp_path: Path, capsys, leak: str) -> Non
 
 
 def test_deny_list_has_skill_ids_request_prefixes_and_split_root(tmp_path: Path) -> None:
-    """CTO-rec N2 / proposal §4 item 11, for both the in-run guard and ``scan``."""
+    """Proposal §4 item 11, for both the in-run guard and ``scan``."""
 
     _m, _c, split = _build(tmp_path)
     task = split / "repo-chore" / FIXTURE_IDS[0] / "task.json"
@@ -1171,7 +1171,7 @@ def test_workflow_is_dispatch_only_pinned_container_and_secretless() -> None:
         assert banned not in code, banned
     assert re.search(r'python-version: "3\.12\.\d+"', code)
     assert "--require-hashes -r requirements/heldout-eval.txt" in code
-    assert "TODO(REC-022)" in text and "Harper-rec" in text
+    assert "TODO(REC-022)" in text and "access-storage proposal" in text
     names = re.findall(r"- name: (.+)", code)
     assert names[:2] == ["Refuse debug logging", "Refuse non-main ref"], names
     order = [
@@ -1208,12 +1208,12 @@ def _steps(code: str) -> dict[str, str]:
     return out
 
 
-def test_workflow_cto_must_fixes_m2_to_m5_and_log_scan_job() -> None:
+def test_workflow_hardening_and_log_scan_job() -> None:
     text = (REPO / ".github/workflows/heldout-operator.yml").read_text(encoding="utf-8")
     code = "\n".join(line.split("#", 1)[0].rstrip() for line in text.splitlines())
     steps = _steps(code)
     evaluate = steps["evaluate/Verify root and count, container preflight, evaluate (offline)"]
-    # M3: no new privileges and no supplementary groups at all; the harness reaches docker only
+    # No new privileges and no supplementary groups at all; the harness reaches docker only
     # through a uid ACL on the socket, set before the netns.
     setpriv = evaluate.split("setpriv", 1)[1].split('"$PY"', 1)[0]
     assert "--no-new-privs" in setpriv and "--clear-groups" in setpriv
@@ -1223,11 +1223,11 @@ def test_workflow_cto_must_fixes_m2_to_m5_and_log_scan_job() -> None:
     acl = 'sudo setfacl -m "u:$(id -u):rw" "$SOCK"'
     assert acl in evaluate and evaluate.index(acl) < evaluate.index("sudo unshare --net")
     assert "docker_socket_or_setfacl_missing" in evaluate
-    # N-E: runtime pinned to docker for the job and through env -i.
+    # Runtime pinned to docker for the job and through env -i.
     assert "RECERTIA_CONTAINER_RUNTIME: docker" in code and "RECERTIA_CONTAINER_RUNTIME=docker" in evaluate
-    # N-D: the always() wipe revokes the socket ACL.
+    # The always() wipe revokes the socket ACL.
     assert 'sudo setfacl -x "u:$(id -u)" "$SOCK"' in steps["evaluate/Wipe held-out material"]
-    # M2 / N4: staging under RUNNER_TEMP; the in-module guards see the workspace and debug flag.
+    # Staging under RUNNER_TEMP; the in-module guards see the workspace and debug flag.
     for passed in (
         'TMPDIR="$HO_TMP"',
         'RUNNER_TEMP="$RUNNER_TEMP"',
@@ -1236,7 +1236,7 @@ def test_workflow_cto_must_fixes_m2_to_m5_and_log_scan_job() -> None:
     ):
         assert passed in evaluate, passed
     assert "HO_TMP: ${{ runner.temp }}/tmp" in evaluate
-    # M2 / N5: key files never outlive the decrypt step, and the last step always wipes all.
+    # Key files never outlive the decrypt step, and the last step always wipes all.
     for job in ("evaluate", "log-scan"):
         names = [k for k in steps if k.startswith(job + "/")]
         wipe = steps[names[-1]]
@@ -1248,14 +1248,14 @@ def test_workflow_cto_must_fixes_m2_to_m5_and_log_scan_job() -> None:
             v for k, v in steps.items() if k.startswith(job + "/") and "ecrypt" in k and "PENDING" in k
         )
         assert "trap 'rm -rf \"$KEY_DIR\"' EXIT" in decrypt
-        # M4: a decrypt step that is no longer the fail-closed stub must emit ::add-mask::.
+        # A decrypt step that is no longer the fail-closed stub must emit ::add-mask::.
         stub = "decrypt_not_approved" in decrypt and "exit 1" in decrypt
         assert stub or "::add-mask::" in decrypt
-    assert "CTO-rec M4" in text and "::add-mask::" in text
-    # M5: no deployment environment yet; the TODO says when it is added.
+    assert "proposal §4 item 8: RIGHT AFTER" in text and "::add-mask::" in text
+    # No deployment environment yet; the TODO says when it is added.
     assert not re.search(r"^\s*environment:", code, flags=re.M)
     assert "`environment: heldout-operator` is added to BOTH jobs in the same" in text
-    # N7: the published-log scan job.
+    # The published-log scan job.
     log_scan = code.split("\n  log-scan:\n", 1)[1]
     assert "needs: evaluate" in log_scan and "if: always()" in log_scan.split("steps:", 1)[0]
     assert "actions: read" in log_scan and "contents: read" in log_scan
@@ -1266,8 +1266,8 @@ def test_workflow_cto_must_fixes_m2_to_m5_and_log_scan_job() -> None:
     assert all("write" not in p for p in jobs_perms) and len(jobs_perms) == 2
 
 
-def test_audit_record_goes_to_robs_two_recipients_only() -> None:
-    """Lucas-rec #1 / Harper-rec: the audit record is encrypted to `rob` and `rob-recovery` only.
+def test_audit_record_goes_to_the_owners_two_recipients_only() -> None:
+    """The audit record is encrypted to the owner's key and recovery key only.
 
     No separate operator recipient. The job key stays where it is (the decrypt step), and the
     workflow names recipients only, never key material.
@@ -1278,7 +1278,8 @@ def test_audit_record_goes_to_robs_two_recipients_only() -> None:
     persist = _steps(code)["evaluate/Persist to audit store (PENDING approval; fails closed)"]
     assert "audit_sink_not_approved" in persist and "exit 1" in persist
     raw = text.split("- name: Persist to audit store", 1)[1].split("\n      - name:", 1)[0]
-    assert "HELDOUT_AUDIT_RECIPIENTS: `rob`, `rob-recovery`" in " ".join(raw.replace("#", " ").split())
+    flat = " ".join(raw.replace("#", " ").split())
+    assert "HELDOUT_AUDIT_RECIPIENTS: the owner's key and recovery key" in flat
     assert "recipients only" in raw
     assert not re.search(r"\bthe\s+operator\b", raw, flags=re.I), "no separate operator recipient"
     assert "age1" not in text and "AGE-SECRET-KEY" not in text and "BEGIN " not in text
@@ -1326,7 +1327,7 @@ def _wo06_messages() -> set[str]:
 
 
 def test_every_wo06_message_passes_unredacted() -> None:
-    """Lucas-rec #2: all 30 of main's loader messages are on the allowlist, verbatim."""
+    """All 30 of main's loader messages are on the allowlist, verbatim."""
 
     messages = _wo06_messages()
     assert len(messages) == 30, sorted(messages)
@@ -1361,7 +1362,7 @@ def _tamper(split: Path) -> None:
 def test_real_verifier_messages_are_visible_end_to_end(
     tmp_path: Path, capsys, calls, mutate, message: str
 ) -> None:
-    """Lucas-rec #2 / #3: driven through main's real verify_heldout_tree, its message is printed."""
+    """Driven through main's real verify_heldout_tree, its message is printed."""
 
     manifest, ct, split = _build(tmp_path)
     mutate(split)

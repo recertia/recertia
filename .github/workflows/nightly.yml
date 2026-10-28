@@ -1,7 +1,7 @@
 name: nightly
 
 # Not a required check. Python 3.11 at lowest-direct deps and 3.13 at newest:
-# the batched import-all test (bugs 12 and 13), then the full test suite the way
+# the batched import-all test, then the full test suite the way
 # ci.yml runs it (REC-051).
 #
 # pip has no --resolution flag (that is uv). This repo's CI uses pip, so the
@@ -10,7 +10,7 @@ name: nightly
 # the extras in NIGHTLY_EXTRAS (REC-057: postgres, pdf and otel too, not only dev).
 #
 # A failed or cancelled *scheduled* run opens (or comments on) one tracking issue,
-# "nightly: scheduled run failing", through the alert job (REC-057 N5).
+# "nightly: scheduled run failing", through the alert job (REC-057).
 
 on:
   # GitHub disables scheduled workflows in a public repo after 60 days without
@@ -53,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The suite runs PyPI code; keep the job token out of .git/config (REC-057 N2).
+          # The suite runs PyPI code; keep the job token out of .git/config (REC-057).
           persist-credentials: false
 
       - uses: actions/setup-python@v5
@@ -103,7 +103,7 @@ jobs:
             pip install -e ".[$NIGHTLY_EXTRAS]"
           fi
 
-      # REC-062 S2: the extras must import, and psycopg must use the [binary] package's
+      # REC-062: the extras must import, and psycopg must use the [binary] package's
       # bundled libpq. Without [binary], psycopg falls back to the pure-Python wrapper
       # (or fails to import if no system libpq), and nothing else in the nightly
       # imports psycopg or pypdf, so this step is what makes a dropped [binary] loud.
@@ -136,19 +136,19 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pytest -v
 
-  # REC-057 N5: a red scheduled nightly alerts someone. The job keeps one open issue
+  # REC-057: a red scheduled nightly alerts someone. The job keeps one open issue
   # titled "nightly: scheduled run failing", created by github-actions[bot], with the
   # MARKER line in its body. It opens that issue, or comments on it if it is already
   # open, and skips a run id that is already reported (for example a re-run attempt).
   # Closing the issue is a human step. Manual dispatches never alert.
-  # Hardening (CTO-rec rulings): schedule-only `if:`; no checkout and no `uses:` actions,
+  # Hardening: schedule-only `if:`; no checkout and no `uses:` actions,
   # only the runner's `gh` CLI; every `${{ }}` value enters through `env:` and the body
   # holds run metadata only. This job holds the workflow's only write grant: job-scoped
   # `issues: write` on the built-in GITHUB_TOKEN. No secret is used.
   alert:
     name: alert on scheduled failure
     needs: import-all
-    # REC-062 S3: any import-all result but success (failure, cancelled, which is also
+    # REC-062: any import-all result but success (failure, cancelled, which is also
     # what a timeout-minutes hit reports, or skipped) alerts on a scheduled run.
     if: ${{ always() && github.event_name == 'schedule' && needs.import-all.result != 'success' }}
     runs-on: ubuntu-latest
@@ -187,7 +187,7 @@ jobs:
             gh issue create --title "$TITLE" --body "$body"
             exit 0
           fi
-          # REC-062 S1: only the bot's own text counts. The issue body is the bot's (the
+          # REC-062: only the bot's own text counts. The issue body is the bot's (the
           # list above filters on author); comments count only if GraphQL reports their
           # author as "github-actions" (the bot's login there; no user account has it), so a
           # visitor's comment that carries the run-id key cannot suppress this alert.

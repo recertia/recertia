@@ -21,7 +21,7 @@ _MANIFEST_VERSION = 1
 # The root's own lock files: empty lock targets that backup and restore hold
 # exclusively while they run. They carry no data, so they are neither archived
 # nor extracted. On Windows the locks are mandatory, so reading or overwriting a
-# file through another handle while it is locked can fail (REC-058 MF-D).
+# file through another handle while it is locked can fail (REC-058).
 _ROOT_LOCK_FILES = frozenset({".lock", "api.lock"})
 # A runs root's tenant lock (REC-065), only where a runs root sits: the CLI layout's
 # root itself, ``runs/<tenant>``, and the ``jobs`` runs root under either. A file of
@@ -123,9 +123,11 @@ def backup_tree(root: Path, archive: Path) -> Path:
 def restore_tree(archive: Path, dest: Path, *, overwrite: bool = False) -> Path:
     """Extract a backup archive into ``dest``. Refuses path-escaping members.
 
-    The root's ``.lock`` and ``api.lock`` (held by this call) and any
-    ``.tenant.lock`` are not extracted, so an archive written before they were
-    left out still restores.
+    The root's ``.lock`` and ``api.lock`` (held by this call) and a runs root's
+    ``.tenant.lock`` (``.tenant.lock``, ``jobs/``, ``runs/<t>/`` and
+    ``runs/<t>/jobs/``, matched after ``\\`` becomes ``/``) are not extracted, so an
+    archive written before they were left out still restores. A file of that name
+    anywhere else is user content and is extracted.
     """
 
     src = Path(archive).resolve()

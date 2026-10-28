@@ -66,7 +66,10 @@ def tenant_export(
     except InvalidTenantId as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc
-    lines = _collect(runs.runs_root, blobs)
+    # The runs roots' empty tenant lock files are locks, not tenant data (REC-065), so
+    # neither the listing nor the copy includes them: --dry-run predicts --execute.
+    lock_files = {runs.tenant_lock, runs.jobs().tenant_lock}
+    lines = [path for path in _collect(runs.runs_root, blobs) if path not in lock_files]
     if not execute:
         for path in lines:
             typer.echo(str(path))
@@ -84,11 +87,9 @@ def tenant_export(
     if any(dest_r == tree or _under(dest_r, tree) for tree in source_dirs):
         _refuse("dest must not sit inside the source tenant tree")
 
-    # The runs roots' empty tenant lock files are locks, not tenant data (REC-065).
-    lock_files = {runs.tenant_lock, runs.jobs().tenant_lock}
     copied = 0
     for src in lines:
-        if not src.is_file() or src in lock_files:
+        if not src.is_file():
             continue
         try:
             rel = src.resolve().relative_to(root_r)
