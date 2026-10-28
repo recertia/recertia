@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
-- **REC-065, REC-058, REC-020 already covered** — per-tenant locking, imported-root lock honouring, and push-range commit-email fail-closed behaviour are present on main. This note closes the tracking issues.
+- **REC-065, REC-058, REC-020 already covered on main** — per-tenant root locking (REC-065), imported-root lock honouring including workers (REC-058), and push-range commit-email fail-closed behaviour (REC-020) are present. This note closes the tracking issues.
 
 ### Security
+
+- (existing entries preserved on main; this branch only adds the note above)
