@@ -183,8 +183,13 @@ class RootBusy(RootLockBusy, RecertiaError):
     exit_code = 6
 
     def __init__(self, message: str, **kwargs) -> None:
-        RootLockBusy.__init__(self, message)
-        RecertiaError.__init__(self, message, **kwargs)
+        # Cooperative init: RootLockBusy (RuntimeError) then RecertiaError attributes.
+        super().__init__(message)
+        # RecertiaError sets message/run_id/details/retry_after_s after the RuntimeError base.
+        self.message = message
+        self.run_id = kwargs.get("run_id")
+        self.details = dict(kwargs.get("details") or {})
+        self.retry_after_s = kwargs.get("retry_after_s")
 
 
 class RootLock:
