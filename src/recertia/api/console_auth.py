@@ -36,7 +36,7 @@ Role = Literal["operator", "reviewer", "admin"]
 _VALID_ROLES = frozenset({"operator", "reviewer", "admin"})
 _OIDC_TTL_S = 600
 # Pending OIDC login starts are unauthenticated, so the map is bounded (REC-056a).
-# Order (per the review ruling): the per-client check runs first. A client (see oidc_client_key)
+# Order (per the review decision): the per-client check runs first. A client (see oidc_client_key)
 # at _OIDC_PENDING_PER_CLIENT evicts only its OWN oldest start and is never rejected; it
 # never touches another client's entries. Only a start from a client under its limit can
 # meet a full map; that start evicts the globally oldest entry and is accepted. So one

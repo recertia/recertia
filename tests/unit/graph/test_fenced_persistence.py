@@ -135,7 +135,7 @@ def test_stale_ledger_token_rejected_after_steal_and_release(tmp_path: Path) -> 
 
 
 def test_released_run_tokenless_writes_rejected(tmp_path: Path) -> None:
-    """P3 ruling: token-less writes are allowed only on a never-leased run."""
+    """P3 requirement: token-less writes are allowed only on a never-leased run."""
 
     root = tmp_path
     persist = open_run_persistence(root)
