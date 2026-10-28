@@ -59,7 +59,7 @@ def _legacy(root, seqs=(1, 2, 3), run="legacy-run", op=False):
     if op: p0.operations.run_once(run, 1, "solve", 0, lambda: eff.append("legacy") or {"v": 1})
     p0.close(); return eff
 
-# ---- busy-window requirements (fallback deleted): open under exclusive RootLock must either raise a
+# ---- busy-window behavior (fallback deleted): open under exclusive RootLock must either raise a
 # typed *Busy* error within BUSY_T, or block and succeed only after release. Nothing may be written
 # during the busy window, no side effect may run, and after release a fresh open sees exactly the
 # pre-existing state plus the holder's writes (no loss, no double-run).

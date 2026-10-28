@@ -914,7 +914,7 @@ def _hold_root(root: Path, holder: str) -> object:
 def test_queue_worker_requeues_a_root_busy_claim_without_spending_an_attempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holder: str
 ) -> None:
-    """``recertia worker`` (serve.run_once): RootBusy is retryable (requirement 1).
+    """``recertia worker`` (serve.run_once): RootBusy is retryable.
 
     Tenant-b has a pending leftover import. With ``same_tenant_import`` another import
     of tenant-b holds its tenant lock, so this one is refused. (Until REC-065 the holder

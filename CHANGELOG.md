@@ -477,7 +477,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **REL-3 R4 probes rewritten to typed `RootBusy` (REC-056b2, #139; ADR-0022)** — the six
   REL-3 probes that were skipped on main (I, L, M, M2, T1, T2) now run. They expected an open
   under the held exclusive root lock to succeed and overlay the leftover `checkpoints.db` /
-  `operations.db`, which contradicted the green R3 requirements (O/M3/M4) and the shipped contract.
+  `operations.db`, which contradicted the green R3 probes and the shipped contract.
   [ADR-0022](docs/adr/0022-rootbusy-no-leftover-overlay.md) keeps main's behaviour: on the
   leftover-import path, an open that finds the lock held raises typed `RootBusy` within
   `RECERTIA_IMPORT_LOCK_TIMEOUT_S` and writes nothing; there is no overlay, no same-thread

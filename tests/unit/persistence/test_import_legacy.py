@@ -848,7 +848,7 @@ def _legacy_row_snapshot(root: Path) -> tuple[tuple[object, ...], tuple[object, 
 def test_busy_open_raises_root_busy_without_mutating_sqlite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """O/M3/M4 requirement: typed RootBusy, no writes during the busy window."""
+    """A busy open raises typed RootBusy and writes nothing during the busy window."""
 
     monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
     root = tmp_path / "runs"
