@@ -19,6 +19,7 @@ import pytest
 
 from contracts.criteria import TaskCriterion
 from contracts.run import RunManifest, RunState, Task
+from recertia.errors import RecertiaError
 from recertia.graph.persistence import open_run_persistence
 from recertia.ops.backup import BackupError, _exclusive_root_locks, backup_tree, restore_tree
 from recertia.persistence.import_legacy import legacy_import_complete, legacy_sqlite_pending
@@ -725,11 +726,34 @@ def test_concurrent_api_and_worker_imports_on_one_tenant_exclude_each_other(
     _assert_imported_once(root, tdir)
 
 
+def test_root_busy_is_spec_error() -> None:
+    """``RootBusy`` is the spec'd busy error: ``root_busy``, HTTP 503, retryable, exit 6. It
+    is still a ``RootLockBusy`` (a ``RuntimeError``), so existing ``except RootLockBusy`` and
+    ``except RuntimeError`` callers keep catching it, and it is a ``RecertiaError``."""
+
+    assert RootBusy.code == "root_busy"
+    assert RootBusy.http_status == 503
+    assert RootBusy.retryable is True
+    assert RootBusy.exit_code == 6
+
+    err = RootBusy("root in use")
+    assert err.code == "root_busy"
+    assert err.http_status == 503
+    assert err.retryable is True
+    assert err.exit_code == 6
+    assert isinstance(err, RuntimeError)
+    assert isinstance(err, RecertiaError)
+
+    with pytest.raises(RootLockBusy) as caught:
+        raise err
+    assert caught.value is err
+
+
 def test_api_transcript_route_takes_the_runtime_root_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``GET /v1/runs/{id}/transcript`` on a pending tenant, while a worker-shaped holder has
-    ``<root>/.lock``, raises typed RootBusy and imports nothing."""
+    ``<root>/.lock``, answers 503 ``root_busy`` (retryable) and imports nothing."""
 
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
@@ -751,6 +775,7 @@ def test_api_transcript_route_takes_the_runtime_root_lock(
         assert resp.status_code == 503, resp.text
         body = resp.json()
         assert body.get("error", {}).get("code") == "root_busy", body
+        assert body["error"]["retryable"] is True, body
         assert _run_store_snapshot(tdir) == before
         assert legacy_sqlite_pending(RuntimeLayout(root).tenant("t1"))
     finally:

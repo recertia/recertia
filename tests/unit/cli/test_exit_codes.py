@@ -20,6 +20,7 @@ from recertia.errors import (
     QuotaExceeded,
     Unauthorized,
 )
+from recertia.persistence.root_lock import RootBusy
 
 runner = CliRunner()
 
@@ -52,3 +53,13 @@ def test_not_found_is_1_invalid_is_2_ledger_verify_is_2(tmp_path: Path) -> None:
     assert result.exit_code == 2, result.stderr
     assert "LEDGER INVALID:" in result.stderr
     assert "LEDGER INVALID:" not in result.stdout
+
+
+def test_root_busy_is_6() -> None:
+    # ``root_busy`` is not in the A2 table: the code comes from ``RecertiaError.exit_code``.
+    assert exit_code_for(RootBusy("root in use")) == 6
+
+    with pytest.raises(typer.Exit) as ty:
+        raise_exit(RootBusy("root in use"))
+    assert type(ty.value) is typer.Exit
+    assert ty.value.exit_code == 6
