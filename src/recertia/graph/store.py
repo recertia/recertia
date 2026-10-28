@@ -51,11 +51,9 @@ class CheckpointStore:
         *,
         lease_db: Path | str | None = None,
         tenant_id: str = "local",
-        read_fallback: Path | str | None = None,
     ) -> None:
         self._db_path = Path(db_path)
         self._lease_db = Path(lease_db) if lease_db is not None else None
-        self._read_fallback = Path(read_fallback) if read_fallback is not None else None
         self._tenant_id = tenant_id
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
@@ -262,77 +260,6 @@ class CheckpointStore:
                 "WHERE run_id=? ORDER BY seq DESC LIMIT 1",
                 (run_id,),
             ).fetchone()
-        primary = None if row is None else (
-            int(row[0]),
-            str(row[1]),
-            None if row[2] is None else str(row[2]),
-            RunState.model_validate_json(row[3]),
-        )
-        fallback = self._fallback_latest(run_id)
-        if fallback is None:
-            return primary
-        if primary is None or fallback[0] > primary[0]:
-            return fallback
-        return primary
-
-    def latest_seq(self, run_id: str) -> int | None:
-        """Latest checkpoint ``seq`` for ``run_id`` without parsing the state payload."""
-
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT seq FROM checkpoints WHERE run_id=? ORDER BY seq DESC LIMIT 1",
-                (run_id,),
-            ).fetchone()
-        primary = int(row[0]) if row is not None else None
-        fallback = self._fallback_latest_seq(run_id)
-        if primary is None:
-            return fallback
-        if fallback is None:
-            return primary
-        return max(primary, fallback)
-
-    def history(self, run_id: str) -> list[tuple[int, str, str | None, RunState]]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT seq, node, next_node, state_json FROM checkpoints "
-                "WHERE run_id=? ORDER BY seq ASC",
-                (run_id,),
-            ).fetchall()
-        by_seq = {
-            int(seq): (
-                int(seq),
-                str(node),
-                None if next_node is None else str(next_node),
-                RunState.model_validate_json(sj),
-            )
-            for seq, node, next_node, sj in rows
-        }
-        for item in self._fallback_history(run_id):
-            by_seq.setdefault(item[0], item)
-        return [by_seq[seq] for seq in sorted(by_seq)]
-
-    def list_run_ids(self) -> list[str]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT DISTINCT run_id FROM checkpoints ORDER BY run_id"
-            ).fetchall()
-        ids = {str(r[0]) for r in rows}
-        ids.update(self._fallback_run_ids())
-        return sorted(ids)
-
-    def _fallback_latest_seq(self, run_id: str) -> int | None:
-        row = self._fallback_query(
-            "SELECT seq FROM checkpoints WHERE run_id=? ORDER BY seq DESC LIMIT 1",
-            (run_id,),
-        )
-        return int(row[0]) if row is not None else None
-
-    def _fallback_latest(self, run_id: str) -> tuple[int, str, str | None, RunState] | None:
-        row = self._fallback_query(
-            "SELECT seq, node, next_node, state_json FROM checkpoints "
-            "WHERE run_id=? ORDER BY seq DESC LIMIT 1",
-            (run_id,),
-        )
         if row is None:
             return None
         return (
@@ -342,12 +269,23 @@ class CheckpointStore:
             RunState.model_validate_json(row[3]),
         )
 
-    def _fallback_history(self, run_id: str) -> list[tuple[int, str, str | None, RunState]]:
-        rows = self._fallback_query_all(
-            "SELECT seq, node, next_node, state_json FROM checkpoints "
-            "WHERE run_id=? ORDER BY seq ASC",
-            (run_id,),
-        )
+    def latest_seq(self, run_id: str) -> int | None:
+        """Latest checkpoint ``seq`` for ``run_id`` without parsing the state payload."""
+
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT seq FROM checkpoints WHERE run_id=? ORDER BY seq DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
+        return int(row[0]) if row is not None else None
+
+    def history(self, run_id: str) -> list[tuple[int, str, str | None, RunState]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT seq, node, next_node, state_json FROM checkpoints "
+                "WHERE run_id=? ORDER BY seq ASC",
+                (run_id,),
+            ).fetchall()
         return [
             (
                 int(seq),
@@ -358,33 +296,12 @@ class CheckpointStore:
             for seq, node, next_node, sj in rows
         ]
 
-    def _fallback_run_ids(self) -> set[str]:
-        rows = self._fallback_query_all("SELECT DISTINCT run_id FROM checkpoints")
-        return {str(row[0]) for row in rows}
-
-    def _fallback_query(self, sql: str, params: tuple[object, ...] = ()) -> tuple[Any, ...] | None:
-        rows = self._fallback_query_all(sql, params)
-        return rows[0] if rows else None
-
-    def _fallback_query_all(
-        self, sql: str, params: tuple[object, ...] = ()
-    ) -> list[tuple[Any, ...]]:
-        path = self._read_fallback
-        if path is None or not path.is_file():
-            return []
-        try:
-            conn = sqlite3.connect(
-                f"file:{path.resolve().as_posix().replace('?', '%3F')}?mode=ro",
-                uri=True,
-            )
-        except sqlite3.Error:
-            return []
-        try:
-            return list(conn.execute(sql, params))
-        except sqlite3.Error:
-            return []
-        finally:
-            conn.close()
+    def list_run_ids(self) -> list[str]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT run_id FROM checkpoints ORDER BY run_id"
+            ).fetchall()
+        return sorted({str(r[0]) for r in rows})
 
     def list_summaries(
         self,
