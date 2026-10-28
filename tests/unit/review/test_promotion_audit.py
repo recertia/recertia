@@ -76,7 +76,7 @@ def test_settings_reads_operator_audit_root() -> None:
     assert load_settings({}).operator_audit_root == ""
 
 
-# ----- Q2 hardening (CTO-rec S1): modes, ownership, no wider-mode window -----
+# ----- Q2 hardening: modes, ownership, no wider-mode window -----
 
 
 def test_pre_existing_root_is_tightened_to_0700(tmp_path: Path) -> None:

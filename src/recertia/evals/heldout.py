@@ -1,15 +1,15 @@
-"""Operator-only held-out eval runner that fails closed (REC-022, WO-rec-20261020-08).
+"""Operator-only held-out eval runner that fails closed (REC-022).
 
 The public golden split under ``evals/golden/`` stays the CI gate (``ci.yml`` runs ``pytest``).
 The private held-out split never lives in this public repo. It runs only from
 ``.github/workflows/heldout-operator.yml`` (``workflow_dispatch``) or an operator shell.
 
-Manifest (Harper-rec spec). The public manifest ``evals/heldout/<split_id>.manifest.json`` holds
+Manifest (per the manifest spec). The public manifest ``evals/heldout/<split_id>.manifest.json`` holds
 only ``schema_version, split_id, count, hash_rule ("sha256-sorted-relpath-v1"), root_sha256,
 ciphertext_sha256, created_at`` (``created_at`` is RFC 3339 with an offset). This module has NO
-manifest format of its own and does NOT hash the tree. The tree check is Build Bot-rec's WO-06
-``verify_heldout_tree(manifest_path, root) -> HeldoutManifest`` (CTO-rec M6; interface confirmed
-by Build Bot-rec), imported by ONE from-import of ``verify_heldout_tree``,
+manifest format of its own and does NOT hash the tree. The tree check is the WO-06
+``verify_heldout_tree(manifest_path, root) -> HeldoutManifest`` (interface confirmed
+by its author), imported by ONE from-import of ``verify_heldout_tree``,
 ``HeldoutManifestError`` and ``HeldoutManifest`` (the result type, for the isinstance
 check). ``verify_heldout_tree`` is the ONLY WO-06 call: nothing here loads the manifest or
 computes the root hash separately. A ``HeldoutManifestError`` is a fail-closed exit (2) that logs
@@ -34,7 +34,7 @@ Order. Every step fails closed before any eval runs:
    staged copy (root hash and file count); a tree with no task dirs fails closed. The split
    root, staging dir and audit store must all lie outside the checkout (cwd, repo root,
    ``$GITHUB_WORKSPACE``).
-4. Run the container preflight from M1 (``solver/container.py`` ``ensure_execution_ready`` and
+4. Run the container preflight (``solver/container.py`` ``ensure_execution_ready`` and
    ``probe_container_runtime``) against the digest-pinned local image. Digest pins run with
    ``--pull never`` and ``--network=none``.
 5. Golden executor only (``use_skill_script=True``) on the staged copy. Constructing any
@@ -66,7 +66,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
-# Build Bot-rec's WO-06 tree verifier (on main since #118, recertia.evals.heldout_manifest):
+# The WO-06 tree verifier (on main since #118, recertia.evals.heldout_manifest):
 #   verify_heldout_tree(manifest_path: Path, root: Path) -> HeldoutManifest
 #   raises HeldoutManifestError on any refusal or mismatch; messages carry hashes and counts only.
 # The tree counts as verified ONLY if the result is a HeldoutManifest instance.
@@ -90,8 +90,8 @@ MANIFEST_KEYS = frozenset(
 REQUEST_PREFIX_CHARS = 40
 # RFC 3339 date-time with a numeric offset or Z.
 _RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
-# WO-06's HeldoutManifestError messages (main, #118) carry hashes and counts only, never names
-# (Lucas-rec #2). One is logged verbatim if it is one of these fixed messages or fully matches one
+# WO-06's HeldoutManifestError messages (main, #118) carry hashes and counts only, never names.
+# One is logged verbatim if it is one of these fixed messages or fully matches one
 # of these shapes. Anything else (a name, a path, free text, a message WO-06 does not emit) replaces
 # the WHOLE message with LOADER_REDACTED, so an id can never reach the public log through the
 # loader. tests/unit/evals/test_heldout.py checks this list against main's module.
@@ -162,7 +162,7 @@ def _loader() -> tuple[Callable[[Path, Path], Any], type[Exception], type]:
             HeldoutManifestError,
             verify_heldout_tree,
         )
-    except Exception:  # noqa: BLE001 - ImportError or anything raised at import (CTO-rec N-F)
+    except Exception:  # noqa: BLE001 - ImportError or anything raised at import
         raise Refused("loader_unavailable") from None
     if (
         not callable(verify_heldout_tree)
@@ -275,7 +275,7 @@ def verify_tree(manifest_path: Path, manifest: Mapping[str, Any], staged: Path) 
     ``HeldoutManifestError`` fails closed and logs WO-06's hash/count message (``loader_reason``).
     Any other exception, or a result that is not a ``HeldoutManifest`` instance, fails closed with
     a fixed phrase. The manifest ``count`` is a FILE count and WO-06 has already compared it with
-    the tree (Lucas-rec #2), so it is not compared with the task dirs here. A tree with no task
+    the tree, so it is not compared with the task dirs here. A tree with no task
     dirs fails closed.
     """
 
@@ -302,7 +302,7 @@ _ABSENT = object()
 
 
 class ModelClientForbidden(RuntimeError):
-    """A model client was constructed during a held-out run (WO-08 Amendment 1)."""
+    """A model client was constructed during a held-out run."""
 
 
 PROVIDER_MODULES = ("recertia.solver.providers", "anthropic", "openai")
@@ -337,7 +337,7 @@ def forbid_model_clients(constructed: list[str]) -> Iterator[None]:
     """Refuse every ``ModelClient`` construction and every provider-module import; record each.
 
     - ``__init__`` is replaced on ``ModelClient`` AND on every subclass that defines its own, so a
-      subclass that skips ``super().__init__`` is still refused (CTO-rec N3, P8-nosuper). A
+      subclass that skips ``super().__init__`` is still refused. A
       subclass created during the run is caught by a temporary ``__init_subclass__``. (Patching
       ``__new__`` is avoided: CPython keeps a stale ``tp_new`` slot after it is removed again.)
     - A ``sys.meta_path`` finder refuses importing ``PROVIDER_MODULES`` (the guard is in place
@@ -464,7 +464,7 @@ def checkout_roots(env: Mapping[str, str]) -> list[Path]:
 
 
 def location_refusal(env: Mapping[str, str], *, split_root: Path, audit_store: Path) -> str | None:
-    """CTO-rec M2: decrypted bytes, their staged copy and the audit store stay out of the checkout.
+    """Decrypted bytes, their staged copy and the audit store stay out of the checkout.
 
     Staging goes under ``tempfile.gettempdir()`` (``$TMPDIR``). With ``$RUNNER_TEMP`` set, staging
     and the split root must also be inside it, so the ``if: always()`` wipe covers them.
@@ -499,7 +499,7 @@ def preflight(env: Mapping[str, str], *, require_offline: bool) -> str | None:
 
 
 def container_preflight() -> None:
-    """M1 container preflight (``solver/container.py:101,176``) against the local image.
+    """The container preflight (``solver/container.py:101,176``) against the local image.
 
     It requires the container backend for both the run and the golden surface, and a
     ``@sha256:`` image, so that ``_container_run`` passes ``--pull never`` (a missing image
@@ -522,7 +522,7 @@ def container_preflight() -> None:
         raise SandboxError("held-out runs require the container backend")
     if "@sha256:" not in default_container_image():
         raise SandboxError("held-out runs require a digest-pinned image")
-    # CTO-rec N-E: docker only. Rootless podman needs setuid newuidmap, which --no-new-privs blocks.
+    # Docker only. Rootless podman needs setuid newuidmap, which --no-new-privs blocks.
     if settings.container_runtime != "docker":
         raise SandboxError("held-out runs require RECERTIA_CONTAINER_RUNTIME=docker")
     if ensure_execution_ready() != "container":

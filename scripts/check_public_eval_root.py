@@ -6,7 +6,7 @@ Each path given must:
 - never touch ``evals/heldout`` or any other private location;
 - resolve (symlinks followed) inside the same public root of this checkout;
 - contain only git-tracked files, so a dropped-in or decrypted private fixture fails;
-- match the index, so a decrypted file written over a tracked path fails too (CTO-rec N7).
+- match the index, so a decrypted file written over a tracked path fails too.
 
 It also fails if any ``HELDOUT_*`` variable is set in the environment.
 

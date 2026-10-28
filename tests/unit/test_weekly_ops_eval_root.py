@@ -92,7 +92,7 @@ def test_untracked_file_in_public_root_is_refused(fake_repo: Path) -> None:
 
 
 def test_modified_tracked_file_in_public_root_is_refused(fake_repo: Path) -> None:
-    """CTO-rec N7: a decrypted file written over a tracked path is caught, not only new files."""
+    """A decrypted file written over a tracked path is caught, not only new files."""
 
     mod = _checker()
     target = fake_repo / "evals/golden/repo-chore/t1/task.json"

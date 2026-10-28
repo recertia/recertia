@@ -1,7 +1,7 @@
 """REC-058 (#144): writers on a runtime root honour backup/restore's exclusive root lock.
 
 Kept out of ``test_import_legacy.py`` so that file stays byte-identical to the
-ADR-0022 baseline (N3 guard).
+ADR-0022 baseline.
 """
 
 from __future__ import annotations
@@ -1030,7 +1030,7 @@ def test_embedded_worker_requeues_a_root_busy_claim_while_the_same_tenant_import
 def test_embedded_worker_requeues_a_root_busy_raised_mid_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str
 ) -> None:
-    """REC-058 S-2: ``RootBusy`` raised during ``start``/``resume``, after the orchestrator
+    """REC-058: ``RootBusy`` raised during ``start``/``resume``, after the orchestrator
     was built, is retryable too. ``AsyncRunWorker._run`` records ``root_busy`` and
     re-raises, and the embedded queue worker re-queues the claim. Without that ``except``
     the error fell into ``run_failed`` (mutant C3), and no other test noticed."""
@@ -1084,7 +1084,7 @@ def test_embedded_worker_requeues_a_root_busy_raised_mid_run(
 def test_root_busy_requeue_backs_off_for_root_busy_retry_s(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str
 ) -> None:
-    """REC-058 S-3: a refused claim is due again exactly ``ROOT_BUSY_RETRY_S`` (2 s) after
+    """REC-058: a refused claim is due again exactly ``ROOT_BUSY_RETRY_S`` (2 s) after
     the refusal, and a worker that polls inside that window claims nothing. The older
     checks (``due > started``, a second ``run_once`` returns 0) also held with no back-off,
     because the item was re-claimed, refused again and re-queued (mutant C6)."""
@@ -1448,7 +1448,7 @@ def test_tenant_lock_refused_on_the_tenant_lock_holds_nothing(
     layout.runs_root.mkdir(parents=True)
     first = TenantLock(RuntimeLayout(root).root_lock, layout.tenant_lock)
     first.acquire(exclusive=True, timeout_s=0)
-    # #169 N-1 for TenantLock: a refused acquire closes the fds it opened at the OS level
+    # #169, for TenantLock: a refused acquire closes the fds it opened at the OS level
     # (``_fd is None`` also holds when an fd leaks). Checked right after each refusal,
     # before a later open can reuse the fd number on the same file.
     opened = _record_lock_fds(monkeypatch)
