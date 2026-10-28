@@ -11,6 +11,7 @@ each one either no-ops (already applied) or runs exactly once (not yet applied) 
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import Callable, Literal, TypeVar
 
 from recertia.persistence.db import open_db
-from recertia.persistence.root_lock import RootLock
+from recertia.persistence.root_lock import RootBusy, RootLock
 
 T = TypeVar("T")
 
@@ -363,12 +364,19 @@ def _init_operations_table(conn: sqlite3.Connection, db_path: Path) -> None:
     The rebuild is exclusive under the runtime root lock and runs in one SQLite
     transaction (``isolation_level=None`` so Python 3.11 does not autocommit DDL).
     A crash that left ``operations_rel3`` is dropped and retried.
+
+    Bounded wait: ``RECERTIA_IMPORT_LOCK_TIMEOUT_S`` (default 5s). Raises typed
+    ``RootBusy`` if the lock cannot be taken; nothing is written while refused.
     """
 
     if _operations_schema_ready(conn):
         return
+    timeout_s = float(os.environ.get("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "5"))
     lock = RootLock(Path(db_path).parent / ".lock")
-    lock.acquire_exclusive()
+    try:
+        lock.acquire_exclusive(timeout_s=timeout_s)
+    except Exception as exc:
+        raise RootBusy(f"operations schema lock held: {lock.path}") from exc
     try:
         if _operations_schema_ready(conn):
             return

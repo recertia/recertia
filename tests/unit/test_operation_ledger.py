@@ -309,7 +309,9 @@ def test_ops_rebuild_resumable_after_drop_before_rename(tmp_path: Path) -> None:
     assert stored == {"v": 2}
 
 
-def test_ops_rebuild_waits_for_root_lock(tmp_path: Path) -> None:
+def test_ops_rebuild_waits_for_root_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """REC-067: bounded wait then typed RootBusy; nothing written while refused."""
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.3")
     db = tmp_path / "operations.db"
     conn = sqlite3.connect(db)
     conn.execute(
@@ -330,20 +332,19 @@ def test_ops_rebuild_waits_for_root_lock(tmp_path: Path) -> None:
 
     lock = RootLock(tmp_path / ".lock")
     lock.try_exclusive()
-    done = threading.Event()
     errors: list[BaseException] = []
 
     def opener() -> None:
         try:
             OperationLedger(db).close()
-            done.set()
         except BaseException as exc:  # noqa: BLE001
             errors.append(exc)
 
     worker = threading.Thread(target=opener)
     worker.start()
-    assert not done.wait(0.4)
-    lock.release()
-    assert done.wait(2.0)
     worker.join(timeout=2.0)
-    assert not errors
+    lock.release()
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    from recertia.persistence.root_lock import RootBusy
+    assert isinstance(errors[0], RootBusy)

@@ -50,6 +50,8 @@ import time
 from pathlib import Path
 from typing import Protocol
 
+from recertia.errors import RecertiaError
+
 _IS_WINDOWS = sys.platform == "win32"
 
 # winbase.h / winerror.h
@@ -163,8 +165,8 @@ class RootLockBusy(RuntimeError):
     """An exclusive lock could not be taken because the root is in use."""
 
 
-class RootBusy(RootLockBusy):
-    """Typed busy error: an open timed out waiting for the root lock.
+class RootBusy(RootLockBusy, RecertiaError):
+    """Typed busy error mapped to the spec: code root_busy, 503, retryable, exit 6.
 
     Raised by the leftover import and by ``open_run_persistence`` on an
     already-imported root while another holder has an exclusive lock they need:
@@ -172,8 +174,22 @@ class RootBusy(RootLockBusy):
     tenant lock). An import also gets it while a handle of its own tenant is open.
 
     Callers must not write somewhere else. A generic ``Exception`` or a hang is
-    not this error.
+    not this error. Catchable by ``except RootLockBusy``.
     """
+
+    code = "root_busy"
+    http_status = 503
+    retryable = True
+    exit_code = 6
+
+    def __init__(self, message: str, **kwargs) -> None:
+        # Cooperative init: RootLockBusy (RuntimeError) then RecertiaError attributes.
+        super().__init__(message)
+        # RecertiaError sets message/run_id/details/retry_after_s after the RuntimeError base.
+        self.message = message
+        self.run_id = kwargs.get("run_id")
+        self.details = dict(kwargs.get("details") or {})
+        self.retry_after_s = kwargs.get("retry_after_s")
 
 
 class RootLock:

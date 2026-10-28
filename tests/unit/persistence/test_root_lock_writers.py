@@ -747,8 +747,10 @@ def test_api_transcript_route_takes_the_runtime_root_lock(
     held = RootLock(RuntimeLayout(root).root_lock)
     held.try_exclusive()  # what a worker-shaped import (or backup) holds
     try:
-        with pytest.raises(RootBusy):
-            client.get("/v1/runs/r/transcript", headers={"X-API-Key": issued.secret})
+        resp = client.get("/v1/runs/r/transcript", headers={"X-API-Key": issued.secret})
+        assert resp.status_code == 503, resp.text
+        body = resp.json()
+        assert body.get("error", {}).get("code") == "root_busy", body
         assert _run_store_snapshot(tdir) == before
         assert legacy_sqlite_pending(RuntimeLayout(root).tenant("t1"))
     finally:
