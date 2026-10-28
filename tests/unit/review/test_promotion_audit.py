@@ -23,7 +23,7 @@ from recertia.settings import KNOWN_ENV_KEYS, load_settings
 def test_unset_root_fails_closed(root: str | None) -> None:
     with pytest.raises(AuditSinkUnavailable, match="unset"):
         OperatorAuditStore(root)
-    with pytest.raises(AuditSinkUnavailable, match="unset"):  # no None fallback (M1)
+    with pytest.raises(AuditSinkUnavailable, match="unset"):  # no None fallback
         open_operator_audit(root)
 
 
@@ -76,7 +76,7 @@ def test_settings_reads_operator_audit_root() -> None:
     assert load_settings({}).operator_audit_root == ""
 
 
-# ----- Q2 hardening: modes, ownership, no wider-mode window -----
+# ----- Hardening: modes, ownership, no wider-mode window -----
 
 
 def test_pre_existing_root_is_tightened_to_0700(tmp_path: Path) -> None:

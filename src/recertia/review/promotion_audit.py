@@ -1,4 +1,4 @@
-"""Operator-only promotion audit store (REC-009, Gap A).
+"""Operator-only promotion audit store (REC-009).
 
 A golden-gate refusal records its full detail here: every failing fixture id, golden
 path, result row and run detail. Proposers never see any of it. They get a

@@ -478,7 +478,7 @@ def test_a_route_combines_separate_xff_lines(tmp_path: Path, monkeypatch: pytest
     assert _keys(app) == {"192.0.2.44"}
 
 
-# ----- round 5: PR154_REVIEW B1/B2, S1-S4 (rulings (a), (b1), (b2)) -----
+# ----- round 5: client-key handling -----
 
 P, P2, V, C = PROXY, PROXY2, VICTIM, "192.0.2.44"
 
@@ -904,7 +904,7 @@ def test_s4_docs_say_used_for_the_key_only_when_trusted() -> None:
     assert "X-Forwarded-For is never used for the client key" in settings_src
 
 
-# PR161 review N-a: the untrusted-peer warning uses the same wording
+# The untrusted-peer warning uses the same wording
 
 
 def test_na_untrusted_xff_warning_says_used_for_the_key_only_when_trusted(
@@ -919,7 +919,7 @@ def test_na_untrusted_xff_warning_says_used_for_the_key_only_when_trusted(
     assert "ignoring" not in msg
 
 
-# PR161 review N-b: docs say lines/bytes are capped before the split and hops right after
+# Docs say lines/bytes are capped before the split and hops right after
 
 
 def test_nb_docs_describe_where_each_xff_cap_runs() -> None:
@@ -938,7 +938,7 @@ def test_nb_docs_describe_where_each_xff_cap_runs() -> None:
         assert "checked before the header is split: more than" not in text
 
 
-# Nits (PR154_REVIEW N2-N4)
+# Further client-key checks
 
 
 def test_n2_trusted_proxies_accept_host_bits() -> None:
