@@ -88,6 +88,7 @@ import unicodedata
 _ALLOWED_EXACT = frozenset(
     {
         "cursoragent@" + "cursor.com",
+        "robs@" + "gatech.edu"
     }
 )
 # GitHub noreply: optional "<digits>+", then a login (GitHub's username rule:
