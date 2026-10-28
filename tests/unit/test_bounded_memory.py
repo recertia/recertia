@@ -181,7 +181,7 @@ def test_b_untrusted_xff_warns_once_naming_trusted_proxies(caplog: pytest.LogCap
     assert len(hits) == 1
 
 
-def test_a_client_key_takes_rightmost_untrusted_hop() -> None:
+def test_client_key_takes_rightmost_untrusted_hop() -> None:
     # A client can prepend anything; only hops appended by trusted proxies count.
     xff = ["192.0.2.99, 198.51.100.7", PROXY2]
     assert oidc_client_key(PROXY, xff, TRUSTED) == VICTIM
@@ -189,7 +189,7 @@ def test_a_client_key_takes_rightmost_untrusted_hop() -> None:
     assert oidc_client_key("2001:db8:ffff::1", ["2001:db8:1:2::7"], TRUSTED) == "2001:db8:1:2::/64"
 
 
-def test_a_every_xff_line_is_combined_in_order() -> None:
+def test_every_xff_line_is_combined_in_order() -> None:
     # HAProxy-style: the client forges a first line, the trusted proxy adds its own line.
     assert oidc_client_key(PROXY, [VICTIM, "192.0.2.44"], TRUSTED) == "192.0.2.44"
     assert oidc_client_key(PROXY, [VICTIM, "192.0.2.44", PROXY2], TRUSTED) == "192.0.2.44"
@@ -446,7 +446,7 @@ def test_d_forwarded_header_ignored_even_from_trusted_proxy(
     assert _keys(app) == {PROXY}
 
 
-def test_a_two_clients_behind_trusted_proxy_are_limited_independently(
+def test_two_clients_behind_trusted_proxy_are_limited_independently(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fastapi.testclient import TestClient
@@ -468,7 +468,7 @@ def test_a_two_clients_behind_trusted_proxy_are_limited_independently(
     assert sessions.take_oidc(a_state) is not None
 
 
-def test_a_route_combines_separate_xff_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_route_combines_separate_xff_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi.testclient import TestClient
 
     app = _oidc_app(tmp_path, monkeypatch, PROXY_NET)
@@ -505,7 +505,7 @@ def _rewrite_warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecor
         [f"{C}, ::ffff:{P}"],
     ],
 )
-def test_b1_trusted_proxy_that_appends_itself_is_not_a_rewrite(
+def test_trusted_proxy_that_appends_itself_is_not_a_rewrite(
     xff: list[str], caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="recertia.api.console_auth"):
@@ -515,7 +515,7 @@ def test_b1_trusted_proxy_that_appends_itself_is_not_a_rewrite(
     assert oidc_client_key(P, xff, TRUSTED) == REWRITTEN  # port unknown: no skip
 
 
-def test_b1_trusted_proxy_self_append_ipv6_and_mapped_peer() -> None:
+def test_trusted_proxy_self_append_ipv6_and_mapped_peer() -> None:
     assert oidc_client_key("2001:db8:ffff::1", ["2001:db8:1:2::7, 2001:db8:ffff::1"], TRUSTED, 443) == (
         "2001:db8:1:2::/64"
     )
@@ -523,20 +523,20 @@ def test_b1_trusted_proxy_self_append_ipv6_and_mapped_peer() -> None:
 
 
 @pytest.mark.parametrize("xff", [[P], [f"{P}, {C}"], [f"{P}, {C}, {P}"], [P, C, P]])
-def test_b1_trusted_peer_rewrite_shapes_still_fail_closed(xff: list[str]) -> None:
+def test_trusted_peer_rewrite_shapes_still_fail_closed(xff: list[str]) -> None:
     # guards the '*' leftmost attack: the peer appears with no other hop, or left of one
     assert oidc_client_key(P, xff, TRUSTED, 40000) == REWRITTEN
     assert oidc_client_key(P, [f"{C}, {P}:443"], TRUSTED, 443) == REWRITTEN  # not a bare hop
     assert oidc_client_key(P, [f"{C}, [{P}]"], TRUSTED, 443) == REWRITTEN
 
 
-def test_b1_self_append_skip_needs_a_trusted_peer() -> None:
+def test_self_append_skip_needs_a_trusted_peer() -> None:
     untrusted = parse_trusted_proxies(["2001:db8:ffff::/48"])
     assert oidc_client_key(P, [f"{C}, {P}"], untrusted, 40000) == REWRITTEN
     assert oidc_client_key(P, [f"{C}, {P}"], (), 40000) == REWRITTEN
 
 
-def test_b1_route_trusted_proxy_appending_itself_keys_each_real_client(
+def test_route_trusted_proxy_appending_itself_keys_each_real_client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     from fastapi.testclient import TestClient
@@ -553,7 +553,7 @@ def test_b1_route_trusted_proxy_appending_itself_keys_each_real_client(
 
 @pytest.mark.parametrize("star", [False, True])
 @pytest.mark.parametrize("trusted", ["", PROXY_NET])
-def test_b1_uvicorn_rewrite_with_trusted_proxy_shapes_still_one_key(
+def test_uvicorn_rewrite_with_trusted_proxy_shapes_still_one_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, star: bool, trusted: str
 ) -> None:
     """Attacker shapes 'N, P' and 'P, N' through uvicorn's default and '*' give one key."""
@@ -586,7 +586,7 @@ _REWRITE_SHAPES: list[tuple[list[str], bool]] = [
 
 @pytest.mark.parametrize("star", [False, True])
 @pytest.mark.parametrize(("xff", "bare"), _REWRITE_SHAPES)
-def test_b1_uvicorn_rewrite_port_contract(star: bool, xff: list[str], bare: bool) -> None:
+def test_uvicorn_rewrite_port_contract(star: bool, xff: list[str], bare: bool) -> None:
     """Runs on the lowest (nightly py3.11, uvicorn floor) and newest (ci) uvicorn.
 
     The self-append skip relies on uvicorn giving a rewritten peer port 0 for a bare hop.
@@ -638,7 +638,7 @@ def test_b1_uvicorn_rewrite_port_contract(star: bool, xff: list[str], bare: bool
         (["x" * 1_000_000], True),
     ],
 )
-def test_b2_xff_parsing_is_bounded_and_fails_closed(
+def test_xff_parsing_is_bounded_and_fails_closed(
     peer: str, trusted: Any, xff: list[str], oversized: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="recertia.api.console_auth"):
@@ -647,7 +647,7 @@ def test_b2_xff_parsing_is_bounded_and_fails_closed(
     assert bool([r for r in caplog.records if "parsing bounds" in r.getMessage()]) is oversized
 
 
-def test_b2_oversized_xff_is_rejected_before_splitting(
+def test_oversized_xff_is_rejected_before_splitting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -690,7 +690,7 @@ _NASTY = [
 
 
 @pytest.mark.parametrize("peer", [PROXY, FLOODER, "2001:db8::1%eth0", "::ffff:198.51.100.7%1", "not-an-ip"])
-def test_a_malformed_xff_never_raises(peer: str) -> None:
+def test_malformed_xff_never_raises(peer: str) -> None:
     for value in _NASTY:
         for xff in ([value], [value, value], [VICTIM, value], [value, PROXY]):
             assert isinstance(oidc_client_key(peer, xff, TRUSTED), str)
@@ -699,7 +699,7 @@ def test_a_malformed_xff_never_raises(peer: str) -> None:
 
 @pytest.mark.parametrize("trusted", ["", PROXY_NET])
 @pytest.mark.parametrize("peer", [PROXY, FLOODER, "127.0.0.1"])
-def test_a_route_malformed_or_oversized_xff_never_500(
+def test_route_malformed_or_oversized_xff_never_500(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, trusted: str, peer: str
 ) -> None:
     from fastapi.testclient import TestClient
@@ -722,7 +722,7 @@ def test_a_route_malformed_or_oversized_xff_never_500(
 # Warning once per process
 
 
-def test_a_warnings_fire_once_per_process_across_apps(
+def test_warnings_fire_once_per_process_across_apps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     from fastapi.testclient import TestClient
@@ -745,7 +745,7 @@ def test_a_warnings_fire_once_per_process_across_apps(
     assert sum("is at its 16-start limit" in m for m in msgs) == 1
 
 
-def test_a_warning_once_under_threads(caplog: pytest.LogCaptureFixture) -> None:
+def test_warning_once_under_threads(caplog: pytest.LogCaptureFixture) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     with caplog.at_level(logging.WARNING, logger="recertia.api.console_auth"), ThreadPoolExecutor(16) as pool:
@@ -753,7 +753,7 @@ def test_a_warning_once_under_threads(caplog: pytest.LogCaptureFixture) -> None:
     assert sum("RECERTIA_TRUSTED_PROXIES" in r.getMessage() for r in caplog.records) == 1
 
 
-def test_b1_rewrite_warning_is_loud_about_the_one_bucket_case(caplog: pytest.LogCaptureFixture) -> None:
+def test_rewrite_warning_is_loud_about_the_one_bucket_case(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="recertia.api.console_auth"):
         oidc_client_key("127.0.0.1", ["127.0.0.1"], ())
     (msg,) = [r.getMessage() for r in caplog.records]
@@ -766,7 +766,7 @@ def test_b1_rewrite_warning_is_loud_about_the_one_bucket_case(caplog: pytest.Log
 
 
 @pytest.mark.parametrize("trusted", ["", PROXY_NET])
-def test_a_untrusted_xff_cannot_touch_another_clients_entries_or_budget(
+def test_untrusted_xff_cannot_touch_another_clients_entries_or_budget(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, trusted: str
 ) -> None:
     from fastapi.testclient import TestClient
@@ -800,7 +800,7 @@ def test_a_untrusted_xff_cannot_touch_another_clients_entries_or_budget(
 # A self-XFF client lands in the shared bucket and evicts nothing outside it
 
 
-def test_b1_self_xff_client_only_evicts_inside_the_shared_bucket(
+def test_self_xff_client_only_evicts_inside_the_shared_bucket(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fastapi.testclient import TestClient
@@ -821,7 +821,7 @@ def test_b1_self_xff_client_only_evicts_inside_the_shared_bucket(
         assert _pending_for(sessions, ip) == states
 
 
-def test_b1_shared_bucket_at_its_limit_evicts_only_its_own_on_a_full_table() -> None:
+def test_shared_bucket_at_its_limit_evicts_only_its_own_on_a_full_table() -> None:
     store = _store()
     others = [
         store.begin_oidc(redirect_uri=CB, client_key=f"198.51.100.{128 + i % 64}")[0]
@@ -840,7 +840,7 @@ def test_b1_shared_bucket_at_its_limit_evicts_only_its_own_on_a_full_table() -> 
 
 @pytest.mark.parametrize("star", [False, True])
 @pytest.mark.parametrize("trusted", ["", PROXY_NET])
-def test_s1_uvicorn_multi_line_xff_still_one_key(
+def test_uvicorn_multi_line_xff_still_one_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, star: bool, trusted: str
 ) -> None:
     app = _oidc_app(tmp_path, monkeypatch, trusted)
@@ -858,7 +858,7 @@ def test_s1_uvicorn_multi_line_xff_still_one_key(
 # Both warnings in one process, exactly once each
 
 
-def test_s2_both_warnings_fire_once_each_in_one_process(caplog: pytest.LogCaptureFixture) -> None:
+def test_both_warnings_fire_once_each_in_one_process(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="recertia.api.console_auth"):
         for i in range(50):
             oidc_client_key(FLOODER, [f"192.0.2.{i}"], ())  # untrusted XFF
@@ -872,7 +872,7 @@ def test_s2_both_warnings_fire_once_each_in_one_process(caplog: pytest.LogCaptur
 # The shared bucket filling up is logged once
 
 
-def test_s3_shared_bucket_full_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+def test_shared_bucket_full_warns_once(caplog: pytest.LogCaptureFixture) -> None:
     store = _store()
     with caplog.at_level(logging.WARNING, logger="recertia.api.console_auth"):
         for _ in range(PER_CLIENT):
@@ -893,7 +893,7 @@ def test_s3_shared_bucket_full_warns_once(caplog: pytest.LogCaptureFixture) -> N
 # Wording (X-Forwarded-For is inspected for detection, used for the key only when trusted)
 
 
-def test_s4_docs_say_used_for_the_key_only_when_trusted() -> None:
+def test_docs_say_used_for_the_key_only_when_trusted() -> None:
     go_live = " ".join((REPO / "docs" / "architecture" / "go-live.md").read_text(encoding="utf-8").split())
     changelog = " ".join((REPO / "CHANGELOG.md").read_text(encoding="utf-8").split())
     settings_src = " ".join((REPO / "src" / "recertia" / "settings.py").read_text(encoding="utf-8").split())
@@ -907,7 +907,7 @@ def test_s4_docs_say_used_for_the_key_only_when_trusted() -> None:
 # The untrusted-peer warning uses the same wording
 
 
-def test_na_untrusted_xff_warning_says_used_for_the_key_only_when_trusted(
+def test_untrusted_xff_warning_says_used_for_the_key_only_when_trusted(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="recertia.api.console_auth"):
@@ -922,7 +922,7 @@ def test_na_untrusted_xff_warning_says_used_for_the_key_only_when_trusted(
 # Docs say lines/bytes are capped before the split and hops right after
 
 
-def test_nb_docs_describe_where_each_xff_cap_runs() -> None:
+def test_docs_describe_where_each_xff_cap_runs() -> None:
     go_live = " ".join((REPO / "docs" / "architecture" / "go-live.md").read_text(encoding="utf-8").split())
     changelog = " ".join((REPO / "CHANGELOG.md").read_text(encoding="utf-8").split())
     doc = " ".join((console_auth.oidc_client_key.__doc__ or "").split())
@@ -941,18 +941,18 @@ def test_nb_docs_describe_where_each_xff_cap_runs() -> None:
 # Further checks: trusted-proxy settings, warnings, login state expiry
 
 
-def test_n2_trusted_proxies_accept_host_bits() -> None:
+def test_trusted_proxies_accept_host_bits() -> None:
     got = load_settings({"RECERTIA_TRUSTED_PROXIES": "192.0.2.1/24, 2001:db8:ffff::1/48"}).trusted_proxies
     assert got == ("192.0.2.0/24", "2001:db8:ffff::/48")
 
 
-def test_n3_untrusted_peer_without_xff_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+def test_untrusted_peer_without_xff_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="recertia.api.console_auth"):
         assert oidc_client_key(FLOODER, [], TRUSTED, 40000) == FLOODER
     assert caplog.records == []
 
 
-def test_n4_expired_state_cannot_be_redeemed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_expired_state_cannot_be_redeemed(monkeypatch: pytest.MonkeyPatch) -> None:
     now = [1_000_000.0]
     monkeypatch.setattr(console_auth, "time", SimpleNamespace(time=lambda: now[0]))
     store = _store()

@@ -93,7 +93,7 @@ def _new_queue_threads(before: set[threading.Thread]) -> list[threading.Thread]:
     return [t for t in threading.enumerate() if t.name == "recertia-queue" and t not in before]
 
 
-def test_n1_ensure_started_during_stop_does_not_strand_work(rig: Any) -> None:
+def test_ensure_started_during_stop_does_not_strand_work(rig: Any) -> None:
     rig.queue.set_max_in_flight("t1", 4)
     _enqueue(rig.queue, "gate")
     rig.embedded.ensure_started()
@@ -115,7 +115,7 @@ def test_n1_ensure_started_during_stop_does_not_strand_work(rig: Any) -> None:
     assert len(_new_queue_threads(rig.before)) == 1
 
 
-def test_n1_repeated_ensure_started_during_stop_starts_one_thread(rig: Any) -> None:
+def test_repeated_ensure_started_during_stop_starts_one_thread(rig: Any) -> None:
     rig.queue.set_max_in_flight("t1", 4)
     _enqueue(rig.queue, "gate")
     rig.embedded.ensure_started()
@@ -134,7 +134,7 @@ def test_n1_repeated_ensure_started_during_stop_starts_one_thread(rig: Any) -> N
     assert len(_new_queue_threads(rig.before)) == 1
 
 
-def test_n1_stop_after_ensure_started_wins(rig: Any) -> None:
+def test_stop_after_ensure_started_wins(rig: Any) -> None:
     """stop() → ensure_started() → stop(): the last call wins, nothing keeps polling."""
 
     _enqueue(rig.queue, "gate")
@@ -150,7 +150,7 @@ def test_n1_stop_after_ensure_started_wins(rig: Any) -> None:
     assert _status(rig.queue, "after-final-stop") == "queued"
 
 
-def test_n2_stop_reports_join_timeout(rig: Any, caplog: pytest.LogCaptureFixture) -> None:
+def test_stop_reports_join_timeout(rig: Any, caplog: pytest.LogCaptureFixture) -> None:
     _enqueue(rig.queue, "gate")
     rig.embedded.ensure_started()
     assert rig.worker.entered.wait(5)
@@ -162,7 +162,7 @@ def test_n2_stop_reports_join_timeout(rig: Any, caplog: pytest.LogCaptureFixture
     assert _status(rig.queue, "gate") == "succeeded"  # in-flight item finished, not abandoned
 
 
-def test_n2_stop_returns_true_when_idle_or_never_started(rig: Any) -> None:
+def test_stop_returns_true_when_idle_or_never_started(rig: Any) -> None:
     assert rig.embedded.stop() is True
     rig.embedded.ensure_started()
     assert rig.embedded.is_running()
