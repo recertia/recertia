@@ -12,7 +12,7 @@ import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from contracts.run import RouteEntry, RunState
 from contracts.trajectory import TrajectoryEvent

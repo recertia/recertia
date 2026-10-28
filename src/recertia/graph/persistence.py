@@ -204,7 +204,6 @@ def open_run_persistence(
                 checkpoint_db,
                 lease_db=layout.runtime_db,
                 tenant_id=tenant,
-                
             ),
             operations=OperationLedger(
                 operations_db,

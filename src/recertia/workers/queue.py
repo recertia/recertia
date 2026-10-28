@@ -612,8 +612,8 @@ def open_run_queue(root: Path | str) -> RunQueue:
     Workers and CLI open this outside the API process, which holds ``api.lock``.
     Bounded wait, typed ``RootBusy``, nothing written while refused.
     """
-    from recertia.persistence.root_lock import RootBusy, RootLock
     from recertia.persistence.import_legacy import import_lock_timeout_s
+    from recertia.persistence.root_lock import RootBusy, RootLock
 
     layout = RuntimeLayout(Path(root))
     lock = RootLock(layout.root_lock)
