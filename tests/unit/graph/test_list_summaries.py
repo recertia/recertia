@@ -91,3 +91,18 @@ def test_run_service_list_is_keyset(tmp_path: Path) -> None:
     assert [item["run_id"] for item in second["items"]] == ["c", "e"]
     assert second["next_cursor"] is None
     assert all(item["tenant_id"] == "tenant-a" for item in second["items"])
+
+
+def test_list_cursor_is_opaque_and_rejects_tampered(tmp_path: Path) -> None:
+    """REC-056f: cursor is base64 JSON; a tampered cursor raises InvalidCursor."""
+    from recertia.runtime.cursor import encode_cursor, decode_cursor
+    from recertia.runtime.errors import InvalidCursor
+
+    encoded = encode_cursor("2026-10-29T00:00:00+00:00", "run-1")
+    created, rid = decode_cursor(encoded)
+    assert (created, rid) == ("2026-10-29T00:00:00+00:00", "run-1")
+    try:
+        decode_cursor("not-a-cursor")
+        raise AssertionError("should have raised")
+    except InvalidCursor:
+        pass

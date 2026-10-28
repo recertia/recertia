@@ -65,3 +65,12 @@ class LeaseLost(Busy):
     retryable = True
     exit_code = 6
 
+
+
+class InvalidCursor(RecertiaError):
+    """Malformed or tampered list cursor (REC-056f)."""
+
+    code = "invalid_cursor"
+    http_status = 400
+    retryable = False
+    exit_code = 2

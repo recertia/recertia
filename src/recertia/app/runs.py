@@ -254,46 +254,65 @@ class RunService:
         task_class: str | None = None,
         terminal: str | None = None,
     ) -> dict[str, Any]:
-        from recertia.graph.store import CheckpointStore
-        from recertia.persistence.import_legacy import live_checkpoint_db
+        """List runs for a tenant (REC-056f).
 
-        db = live_checkpoint_db(Path(runs_root))
-        disk_rows: list[dict[str, object]] = []
-        if db is not None:
-            store = CheckpointStore(db)
-            try:
-                disk_rows = store.list_summaries(
-                    limit=limit + 1,
-                    cursor=cursor,
-                    task_class=task_class,
-                    terminal=terminal,
-                )
-            finally:
-                store.close()
-        disk_has_extra = len(disk_rows) > limit
-        page = disk_rows[:limit]
-        next_disk_id = str(disk_rows[limit]["run_id"]) if disk_has_extra else None
-        chosen: dict[str, dict[str, Any]] = {
-            str(row["run_id"]): {**row, "tenant_id": tenant_id} for row in page
-        }
+        Order is ``created_at DESC, run_id DESC``. The cursor is an opaque
+        base64 JSON keyset. A malformed cursor raises ``InvalidCursor``.
+        Runs that exist only in the checkpoint store (pre-migration) are
+        still included.
+        """
+        from recertia.runtime.cursor import decode_cursor, encode_cursor
+        from recertia.runtime.errors import InvalidCursor
+        from recertia.runtime.registry import RunRegistry
+
+        created_at_before = run_id_before = None
+        if cursor:
+            created_at_before, run_id_before = decode_cursor(cursor)
+
+        chosen: dict[str, dict[str, Any]] = {}
+        # Registry rows (summary_json).
+        try:
+            from recertia.persistence.layout import RuntimeLayout
+            reg_path = RuntimeLayout(Path(runs_root)).local_runs().runtime_db
+            if reg_path.is_file():
+                reg = RunRegistry(reg_path)
+                try:
+                    for row in reg.list_page(
+                        tenant_id,
+                        limit=limit + 1,
+                        created_at_before=created_at_before,
+                        run_id_before=run_id_before,
+                    ):
+                        chosen[str(row["run_id"])] = {**row, "tenant_id": tenant_id}
+                finally:
+                    reg.close()
+        except Exception:
+            pass
+        # In-memory runs not yet flushed.
         for (tid, run_id), rec in self.runs.items():
             if tid != tenant_id or rec is None:
                 continue
-            if getattr(rec, "tenant_id", tenant_id) != tenant_id:
-                continue
-            if cursor and not run_id > cursor:
-                continue
-            if next_disk_id is not None and run_id >= next_disk_id:
-                continue
+            if created_at_before is not None:
+                rec_created = str(getattr(rec, "created_at", "") or "")
+                if (rec_created, run_id) >= (created_at_before, run_id_before or ""):
+                    continue
             if task_class and getattr(rec, "task_class", None) != task_class:
                 continue
             if terminal and (getattr(rec, "terminal", None) or "") != terminal:
                 continue
             chosen[run_id] = _summary_from_record(rec)
-        ordered = sorted(chosen.values(), key=lambda row: str(row["run_id"]))
-        has_more = disk_has_extra or len(ordered) > limit
+        ordered = sorted(
+            chosen.values(),
+            key=lambda row: (str(row.get("created_at", "")), str(row["run_id"])),
+            reverse=True,
+        )
+        has_more = len(ordered) > limit
         items = ordered[:limit]
-        next_cursor = items[-1]["run_id"] if items and has_more else None
+        if items and has_more:
+            last = items[-1]
+            next_cursor = encode_cursor(str(last.get("created_at", "")), str(last["run_id"]))
+        else:
+            next_cursor = None
         return {"items": items, "next_cursor": next_cursor}
 
     def create(
