@@ -98,7 +98,7 @@ def test_one_client_past_its_limit_cannot_evict_another_clients_login() -> None:
     assert store.take_oidc(again) is not None
 
 
-def test_path1_full_table_over_limit_client_evicts_only_its_own_oldest() -> None:
+def test_full_table_over_limit_client_evicts_only_its_own_oldest() -> None:
     # Per-client check first: a client at its own limit drops its OWN oldest start, even
     # when the table is full and the globally oldest entry belongs to another client.
     store = _store()
@@ -115,7 +115,7 @@ def test_path1_full_table_over_limit_client_evicts_only_its_own_oldest() -> None
     assert _pending_for(store, FLOODER) == [*mine[1:], new_state]
 
 
-def test_c_full_table_evicts_globally_oldest_and_accepts_new_start() -> None:
+def test_full_table_evicts_globally_oldest_and_accepts_new_start() -> None:
     store = _store()
     states = [
         store.begin_oidc(redirect_uri=CB, client_key=f"198.51.100.{128 + i % 64}")[0]
@@ -151,7 +151,7 @@ def test_expired_starts_are_purged_before_either_limit(monkeypatch: pytest.Monke
     assert set(full._oidc) == {live, new}  # purged first; no live entry evicted
 
 
-def test_e_per_client_limit_below_global_cap() -> None:
+def test_per_client_limit_below_global_cap() -> None:
     assert console_auth._OIDC_PENDING_PER_CLIENT == PER_CLIENT
     assert console_auth._OIDC_PENDING_MAX == PENDING_MAX
     assert 0 < PER_CLIENT < PENDING_MAX
@@ -164,15 +164,15 @@ def test_e_per_client_limit_below_global_cap() -> None:
 # ----- client key: socket peer, trusted-proxy X-Forwarded-For -----
 
 
-def test_b_client_key_ignores_xff_without_trusted_proxies() -> None:
+def test_client_key_ignores_xff_without_trusted_proxies() -> None:
     assert oidc_client_key(FLOODER, [VICTIM], ()) == FLOODER
 
 
-def test_b_client_key_ignores_xff_from_untrusted_peer() -> None:
+def test_client_key_ignores_xff_from_untrusted_peer() -> None:
     assert oidc_client_key(FLOODER, [VICTIM], TRUSTED) == FLOODER
 
 
-def test_b_untrusted_xff_warns_once_naming_trusted_proxies(caplog: pytest.LogCaptureFixture) -> None:
+def test_untrusted_xff_warns_once_naming_trusted_proxies(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="recertia.api.console_auth"):
         for i in range(5):
             assert oidc_client_key(FLOODER, [f"192.0.2.{i}"], ()) == FLOODER
@@ -224,11 +224,11 @@ def test_ipv6_keys_are_grouped_by_64() -> None:
         [f"{PROXY2}, 203.0.113.10"],  # entirely trusted proxies
     ],
 )
-def test_d_absent_malformed_or_all_trusted_xff_falls_back_to_peer(xff: list[str]) -> None:
+def test_absent_malformed_or_all_trusted_xff_falls_back_to_peer(xff: list[str]) -> None:
     assert oidc_client_key(PROXY, xff, TRUSTED) == PROXY
 
 
-def test_d_client_key_without_peer_is_unknown() -> None:
+def test_client_key_without_peer_is_unknown() -> None:
     assert oidc_client_key(None, [VICTIM], TRUSTED) == "unknown"
     assert oidc_client_key("", [], ()) == "unknown"
 
@@ -328,7 +328,7 @@ def _keys(app: Any) -> set[str]:
 
 
 @pytest.mark.parametrize("trusted", ["", PROXY_NET])
-def test_b_spoofed_xff_from_untrusted_peer_cannot_dodge_or_exhaust_limits(
+def test_spoofed_xff_from_untrusted_peer_cannot_dodge_or_exhaust_limits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, trusted: str
 ) -> None:
     from fastapi.testclient import TestClient
@@ -352,7 +352,7 @@ def test_b_spoofed_xff_from_untrusted_peer_cannot_dodge_or_exhaust_limits(
     assert sessions.take_oidc(victim_state) is not None
 
 
-def test_b_loopback_peer_xff_ignored_when_no_trusted_proxies(
+def test_loopback_peer_xff_ignored_when_no_trusted_proxies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fastapi.testclient import TestClient
@@ -376,7 +376,7 @@ def _uvicorn_client(app: Any, peer: str, **config: Any) -> Any:
     return TestClient(_with_peer(cfg.loaded_app, peer))
 
 
-def test_b_documented_uvicorn_launch_keeps_the_loopback_socket_peer(
+def test_documented_uvicorn_launch_keeps_the_loopback_socket_peer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = _oidc_app(tmp_path, monkeypatch)
@@ -422,7 +422,7 @@ def test_uvicorn_forwarded_allow_ips_star_fails_closed(
     assert sessions.take_oidc(v.json()["state"]) is not None
 
 
-def test_d_unix_socket_peer_shares_unknown_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unix_socket_peer_shares_unknown_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi.testclient import TestClient
 
     app = _oidc_app(tmp_path, monkeypatch)
@@ -433,7 +433,7 @@ def test_d_unix_socket_peer_shares_unknown_key(tmp_path: Path, monkeypatch: pyte
     assert len(app.state.recertia.sessions._oidc) == PER_CLIENT
 
 
-def test_d_forwarded_header_ignored_even_from_trusted_proxy(
+def test_forwarded_header_ignored_even_from_trusted_proxy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fastapi.testclient import TestClient
