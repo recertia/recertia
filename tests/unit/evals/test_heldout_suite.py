@@ -1,4 +1,4 @@
-"""REC-009 Amendment 2: the held-out runner takes the skill from task.json and masks output.
+"""REC-009: the held-out runner takes the skill from task.json and masks output.
 
 Synthetic split only, built under ``tmp_path`` with neutral dir names (h001, h002).
 """

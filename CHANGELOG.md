@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uvicorn should run with `--no-proxy-headers` (the documented launch commands now pass
   it). In-memory telemetry readers (dashboard, `missing_required`) see only the newest
   1024 events, process-wide.
-- **Gap A fixture-id leak (REC-009)** — a golden-gate refusal is now decision-only for
+- **Fixture-id leak (REC-009)** — a golden-gate refusal is now decision-only for
   proposers. `PromotionError` carries `refusal_kind` (`golden_gate` |
   `predecessor_non_regression` | `gate_error` | `audit_unavailable`), `failing_count` and an
   opaque `audit_ref`. Fixture ids, golden paths, result rows and raw error text go to an

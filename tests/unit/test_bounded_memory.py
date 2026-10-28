@@ -478,7 +478,7 @@ def test_a_route_combines_separate_xff_lines(tmp_path: Path, monkeypatch: pytest
     assert _keys(app) == {"192.0.2.44"}
 
 
-# ----- round 5: client-key handling -----
+# ----- client-key handling -----
 
 P, P2, V, C = PROXY, PROXY2, VICTIM, "192.0.2.44"
 
@@ -491,7 +491,7 @@ def _rewrite_warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecor
     ]
 
 
-# B1: a trusted proxy that appends itself is not a rewrite (port-guarded)
+# A trusted proxy that appends itself is not a rewrite (port-guarded)
 
 
 @pytest.mark.parametrize(
@@ -618,7 +618,7 @@ def test_b1_uvicorn_rewrite_port_contract(star: bool, xff: list[str], bare: bool
     assert oidc_client_key(host, xff, every_hop, port) == REWRITTEN
 
 
-# B2 / ruling (a): bounded parsing (lines and bytes before splitting, hops right after);
+# Bounded parsing (lines and bytes before splitting, hops right after);
 # over a cap fails closed
 
 
@@ -719,7 +719,7 @@ def test_a_route_malformed_or_oversized_xff_never_500(
         assert r.status_code == 200, (headers[:1], r.status_code)
 
 
-# (a) warning once per process
+# Warning once per process
 
 
 def test_a_warnings_fire_once_per_process_across_apps(
@@ -762,7 +762,7 @@ def test_b1_rewrite_warning_is_loud_about_the_one_bucket_case(caplog: pytest.Log
     assert "every user lands in one shared 16-slot bucket" in " ".join(go_live.split())
 
 
-# (a) an untrusted peer's XFF cannot reach another client's entries or budget
+# An untrusted peer's XFF cannot reach another client's entries or budget
 
 
 @pytest.mark.parametrize("trusted", ["", PROXY_NET])
@@ -797,7 +797,7 @@ def test_a_untrusted_xff_cannot_touch_another_clients_entries_or_budget(
     assert _pending_for(sessions, VICTIM) == mine + more
 
 
-# (b1) a self-XFF client lands in the shared bucket and evicts nothing outside it
+# A self-XFF client lands in the shared bucket and evicts nothing outside it
 
 
 def test_b1_self_xff_client_only_evicts_inside_the_shared_bucket(
@@ -938,7 +938,7 @@ def test_nb_docs_describe_where_each_xff_cap_runs() -> None:
         assert "checked before the header is split: more than" not in text
 
 
-# Further client-key checks
+# Further checks: trusted-proxy settings, warnings, login state expiry
 
 
 def test_n2_trusted_proxies_accept_host_bits() -> None:

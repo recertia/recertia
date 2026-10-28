@@ -319,7 +319,7 @@ def test_verify_heldout_tree_refuses_unsafe_roots(tmp_path: Path) -> None:
 
 
 def test_verify_heldout_tree_refuses_the_real_checkout(tmp_path: Path) -> None:
-    """Amendment 1: never decrypt held-out data inside the checkout."""
+    """Never decrypt held-out data inside the checkout."""
 
     if not (REPO / ".git").exists():
         pytest.skip("not running from a git checkout")

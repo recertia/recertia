@@ -78,7 +78,7 @@ def test_none_limits_are_unbounded_not_zero() -> None:
 
 
 def test_exhausted_residual_attempts_do_not_readmit() -> None:
-    """Bug 6 (CTO_REVIEW §4): exhausted attempts must fail closed, not clamp to 1."""
+    """Bug 6: exhausted attempts must fail closed, not clamp to 1."""
     with pytest.raises(BudgetExhaustedError):
         ResidualBudget(max_attempts=0).as_admission_budget()
 
