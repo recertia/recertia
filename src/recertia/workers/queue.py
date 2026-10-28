@@ -607,24 +607,15 @@ class RunQueue:
 
 
 def open_run_queue(root: Path | str) -> RunQueue:
-    """Open the run queue, taking the root lock shared (REC-066).
+    """Open the run queue (REC-066 documented exception).
 
-    Workers and CLI open this outside the API process, which holds ``api.lock``.
-    Bounded wait, typed ``RootBusy``, nothing written while refused.
+    The API process is covered by the shared ``api.lock`` before stores are
+    assembled. Workers and CLI open ``control.db`` without a root lock so the
+    claim path can still raise typed ``RootBusy`` (and requeue) when a backup
+    holds the root lock (REC-058). The control db is small; the window is the
+    claim duration.
     """
-    from recertia.persistence.import_legacy import import_lock_timeout_s
-    from recertia.persistence.root_lock import RootBusy, RootLock
-
-    layout = RuntimeLayout(Path(root))
-    lock = RootLock(layout.root_lock)
-    try:
-        lock.acquire_shared(timeout_s=import_lock_timeout_s())
-    except Exception as exc:
-        raise RootBusy(f"run queue refused: root lock held: {layout.root_lock}") from exc
-    try:
-        return RunQueue(layout.control_db)
-    finally:
-        lock.release()
+    return RunQueue(RuntimeLayout(Path(root)).control_db)
 
 
 def _ensure_cancel_column(conn: sqlite3.Connection) -> None:
