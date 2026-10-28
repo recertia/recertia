@@ -60,8 +60,11 @@ def T3_stale_holder_identity(root):
     (root / ".lock").write_text(f"{os.getpid()} {threading.get_ident()}\n")   # leftover text, no flock held
     p = open_run_persistence(root); imported = not (root / "checkpoints.db").is_file() or _complete(root)
     p.checkpoints.save("legacy-run", 4, "n4", None, state("legacy-run")); p.close()
-    record("T3 identity text without the flock is not treated as holder", imported,
-           f"import ran={imported}")
+    # REC-063: history must confirm the leftover data was imported, not just the flag.
+    h = hist(root)
+    history_ok = h == [(1, "n1"), (2, "n2"), (3, "n3"), (4, "n4")]
+    record("T3 identity text without the flock is not treated as holder", imported and history_ok,
+           f"import ran={imported}; history={h}")
 
 def _complete(root):
     from recertia.persistence.import_legacy import legacy_import_complete

@@ -232,25 +232,25 @@ def _default_runner(
                 store=overlay,  # type: ignore[arg-type]
                 retriever=retriever,
             )
-            fixture_dir = golden_root / task_class / fixture_id
-            request = fixture_id
-            if (fixture_dir / "goal.json").exists():
-                request = (fixture_dir / "goal.json").read_text(encoding="utf-8")[:200]
-            elif (fixture_dir / "task.json").exists():
-                import json as _json
-
-                spec = _json.loads((fixture_dir / "task.json").read_text(encoding="utf-8"))
-                request = str(spec.get("request") or fixture_id)
-            criterion = TaskCriterion(
-                id="faithfulness-gate",
-                kind="command",
-                run="true",
-                source="caller",
-                weight=1.0,
-            )
-            workdir = runs_root / "faithfulness-ws" / run_id
-            workdir.mkdir(parents=True, exist_ok=True)
             try:
+                fixture_dir = golden_root / task_class / fixture_id
+                request = fixture_id
+                if (fixture_dir / "goal.json").exists():
+                    request = (fixture_dir / "goal.json").read_text(encoding="utf-8")[:200]
+                elif (fixture_dir / "task.json").exists():
+                    import json as _json
+
+                    spec = _json.loads((fixture_dir / "task.json").read_text(encoding="utf-8"))
+                    request = str(spec.get("request") or fixture_id)
+                criterion = TaskCriterion(
+                    id="faithfulness-gate",
+                    kind="command",
+                    run="true",
+                    source="caller",
+                    weight=1.0,
+                )
+                workdir = runs_root / "faithfulness-ws" / run_id
+                workdir.mkdir(parents=True, exist_ok=True)
                 return orch.start(
                     run_id,
                     Task(

@@ -607,6 +607,14 @@ class RunQueue:
 
 
 def open_run_queue(root: Path | str) -> RunQueue:
+    """Open the run queue (REC-066 documented exception).
+
+    The API process is covered by the shared ``api.lock`` before stores are
+    assembled. Workers and CLI open ``control.db`` without a root lock so the
+    claim path can still raise typed ``RootBusy`` (and requeue) when a backup
+    holds the root lock (REC-058). The control db is small; the window is the
+    claim duration.
+    """
     return RunQueue(RuntimeLayout(Path(root)).control_db)
 
 
