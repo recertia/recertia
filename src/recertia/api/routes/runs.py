@@ -9,47 +9,45 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from recertia.api.auth import Principal
 from recertia.api.deps import RouteState
+from recertia.api.schemas import RunCreate, RunRecord
+from recertia.app.runs import AcceptedRun
 
 def _tenant_owns_run(ctx: Any, tenant_id: str, run_id: str) -> bool:
     return True  # stub
 
-@app.get("/v1/runs")
-def list_runs(
-    request: Request,
-    principal=Depends(require_runs),
-    task_class: str | None = None,
-    terminal: str | None = None,
-    limit: int = Query(default=50, ge=1, le=100),
-    cursor: str | None = None,
-    x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
-) -> dict[str, Any]:
-    tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
-    return ctx.run_service.list(
-        tenant_id,
-        runs_root=ctx.tenant_runs_root(tenant_id),
-        limit=limit,
-        cursor=cursor,
-        task_class=task_class,
-        terminal=terminal,
-    )
+@app.post("/v1/runs", response_model=None)
+def create_run(
+    body: RunCreate,
+    wait: str | None = Query(None),
+    x_recertia_wait: str | None = Header(None),
+    prefer: str | None = Header(None),
+    principal: Principal = Depends(require_runs),
+) -> Any:
+    try:
+        result = run_service.create(
+            principal,
+            body,
+            wait=wait,
+            x_recertia_wait=x_recertia_wait,
+            prefer=prefer,
+        )
+    except Exception as exc:
+        return _map_run_error(exc, run_id=body.run_id)
+    if isinstance(result, AcceptedRun):
+        return JSONResponse(
+            status_code=result.status_code,
+            content=result.body,
+            headers=result.headers,
+        )
+    return result
 
-@app.get("/v1/runs/{run_id}/events")
-def run_events(
-    run_id: str,
-    request: Request,
-    principal=Depends(require_runs),
-    after: str | None = None,
-    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-    x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
-) -> StreamingResponse:
-    """SSE follow. REC-056g: honour Last-Event-ID header (or after query) for resume."""
-    run_id = ctx.validate_run_id(run_id)
-    tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
-    if not _tenant_owns_run(ctx, tenant_id, run_id):
+@app.get("/v1/runs/{run_id}", response_model=RunRecord)
+def get_run(run_id: str, principal: Principal = Depends(require_runs)) -> RunRecord:
+    try:
+        run_id = ctx.validate_run_id(run_id)
+        loaded = run_service.get(principal.tenant_id, run_id, principal=principal)
+    except Exception as exc:
+        return _map_run_error(exc, run_id=run_id)
+    if loaded is None:
         raise HTTPException(status_code=404, detail="run not found")
-    resume_after = last_event_id or after
-
-    def gen() -> Any:
-        yield from ctx.events.iter_sse(tenant_id, run_id, after=resume_after)
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    return loaded
