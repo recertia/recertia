@@ -19,9 +19,14 @@ from recertia.api.schemas import (
     StepSkipBody,
 )
 from recertia.errors import RecertiaError
+from recertia.persistence.root_lock import RootBusy
 
 
 def _map_program_error(exc: RecertiaError) -> HTTPException:
+    if isinstance(exc, RootBusy):
+        # Re-raise for the app-level RecertiaError handler: root_busy, 503, retryable, the
+        # envelope the runs routes send. A plain HTTPException would say unavailable.
+        raise exc
     detail: Any = exc.details.get("http_detail", exc.message) if exc.details else exc.message
     return HTTPException(status_code=exc.http_status, detail=detail)
 

@@ -137,6 +137,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`/v1/programs` routes report `root_busy` while the runtime root is busy (#145)** — the
+  routes under `/v1/programs` share one error mapper, and it turned a `RootBusy` from the
+  program service into `503` with code `unavailable` and `retryable: false`. Binding a run
+  to a step (`POST /v1/programs/{program_id}/steps/{step_id}/run` with `bind_run_id`) can
+  hit this: when the run's record has no criteria hash it reads the run's checkpoints,
+  which needs the runtime root lock. The mapper now leaves a `RootBusy` to the app-level
+  handler, so every programs route sends the same envelope as `/v1/runs`: code
+  `root_busy`, `503`, `retryable: true`, with no `Retry-After`.
 - **SSE follow ends for a run the queue marks dead (#137)** — a run whose worker process died
   on its last attempt is marked `dead` (`lease_expired`) and gets no terminal event in its
   log, so a `follow=1` stream held until `RECERTIA_SSE_MAX_S` and the client reconnected
