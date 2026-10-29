@@ -114,6 +114,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `--operator-detail`. `scripts/install_seed_library.py --promote` needs `--audit-root`.
   - `recertia eval run` exits 2 for a `--golden-root`/`--golden-dir` outside a git checkout.
 
+- **`GET /v1/runs` lists newest first with an opaque cursor (#136)** — the list was in
+  run-id order and is now newest first (`created_at` descending, run id descending).
+  `next_cursor` is an opaque keyset cursor instead of the last run id, and a walk with
+  `limit` pages has no 10,000-run ceiling. A walk lists each run once while no run gets its
+  first checkpoint during it. A run that does can be listed twice or skipped: its position
+  moves from its registry date to its checkpoint date, and checkpoint dates are cut to whole
+  seconds. A cursor that is malformed, over 512 characters or not in the canonical form
+  returns `400` `invalid_cursor`, and so does a cursor from before this change (a bare run
+  id): restart the walk without a cursor. Runs that were accepted but have no checkpoint yet
+  are now listed (status `accepted`) and take their stored state once they have one; they
+  match neither the `task_class` nor the `terminal` filter. `limit` stays 1 to 100, and a
+  value outside that range is still `422`. A page reads about `limit` rows from each table,
+  plus the runs whose registry date falls between the page's top and bottom but whose
+  checkpoint date does not. Accepted-only runs between two checkpointed runs stay bounded at
+  about `limit` rows (51 at `limit=50`). The costly case is a batch of runs accepted
+  together whose first checkpoints land later: the page that covers the batch reads every
+  run in it (about 100,000 rows and 0.32 s for a 100,000-run batch), while a whole walk
+  stays linear in the number of runs. Opening the registry and the checkpoint store adds the
+  `runs_list` index on `runs` and the `run_summaries_created` index on `run_summaries`, so
+  the first request after an upgrade builds them.
+
 ### Fixed
 
 - **`Retry-After` rounds up to whole seconds (#145)** — `recertia_error_response` truncated
