@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from recertia.graph.ops import _PENDING_SENTINEL, OperationConflict, OperationLedger
-from recertia.persistence.root_lock import RootLock
+from recertia.persistence.root_lock import RootBusy, RootLock
 
 
 def test_run_once_executes_exactly_once_across_calls(tmp_path: Path) -> None:
@@ -309,10 +309,14 @@ def test_ops_rebuild_resumable_after_drop_before_rename(tmp_path: Path) -> None:
     assert stored == {"v": 2}
 
 
-def test_ops_rebuild_waits_for_root_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """REC-067: bounded wait then typed RootBusy; nothing written while refused."""
-    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.3")
-    db = tmp_path / "operations.db"
+# Bounded-wait knob for the lock tests: the refusal must come after about this long. The
+# join margin only guards against a regression that blocks forever, so it is generous for
+# slow runners.
+_LOCK_WAIT_S = 0.3
+_JOIN_MARGIN_S = 10.0
+
+
+def _make_legacy_operations_db(db: Path) -> None:
     conn = sqlite3.connect(db)
     conn.execute(
         """
@@ -330,21 +334,91 @@ def test_ops_rebuild_waits_for_root_lock(tmp_path: Path, monkeypatch: pytest.Mon
     conn.commit()
     conn.close()
 
-    lock = RootLock(tmp_path / ".lock")
-    lock.try_exclusive()
+
+def _db_snapshot(db: Path) -> tuple[list[tuple[object, ...]], list[tuple[object, ...]]]:
+    """Schema objects and legacy ``operations`` rows, to prove a refused open wrote nothing."""
+
+    conn = sqlite3.connect(db)
+    try:
+        schema = conn.execute("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").fetchall()
+        rows = conn.execute("SELECT * FROM operations ORDER BY run_id, op_seq").fetchall()
+    finally:
+        conn.close()
+    return schema, rows
+
+
+def _open_ledger_in_thread(db: Path) -> tuple[list[BaseException], float, bool]:
+    """Open ``OperationLedger(db)`` on a daemon thread.
+
+    Returns its errors, the elapsed seconds, and whether it finished within the bound. A
+    thread, so that a regression that waits forever fails the bound instead of hanging the
+    test run. The thread is a daemon so a stuck one cannot block interpreter exit.
+    """
+
     errors: list[BaseException] = []
 
     def opener() -> None:
         try:
-            OperationLedger(db).close()
+            OperationLedger(db, schema_lock=True).close()
         except BaseException as exc:  # noqa: BLE001
             errors.append(exc)
 
-    worker = threading.Thread(target=opener)
+    worker = threading.Thread(target=opener, daemon=True)
+    started = time.monotonic()
     worker.start()
-    worker.join(timeout=2.0)
+    worker.join(timeout=_LOCK_WAIT_S + _JOIN_MARGIN_S)
+    elapsed = time.monotonic() - started
+    return errors, elapsed, not worker.is_alive()
+
+
+def test_ops_rebuild_refused_while_root_lock_held_then_succeeds_after_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bounded wait, then typed RootBusy with nothing written; open succeeds once released."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", str(_LOCK_WAIT_S))
+    db = tmp_path / "operations.db"
+    _make_legacy_operations_db(db)
+    before = _db_snapshot(db)
+
+    lock = RootLock(tmp_path / ".lock")
+    lock.try_exclusive()
+    errors, elapsed, finished = _open_ledger_in_thread(db)
     lock.release()
-    assert not worker.is_alive()
+    assert finished, "operations schema open did not finish within the bound"
     assert len(errors) == 1
-    from recertia.persistence.root_lock import RootBusy
     assert isinstance(errors[0], RootBusy)
+    assert elapsed >= _LOCK_WAIT_S / 2
+    assert _db_snapshot(db) == before
+
+    errors, _, finished = _open_ledger_in_thread(db)
+    assert finished
+    assert errors == []
+    ops = OperationLedger(db)
+    try:
+        assert ops.get("old", 1, "n", 0) == (True, {"v": 1})
+    finally:
+        ops.close()
+
+
+def test_init_operations_table_under_own_shared_lock_raises_root_busy_within_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A shared lock this process already holds on the same ``.lock`` file must not
+    deadlock the schema rebuild: it is refused with RootBusy within the bound, nothing
+    written."""
+
+    monkeypatch.setenv("RECERTIA_IMPORT_LOCK_TIMEOUT_S", str(_LOCK_WAIT_S))
+    db = tmp_path / "operations.db"
+    _make_legacy_operations_db(db)
+    before = _db_snapshot(db)
+
+    own_shared = RootLock(tmp_path / ".lock")
+    own_shared.acquire_shared()
+    errors, elapsed, finished = _open_ledger_in_thread(db)
+    own_shared.release()
+    assert finished, "operations schema open did not finish within the bound"
+    assert len(errors) == 1
+    assert isinstance(errors[0], RootBusy)
+    assert elapsed >= _LOCK_WAIT_S / 2
+    assert _db_snapshot(db) == before
