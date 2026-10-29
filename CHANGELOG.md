@@ -137,6 +137,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A non-busy lock failure ends an async run instead of leaving it queued (#160)** — when
+  opening a run's persistence failed with an `OSError` that is not a busy refusal (for
+  example the lock path is a directory, or the disk is full), the in-process async worker
+  let the error escape: the run's events stopped at `run.started`, no `run.finished` was
+  written, and the run record stayed `queued`. The worker now writes an `error` event with
+  code `run_failed`, `retryable: false` and a message that names only the exception class
+  (`cannot open the run's persistence (IsADirectoryError)`), then `run.finished` with
+  `terminal: "error"`, and calls the failure hook, so the run record ends as `error` and its
+  in-flight quota slot is released. The full error, path included, goes to the server log
+  only. A busy refusal (`RootBusy`) is still retryable and requeued.
 - **SSE follow ends for a run the queue marks dead (#137)** — a run whose worker process died
   on its last attempt is marked `dead` (`lease_expired`) and gets no terminal event in its
   log, so a `follow=1` stream held until `RECERTIA_SSE_MAX_S` and the client reconnected
@@ -153,7 +163,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`RootBusy` messages carry no filesystem path (#160)** — a refused open or leftover import
   put the lock path or the runtime root path in the `RootBusy` text, which reaches the
-  `root_busy` run event, queue rows and logs. `TenantLock.refused` is now `root lock is held`
+  `root_busy` run event and logs. `TenantLock.refused` is now `root lock is held`
   or `tenant lock is held`, and the two re-check messages in `open_run_persistence` no longer
   end in the root path. The wording otherwise stays: `cannot open the runtime root while the
   root lock is held`, `cannot import leftover runtime files while the tenant lock is held`,

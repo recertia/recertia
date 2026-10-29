@@ -1,12 +1,13 @@
 """A ``RootBusy`` message names what is busy, never a filesystem path.
 
-The text reaches run events, queue rows, logs and API envelopes, so a lock path or a
-runtime root path in it leaks the host layout. One test per raise site, plus the
+The text reaches run events, logs and API envelopes, so a lock path or a runtime root
+path in it leaks the host layout. One test per raise site, plus the
 ``TenantLock.refused`` strings those sites embed.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -23,11 +24,19 @@ def _assert_path_free(exc: BaseException, root: Path, *paths: Path) -> None:
     message = getattr(exc, "message", None)
     if message is not None:
         texts.append(str(message))
+    error_body = getattr(exc, "error_body", None)
+    if error_body is not None:
+        texts.append(json.dumps(error_body()))
     for text in texts:
         assert text, "a busy refusal must still say something"
         for needle in {str(root), root.name, ".lock", *(str(p) for p in paths), *(p.name for p in paths)}:
             assert needle not in text, (needle, text)
         assert "/" not in text and "\\" not in text, text
+    # ``details`` and ``run_id`` reach the API envelope through ``error_body()``.
+    extras = [repr(getattr(exc, "details", None) or {}), str(getattr(exc, "run_id", None) or "")]
+    for text in extras:
+        for needle in {str(root), root.name, ".lock", *(str(p) for p in paths), *(p.name for p in paths)}:
+            assert needle not in text, (needle, text)
 
 
 def _pending_root(root: Path) -> None:
