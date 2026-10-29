@@ -18,7 +18,7 @@ from recertia.api.event_follow import (
     parse_offset,
 )
 from recertia.api.quotas import QuotaExceeded
-from recertia.api.routes.follow_stream import FollowResponse, aiter_follow
+from recertia.api.routes.follow_stream import SSE_HEADERS, FollowResponse, aiter_follow
 from recertia.api.schemas import RunCreate, RunRecord
 from recertia.app.runs import AcceptedRun
 from recertia.errors import ConfigError, Forbidden, NotFound, RateLimited, RecertiaError
@@ -243,7 +243,7 @@ def register_runs_routes(app: FastAPI, rs: RouteState) -> None:
         def gen() -> Any:
             yield from ctx.events.iter_sse(tenant_id, run_id, after=after)
 
-        return StreamingResponse(gen(), media_type="text/event-stream")
+        return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
     @app.post("/v1/runs/{run_id}/cancel")
     def cancel_run(

@@ -116,6 +116,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SSE follow: docs match `error` and disconnect handling; no proxy buffering (#137)** —
+  `docs/specifications/product-console.md` section 4.3 now says that an `error` event never
+  ends a follow stream by itself (a failed run ends with `run.finished`, `terminal: "error"`),
+  that on an ASGI 2.4 server an idle follow's slot is released at the next keep-alive at the
+  latest once the server notices the client has gone, and that the follow caps are counted
+  per server process. Both `GET /v1/runs/{run_id}/events` responses (backlog and
+  `follow=1`) now send `Cache-Control: no-cache` and `X-Accel-Buffering: no`, so a buffering
+  proxy such as nginx passes frames on at once. New tests cover a carriage return in an event
+  type, the 128-character event-name cap, the sleep between idle polls, a terminal event
+  followed by a half-written line, a backlog larger than one bounded read, and a lone
+  non-retryable `error` that holds the stream until `RECERTIA_SSE_MAX_S`.
+
 - **`Retry-After` rounds up to whole seconds (#145)** — `recertia_error_response` truncated
   `retry_after_s` (`int()`), so a fractional value was sent short: `0.2` gave `Retry-After: 0`
   and `1.2` gave `1`. It now rounds up (`0.2` gives `1`, `1.2` gives `2`, `2.5` gives `3`).

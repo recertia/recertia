@@ -3537,20 +3537,25 @@ sends a `: keep-alive` comment every `RECERTIA_SSE_KEEPALIVE_S` seconds.
 
 **Termination.** The stream ends when the last event in the log is `run.finished` or
 `run.cancelled` (decided by the event's `type`, not by its payload), after that event has been
-sent. This works for a run that is not held in memory, such as after a restart. A retryable
-`error` event does not end the stream. Otherwise the stream ends after
+sent. This works for a run that is not held in memory, such as after a restart. An `error`
+event never ends the stream by itself; a failed run ends with `run.finished`
+(`terminal: "error"`). Otherwise the stream ends after
 `RECERTIA_SSE_MAX_S` seconds; the client reconnects with `Last-Event-ID`. If the log shrinks
 below the cursor, the stream ends.
 
-**Limits.** Each tenant may have `RECERTIA_TENANT_MAX_SSE` follow streams open at once, and the
-server `RECERTIA_GLOBAL_MAX_SSE` in total. A request over a limit gets `429` with
-`Retry-After`. A slot is released when the stream ends or the client disconnects. An open
-follow does not hold a worker thread while it waits.
+**Limits.** Each tenant may have `RECERTIA_TENANT_MAX_SSE` follow streams open at once, and
+each server process `RECERTIA_GLOBAL_MAX_SSE` in total. The limits are counted per process, so
+a server with several worker processes allows that many times more. A request over a limit
+gets `429` with `Retry-After`. A slot is released when the stream ends or the client
+disconnects. On an ASGI 2.4 server, which does not report a disconnect while the stream is
+idle, the slot is released once the server notices the client has gone, at the next
+keep-alive at the latest (`RECERTIA_SSE_KEEPALIVE_S`, or `RECERTIA_SSE_MAX_S` if that is
+shorter). An open follow does not hold a worker thread while it waits.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `RECERTIA_TENANT_MAX_SSE` | `16` | Open follow streams per tenant |
-| `RECERTIA_GLOBAL_MAX_SSE` | `64` | Open follow streams in the server |
+| `RECERTIA_TENANT_MAX_SSE` | `16` | Open follow streams per tenant, per server process |
+| `RECERTIA_GLOBAL_MAX_SSE` | `64` | Open follow streams per server process |
 | `RECERTIA_SSE_MAX_S` | `30` | Longest a follow stream stays open, in seconds |
 | `RECERTIA_SSE_POLL_S` | `0.5` | Interval between checks of the log |
 | `RECERTIA_SSE_KEEPALIVE_S` | `15` | Idle interval between keep-alive comments |

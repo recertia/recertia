@@ -18,6 +18,9 @@ from starlette.types import Receive, Scope, Send
 
 from recertia.api.event_follow import KEEPALIVE_FRAME, EventFollower, FollowSettings
 
+#: Sent on every SSE response so that caches and buffering proxies (nginx) pass frames on at once.
+SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
 
 async def aiter_follow(follower: EventFollower, settings: FollowSettings) -> AsyncIterator[str]:
     deadline = time.monotonic() + settings.max_seconds
@@ -43,7 +46,7 @@ class FollowResponse(StreamingResponse):
     """``text/event-stream`` response that gives its concurrency slot back when it ends."""
 
     def __init__(self, content: AsyncIterator[str], release: Callable[[], None], **kwargs: Any) -> None:
-        super().__init__(content, media_type="text/event-stream", **kwargs)
+        super().__init__(content, media_type="text/event-stream", headers=SSE_HEADERS, **kwargs)
         self._release = release
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
