@@ -110,3 +110,40 @@ class RunRegistry:
             (str(tenant), run_id),
         ).fetchone()
         return row
+
+
+    def list_page(
+        self,
+        tenant_id: str,
+        *,
+        limit: int = 50,
+        created_at_before: str | None = None,
+        run_id_before: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Return up to ``limit`` rows ordered by created_at DESC, run_id DESC.
+
+        When ``created_at_before`` and ``run_id_before`` are set, returns rows
+        strictly older than that keyset position.
+        """
+        sql = (
+            "SELECT run_id, status, summary_json, created_at, updated_at "
+            "FROM runs WHERE tenant_id = ?"
+        )
+        params: list[object] = [tenant_id]
+        if created_at_before is not None and run_id_before is not None:
+            sql += " AND (created_at < ? OR (created_at = ? AND run_id < ?))"
+            params.extend([created_at_before, created_at_before, run_id_before])
+        sql += " ORDER BY created_at DESC, run_id DESC LIMIT ?"
+        params.append(limit)
+        rows = self._conn.execute(sql, params).fetchall()
+        out: list[dict[str, object]] = []
+        for row in rows:
+            summary = json.loads(row["summary_json"] or "{}")
+            out.append({
+                "run_id": row["run_id"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                **summary,
+            })
+        return out
