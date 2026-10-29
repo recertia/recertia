@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import pytest
@@ -88,3 +89,35 @@ def test_root_lock_busy_init_keeps_the_exception_hierarchy() -> None:
         raise exc
     with pytest.raises(RootBusy):
         raise exc
+
+
+def test_root_lock_busy_init_accepts_the_retry_after_s_keyword_and_defaults_to_none() -> None:
+    """The keyword is part of the signature and is passed on to the base init.
+
+    This only pins the keyword and its default. ``RootBusy`` is not given a value anywhere.
+    """
+
+    assert RootBusy("root is busy").retry_after_s is None
+    assert RootBusy("root is busy", retry_after_s=None).retry_after_s is None
+    param = inspect.signature(RootBusy.__init__).parameters["retry_after_s"]
+    assert param.default is None
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_root_lock_busy_init_passes_retry_after_s_to_the_base_init(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    base_init = RecertiaError.__init__
+
+    def spy(self: RecertiaError, message: str, **kwargs: Any) -> None:
+        calls.append(kwargs)
+        base_init(self, message, **kwargs)
+
+    monkeypatch.setattr(RecertiaError, "__init__", spy)
+
+    RootBusy("root is busy")
+
+    assert len(calls) == 1
+    assert "retry_after_s" in calls[0]
+    assert calls[0]["retry_after_s"] is None

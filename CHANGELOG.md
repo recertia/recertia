@@ -386,6 +386,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`v1_error` takes an optional `retry_after_s` (#145)** — a non-null value sets `Retry-After`
+  in whole seconds, rounded up, like `recertia_error_response`; null (the default) sends no
+  header. Both now build the value in one helper, `retry_after_header`, which never raises: a
+  `nan`, an infinity, a negative number, a bool, a non-number or a value above `2**31 - 1`
+  seconds sends no `Retry-After` header and keeps the response status. Before, `nan`
+  raised `ValueError` and an infinity raised `OverflowError` in `recertia_error_response`
+  (a 500 in place of the 429/503), and a negative value sent an invalid header. No raise site
+  sets a value yet.
+
 - **Windows root-lock CI job (REC-058)** — `ci.yml` gains a separate `root lock
   (windows-latest)` job that installs the package on `windows-latest` (Python 3.12) and
   runs `python -m pytest tests/unit/persistence -k root_lock -rs -v -o
