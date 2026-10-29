@@ -148,6 +148,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   temporary venv and starts the API there. Another builds the sdist offline and checks that
   it carries the same files. The `dev` extra now includes `setuptools`, which those offline
   builds need.
+- **A missing authoring prior raises a named error with no absolute path** — wheels do not
+  include the default authoring prior, and a successful run loads it when it drafts a skill.
+  From a wheel install that was a bare file-not-found error carrying the absolute path it
+  looked in, and `recertia run` printed a traceback. It is now `AuthoringPriorMissing` (code
+  `authoring_prior_missing`), and its message names the missing prior and says to run from a
+  source checkout. A prior path passed in by the caller is named by file name only.
+  `recertia run` and `recertia resume` now print a Recertia error as `code: message` and exit
+  with its code (7 for this one) instead of printing a traceback. A run started through
+  `POST /v1/runs` that ends on a Recertia error has an `error` event with that error's code
+  (here `authoring_prior_missing`). Other exceptions still give `run_failed`.
+- **`recertia run` rejects a malformed spec or goal with exit 2 and no traceback** — with
+  `--local-exec`, a `--spec` that is not valid JSON or a goal that fails validation printed a
+  traceback with absolute paths and exited 1. It now prints `invalid_config: ...`, names the
+  file by file name only, and exits 2. That is the same code the same inputs give without
+  `--local-exec`.
 - **Binding a run to a program step checks the step's preview** — since 0.1.0, `POST
   /v1/programs/{program_id}/steps/{step_id}/run` with `bind_run_id` replaced the step's
   `criteria_preview_hash` with the hash of the goal it had just materialized before its two
