@@ -269,7 +269,21 @@ class RunService:
             created_at_before, run_id_before = decode_cursor(cursor)
 
         chosen: dict[str, dict[str, Any]] = {}
-        # Registry rows (summary_json).
+        # Checkpoint rows (pre-migration runs that are not in the registry).
+        from recertia.graph.store import CheckpointStore
+        from recertia.persistence.import_legacy import live_checkpoint_db
+
+        db = live_checkpoint_db(Path(runs_root))
+        if db is not None:
+            store = CheckpointStore(db)
+            try:
+                for row in store.list_summaries(limit=10_000):
+                    rid = str(row["run_id"])
+                    if rid not in chosen:
+                        chosen[rid] = {**row, "tenant_id": tenant_id}
+            finally:
+                store.close()
+        # Registry rows (summary_json) override checkpoint rows.
         try:
             from recertia.persistence.layout import RuntimeLayout
             reg_path = RuntimeLayout(Path(runs_root)).local_runs().runtime_db

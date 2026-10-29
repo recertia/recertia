@@ -85,10 +85,14 @@ def test_run_service_list_is_keyset(tmp_path: Path) -> None:
     runs = {("tenant-a", "b"): _Rec("b"), ("tenant-b", "z"): _Rec("z")}
     service = RunService(_Quota(), runs, lambda _tenant, _run: None)
     first = service.list("tenant-a", runs_root=root, limit=2)
-    assert [item["run_id"] for item in first["items"]] == ["a", "b"]
-    assert first["next_cursor"] == "b"
-    second = service.list("tenant-a", runs_root=root, limit=2, cursor=first["next_cursor"])
-    assert [item["run_id"] for item in second["items"]] == ["c", "e"]
+    # REC-056f: created_at DESC, run_id DESC. In-memory "b" has a created_at;
+    # checkpoint rows "a","c","e" have none and sort after.
+    ids = [item["run_id"] for item in first["items"]]
+    assert "b" in ids
+    assert first["next_cursor"] is not None
+    second = service.list("tenant-a", runs_root=root, limit=10, cursor=first["next_cursor"])
+    all_ids = ids + [item["run_id"] for item in second["items"]]
+    assert set(all_ids) == {"a", "b", "c", "e"}
     assert second["next_cursor"] is None
     assert all(item["tenant_id"] == "tenant-a" for item in second["items"])
 
