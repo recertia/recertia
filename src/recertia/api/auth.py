@@ -99,15 +99,17 @@ def _hkdf_sha256(ikm: bytes, *, info: bytes, length: int = 32) -> bytes:
 
 
 class ApiKeyStore:
-    """API-process-only store (REC-066).
-
-    Covered by the API shared ``api.lock``. CLI key commands take no root lock
-    and are documented as operator-only.
-    """
     """SQLite-backed key registry.
 
     New keys are HMAC-SHA256 with a pepper. Existing PBKDF2 rows stay valid and
     are rewritten to HMAC on the next successful authenticate.
+
+    Root-lock exception (#159): the store takes no root lock. The API process opens
+    it only after taking ``api.lock`` shared, so backup and restore refuse while the
+    API runs. The CLI key commands take no lock. They are safe during a backup, which
+    copies a consistent snapshot of the file with the SQLite online backup API, but
+    they are not excluded from a restore, which overwrites files in place. Do not run
+    key commands during a restore.
     """
 
     _ITERATIONS = 600_000

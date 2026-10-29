@@ -264,8 +264,6 @@ def _resolve_runtime_db(layout: RunsRootLayout, mode: MigrateMode) -> tuple[bool
                 details={"action": MANUAL_MODE_PENDING_ACTION},
             )
         return True, None
-    imported = import_legacy_runtime(layout)
-    if imported:
-        return True, None
-    ckpt_fb = layout.checkpoints_db if layout.checkpoints_db.is_file() else None
-    return True, ckpt_fb
+    # import_legacy_runtime returns True or raises.
+    import_legacy_runtime(layout)
+    return True, None
