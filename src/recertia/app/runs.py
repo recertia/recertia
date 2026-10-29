@@ -15,6 +15,7 @@ from uuid import uuid4
 from contracts.budget import Budget
 from contracts.criteria import TaskCriterion
 from recertia.app.authz import Resource
+from recertia.app.run_listing import list_run_page
 from recertia.errors import ConfigError, NotFound
 from recertia.graph.lease import RunBusy
 from recertia.persistence.layout import RuntimeLayout
@@ -254,47 +255,23 @@ class RunService:
         task_class: str | None = None,
         terminal: str | None = None,
     ) -> dict[str, Any]:
-        from recertia.graph.store import CheckpointStore
-        from recertia.persistence.import_legacy import live_checkpoint_db
+        """List runs for a tenant, newest first (``created_at DESC, run_id DESC``).
 
-        db = live_checkpoint_db(Path(runs_root))
-        disk_rows: list[dict[str, object]] = []
-        if db is not None:
-            store = CheckpointStore(db)
-            try:
-                disk_rows = store.list_summaries(
-                    limit=limit + 1,
-                    cursor=cursor,
-                    task_class=task_class,
-                    terminal=terminal,
-                )
-            finally:
-                store.close()
-        disk_has_extra = len(disk_rows) > limit
-        page = disk_rows[:limit]
-        next_disk_id = str(disk_rows[limit]["run_id"]) if disk_has_extra else None
-        chosen: dict[str, dict[str, Any]] = {
-            str(row["run_id"]): {**row, "tenant_id": tenant_id} for row in page
-        }
-        for (tid, run_id), rec in self.runs.items():
-            if tid != tenant_id or rec is None:
-                continue
-            if getattr(rec, "tenant_id", tenant_id) != tenant_id:
-                continue
-            if cursor and not run_id > cursor:
-                continue
-            if next_disk_id is not None and run_id >= next_disk_id:
-                continue
-            if task_class and getattr(rec, "task_class", None) != task_class:
-                continue
-            if terminal and (getattr(rec, "terminal", None) or "") != terminal:
-                continue
-            chosen[run_id] = _summary_from_record(rec)
-        ordered = sorted(chosen.values(), key=lambda row: str(row["run_id"]))
-        has_more = disk_has_extra or len(ordered) > limit
-        items = ordered[:limit]
-        next_cursor = items[-1]["run_id"] if items and has_more else None
-        return {"items": items, "next_cursor": next_cursor}
+        ``next_cursor`` is an opaque keyset cursor; a malformed one raises
+        ``InvalidCursor`` (400). See :mod:`recertia.app.run_listing` for how the
+        checkpoint summaries, the run registry and the in-memory runs are merged.
+        """
+
+        return list_run_page(
+            tenant_id,
+            runs_root=Path(runs_root),
+            runs=self.runs,
+            summarize=_summary_from_record,
+            limit=limit,
+            cursor=cursor,
+            task_class=task_class,
+            terminal=terminal,
+        )
 
     def create(
         self,
