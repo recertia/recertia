@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-This repository is pre-1.0 (`0.1.x` on `main`). Fixes land on `main`; there are no
+This repository is pre-1.0 (`0.4.x` on `main`). Fixes land on `main`; there are no
 long-lived release branches yet.
 
 ## Reporting a vulnerability

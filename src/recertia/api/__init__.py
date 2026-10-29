@@ -392,7 +392,7 @@ def create_app(
     expose_docs = loaded.env != "prod"
     app = FastAPI(
         title="Recertia",
-        version="0.1.0",
+        version="0.4.0",
         docs_url="/docs" if expose_docs else None,
         redoc_url="/redoc" if expose_docs else None,
         openapi_url="/openapi.json" if expose_docs else None,
