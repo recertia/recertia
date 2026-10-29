@@ -6,6 +6,7 @@ refuses an unsafe ``multi_node`` configuration before any run is claimed.
 
 from __future__ import annotations
 
+import logging
 import threading
 import weakref
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -28,6 +29,8 @@ from recertia.graph.lease import RunBusy
 from recertia.persistence.root_lock import RootBusy
 from recertia.ports.identity import Principal
 from recertia.runtime.errors import WorkspaceBusy
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -275,6 +278,11 @@ class AsyncRunWorker:
         except RootBusy as exc:
             self._root_busy(req, exc)
             raise
+        except OSError as exc:
+            # A lock or open failure that is not a busy refusal: nothing was opened, so
+            # end the run here instead of leaving it queued with no terminal event.
+            self._open_failed(req, exc)
+            return "failed"
         ws_handle = None
         try:
             bundle.orchestrator.max_criterion_timeout_s = req.max_criterion_timeout_s
@@ -371,6 +379,32 @@ class AsyncRunWorker:
             "error",
             {"code": "root_busy", "message": str(exc)[:500], "retryable": True},
         )
+
+    def _open_failed(self, req: AsyncRunRequest, exc: OSError) -> None:
+        """End a run whose persistence could not be opened.
+
+        The ``OSError`` text usually names the lock or database path, so the event
+        carries only the exception class; the full error stays with the operator.
+        """
+
+        _log.error("run %s/%s: opening run persistence failed", req.tenant_id, req.run_id, exc_info=exc)
+        self.events.append(
+            req.tenant_id,
+            req.run_id,
+            "error",
+            {
+                "code": "run_failed",
+                "message": f"cannot open the run's persistence ({type(exc).__name__})",
+                "retryable": False,
+            },
+        )
+        self.events.append(
+            req.tenant_id,
+            req.run_id,
+            "run.finished",
+            {"terminal": "error", "cost_usd": 0.0, "attempt_no": 0},
+        )
+        self._fail(req, cancelled=False)
 
     def _cancel_flag(self, req: AsyncRunRequest) -> bool:
         if req.cancel_check is None:
