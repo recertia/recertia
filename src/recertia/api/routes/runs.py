@@ -18,7 +18,7 @@ from recertia.api.event_follow import (
     parse_offset,
 )
 from recertia.api.quotas import QuotaExceeded
-from recertia.api.routes.follow_stream import SSE_HEADERS, FollowResponse, aiter_follow, dead_run_frame
+from recertia.api.routes.follow_stream import SSE_HEADERS, FollowResponse, aiter_follow, ended_run_frame
 from recertia.api.schemas import RunCreate, RunRecord
 from recertia.app.runs import AcceptedRun
 from recertia.errors import ConfigError, Forbidden, NotFound, RateLimited, RecertiaError
@@ -223,13 +223,13 @@ def register_runs_routes(app: FastAPI, rs: RouteState) -> None:
                 f"too many open follow streams for {who}", run_id=run_id, retry_after_s=1
             ) from exc
 
-        def dead_run_end() -> str | None:
+        def queue_end() -> str | None:
             row = ctx.queue.get(tenant_id, run_id) if ctx.queue is not None else None
-            if row is None or row.status != "dead":
+            if row is None or row.status not in ("dead", "failed"):
                 return None
-            return dead_run_frame(tenant_id, run_id, row.error_code)
+            return ended_run_frame(tenant_id, run_id, row.error_code)
 
-        return FollowResponse(aiter_follow(follower, follow_settings, ending=dead_run_end), release)
+        return FollowResponse(aiter_follow(follower, follow_settings, ending=queue_end), release)
 
     @app.get("/v1/runs/{run_id}/events")
     def run_events(
