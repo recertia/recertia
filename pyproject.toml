@@ -67,6 +67,10 @@ dev = [
     # The CLI tests read result.stderr from a default CliRunner(), which only keeps
     # stderr apart on click>=8.2; typer 0.13 alone would allow click 8.0/8.1.
     "click>=8.2",
+    # tests/unit/test_wheel_install.py builds the wheel with --no-build-isolation, so the
+    # build backend has to be in the test environment. [build-system] asks for >=77; 77.0.0
+    # was never on PyPI, so the floor is 77.0.1 (the nightly lowest arm pins it).
+    "setuptools>=77.0.1",
 ]
 
 [project.scripts]
@@ -222,3 +226,4 @@ include = ["contracts", "contracts.*", "recertia", "recertia.*"]
 [tool.setuptools.package-data]
 "recertia" = ["policy_default.json"]
 "recertia.store" = ["migrations/*.sql"]
+"recertia.persistence" = ["migrations/*/*.sql", "migrations/*/*.md"]
