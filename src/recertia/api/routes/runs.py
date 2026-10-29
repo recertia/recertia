@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from recertia.api.auth import Principal
 from recertia.api.deps import RouteState
-from recertia.api.errors import quota_error, v1_error
+from recertia.api.errors import quota_error, recertia_error_response, v1_error
 from recertia.api.event_follow import (
     FollowCapExceeded,
     FollowLimiter,
@@ -24,6 +24,7 @@ from recertia.app.runs import AcceptedRun
 from recertia.errors import ConfigError, Forbidden, NotFound, RateLimited, RecertiaError
 from recertia.graph.engine import RunIdExistsError
 from recertia.graph.lease import RunBusy
+from recertia.persistence.root_lock import RootBusy
 from recertia.runtime.errors import RunIdExists, WorkspaceBusy
 from recertia.solver.sandbox import SandboxError
 from recertia.solver.transcript import TranscriptStore
@@ -63,6 +64,9 @@ def _map_run_error(exc: BaseException, *, run_id: str | None = None) -> Any:
         raise HTTPException(status_code=409, detail="run_busy") from exc
     if isinstance(exc, ConfigError):
         raise HTTPException(status_code=400, detail=exc.message) from exc
+    if isinstance(exc, RootBusy):
+        # The envelope the app-level RecertiaError handler sends: root_busy, 503, retryable.
+        return recertia_error_response(exc)
     if isinstance(exc, RecertiaError):
         raise HTTPException(status_code=exc.http_status, detail=exc.message) from exc
     raise exc

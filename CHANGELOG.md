@@ -137,6 +137,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`GET /v1/runs/{run_id}` reports `root_busy` while the runtime root is busy (#145)** — when
+  the runtime root lock is held (a backup, a restore, or another process importing leftover
+  run files), the run routes that share one error mapper (create, fetch, resume and cancel
+  under `/v1/runs`) answered `503` with code `unavailable` and `retryable: false`. They now
+  send the same envelope as the other routes: code `root_busy`, `503`, `retryable: true`.
+  A client can retry the request once the lock is released.
+
 - **`Retry-After` rounds up to whole seconds (#145)** — `recertia_error_response` truncated
   `retry_after_s` (`int()`), so a fractional value was sent short: `0.2` gave `Retry-After: 0`
   and `1.2` gave `1`. It now rounds up (`0.2` gives `1`, `1.2` gives `2`, `2.5` gives `3`).
