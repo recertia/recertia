@@ -316,7 +316,7 @@ class RunService:
             chosen[run_id] = _summary_from_record(rec)
         ordered = sorted(
             chosen.values(),
-            key=lambda row: (str(row.get("created_at", "")), str(row["run_id"])),
+            key=lambda row: (str(row.get("created_at") or ""), str(row["run_id"])),
             reverse=True,
         )
         has_more = len(ordered) > limit
