@@ -137,6 +137,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`GET /v1/runs/{run_id}` reports `root_busy` while the runtime root is busy (#145)** — when
+  the runtime root lock is held (a backup, a restore, or another process importing leftover
+  run files), `GET /v1/runs/{run_id}` answered `503` with code `unavailable` and
+  `retryable: false`. It now sends the same envelope as the other routes: code `root_busy`,
+  `503`, `retryable: true`, with no `Retry-After`. A client can retry the request once the
+  lock is released. The fix is in the error mapper that create, fetch, resume and cancel
+  under `/v1/runs` share: it turned a `RootBusy` raised by the run service into
+  `unavailable` / `retryable: false`, and now gives `root_busy` on all four. A create while
+  the lock is held is still accepted (`202`, queued), and cancel's run lookup, which runs
+  before the mapper, already answered `root_busy`.
+
 - **SSE follow: docs match `error` and disconnect handling; no proxy buffering (#137)** —
   `docs/specifications/product-console.md` section 4.3 now says that an `error` event never
   ends a follow stream by itself (a failed run ends with `run.finished`, `terminal: "error"`),
