@@ -147,6 +147,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RECORD` lists every non-Python file in the package, installs it into a temporary venv
   and starts the API there. The `dev` extra now includes `setuptools`, which that offline
   build needs.
+- **A missing authoring prior raises a named error with no absolute path** — wheels do not
+  include the default authoring prior, and a successful run loads it when it drafts a skill.
+  From a wheel install that was a bare file-not-found error carrying the absolute path it
+  looked in. It is now `AuthoringPriorMissing` (code `authoring_prior_missing`), and its
+  message names the missing prior and says to run from a source checkout. A prior path
+  passed in by the caller is named by file name only.
 - **Binding a run to a program step checks the step's preview** — since 0.1.0, `POST
   /v1/programs/{program_id}/steps/{step_id}/run` with `bind_run_id` replaced the step's
   `criteria_preview_hash` with the hash of the goal it had just materialized before its two
