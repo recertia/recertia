@@ -7,6 +7,165 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-29
+
+Pre-release, like 0.2.0 and 0.3.0. The package version and the API version (`info.version`
+in the OpenAPI document) are now 0.4.0; through 0.3.0 both still said 0.1.0.
+
+**0.2.0 and 0.3.0 are omitted.** Both were tagged and released without a section in this
+file, and this release does not reconstruct them. The entries in this section cover every
+change since 0.1.0, including changes that first shipped in 0.2.0 or 0.3.0, and are not
+split by release.
+
+### Upgrade notes
+
+- **Binding a run to a program step needs a current preview (#260).** `POST
+  /v1/programs/{program_id}/steps/{step_id}/run` with `bind_run_id` now returns `400` when the
+  step has no preview, and `409` when the step's goal changed since its preview. Before, both
+  binds returned `200`. Clients that preview the step, or ask for the run envelope, before
+  they bind are unaffected. To fix a rejected bind, preview the step again, then bind.
+- The other breaking changes in this release are listed under **Changed (breaking)** below:
+  `GET /v1/runs` order and cursor (#136), SSE `id:` as a byte offset in follow mode (#137),
+  the promotion API, CLI and library (REC-009), the negative-fixture API (REC-046), and the
+  removed stub lock-identity helper (REC-056b1).
+- **Supported versions:** `SECURITY.md` now names 0.4.x as the supported line. Older release
+  lines (0.1.x, 0.2.x and 0.3.x) get no fixes; upgrade to 0.4.0 to receive them.
+
+### Known limits
+
+- **0.4.0 wheels leave out three things the package reads from outside itself.** Use a
+  source checkout for these:
+  - `console/static`, the web console. From a wheel install the `/console` routes return
+    `404`.
+  - `policy/authoring-prior.json`, the default authoring prior. From a wheel install a run
+    that reaches the distill step ends with `authoring_prior_missing`.
+  - The data that `src/recertia/evals/heldout.py` reads. That module is package code, but it
+    assumes a source checkout: it looks for `evals/` in the working directory and at the
+    repository root.
+- **Low risk: the API probes a directory outside the package.** At startup the API checks
+  with `is_dir()` for `console/static` at a path worked out from the installed package
+  (`src/recertia/api/routes/meta.py:28`). For a wheel install that path is outside
+  `site-packages`, and a wheel never creates it. If files were planted there, the API would
+  serve them under `/console` without authentication. Anyone who can write there can
+  already change the installed code.
+- **Plan after 0.4.0:** move the web console, the default authoring prior and the held-out
+  eval data under `src/recertia` as package data. The wheel then ships them, and the tests
+  that check the wheel's `RECORD` and the sdist cover them. No task id is assigned yet.
+- **`limit` is not checked at the request boundary on some list and search routes.**
+  `GET /v1/jobs`, `GET /v1/proposals` and `GET /v1/reviews` clamp an out-of-range `limit`
+  instead of rejecting it with `422`, and `POST /v1/skills/search` does not range-check
+  `limit`; a non-integer `limit` there returns `500`. `GET /v1/runs` and the programs list
+  already return `422`.
+- **Some error-body tests check fields, not the whole body.** The tests for the `root_busy`
+  responses on `/v1/runs` and `/v1/programs` assert the code, status and message, but not the
+  exact error body, so a change that added a field (for example a server path) to that body
+  would not fail them. The responses themselves carry no path.
+- **The standalone worker does not end a failed run with a run event.** When a run fails
+  inside `recertia worker`, the worker marks the queue item failed, but it writes no terminal
+  event and no `run_failed` event for the run. The failure is visible in the queue status
+  and in the worker's own output.
+
+### Corrections
+
+Earlier entries in this section are kept as written. Two known limits in the REC-058
+root-lock entry under **Fixed** no longer hold:
+
+- "`RootBusy` is not yet the `root_busy` API/CLI error": `RootBusy` now maps to the
+  `root_busy` error (503, retryable) (#212, #248, #254).
+- "The operations-schema exclusive lock is unbounded": the lock now waits with a bound
+  (#212, #218). The other half of that item, about the faithfulness command's orchestrator,
+  is not changed by this note.
+
+### Pull requests since 0.3.0
+
+Every pull request merged into `main` since the `0.3.0` tag whose title names a REC task id.
+The entries below describe them where they are user-visible.
+
+- #98 REC-020: commit-email check covers the pushed range (before..after) on push
+- #100 REC-011 (C1, part 1): record run resolution (decided|unresolved|invalid) + exit_code + reason
+- #101 REC-013: T2 planted-regression set (10 cases) + MANIFEST.sha256
+- #102 REC-022: operator-only held-out eval job (fail-closed, container-only) [draft]
+- #103 REC-022: weekly-ops least privilege, public eval roots only, no ${{ }} in any run: [draft]
+- #104 REC-024: redact non-allowlisted values in commit-email check output
+- #105 REC-025: check every address in a \*-by trailer value
+- #106 REC-026: stop the embedded queue worker before the manual cap claim (test_resume_admits_quota flake)
+- #107 REC-028: m2 concurrency test asserts overlap/ordering, not wall clock
+- #108 REC-029: safe embedded worker start/stop, stop() reports timeout, no leaked test threads
+- #109 REC-028 nits: clear failure on lost concurrency, 5 s rendezvous, second rendezvous
+- #110 REC-027: harden commit-email check
+- #111 REC-030: spawn ledger appenders with deadline (defence in depth)
+- #112 REC-017: bounded probe harness, spawn context, pytest-timeout backstop, CI job timeouts
+- #113 REC-031: bounded worker teardown (F1–F4)
+- #114 REC-035: mypy ratchet covers tests/
+- #115 REC-036: session exit guard, CI job timeouts, trylast test (stacked on #113)
+- #116 REC-040: mypy ratchet follow-ups (S4, S5, N2, N4-N7) from PR #114 review
+- #117 REC-042: restore the network guard for the outermost session only (stacked on #115)
+- #118 REC-009 Gap A: decision-only promotion refusals, operator audit store, held-out manifest loader
+- #119 REC-044: fix-forward for REL-3 probe hang path (D1-D3, N1)
+- #120 REC-017: faulthandler watchdog + spawn for ledger concurrency (recut of #96)
+- #121 REC-046: stop leaking recertia-neg-\* temp dirs from sensitivity proofs
+- #122 REC-048: pytest-timeout floor 2.4.0 (nightly lowest-deps ResolutionImpossible) [draft]
+- #124 REC-047: rel3 probes clean up their temp dirs
+- #127 REC-049: raise the pytest floor to 9.0 (faulthandler_exit_on_timeout) [r2, supersedes #126]
+- #128 REC-050: exit-code test uses public typer.Exit [r2, supersedes #125]
+- #129 REC-053: declare click>=8.2 in the dev extra; exit-code test asserts stderr, not stdout
+- #141 REC-051: nightly runs the full suite on both dependency arms (v2, supersedes #123) [draft]
+- #149 REC-052: harden probe temp-dir cleanup and close probe pipes/files (r2, restack on e25ecfa6)
+- #151 [REC-056b1] REL-3 R4: delete stubbed lock-identity helper, update probe T3 (#132) (r2, restack on 87bbc1ae)
+- #161 REC-056a: cap telemetry deques and pending OIDC logins per client (#131)
+- #164 [REC-056b2] Un-skip REL-3 R4 probes I, L, M, M2, T1, T2 as typed RootBusy per ADR-0022 (#139)
+- #167 REC-056a: follow-up to #161 (untrusted-XFF warning wording, XFF cap-order docs) [r2, restack on 17943bf3]
+- #168 REC-058 r3: root lock for API handles, retryable RootBusy, off-mode re-check, real-Windows lock (carries #166)
+- #169 REC-058 follow-up to #168: typed RootBusy for the Windows off-mode wait; pin mid-run RootBusy and the 2 s back-off
+- #170 [REC-065] Per-tenant root locking so tenants on one root do not exclude each other
+- #176 [REC-069] REC-058 follow-up to #169 (restack of #171 onto 33a88a40, r4): pin the fd close and non-busy mapping on the blocking path; api.lock CHANGELOG
+- #177 [REC-071] #170 review follow-ups: one-deadline test, backup lock-file match, tenant export skip, docstrings, ADR-0022 wording
+- #178 [REC-070] manual mode names the real import procedure instead of the missing migrate apply
+- #179 REC-057: raise psycopg floor to >=3.2.1
+- #180 nightly: add extras floors, pin script, persist-credentials, and alert job (REC-057/062 remaining)
+- #182 REC-064: overwrite with bounded wait on migrate=off path
+- #186 [REC-073] real-Windows migrate=off tests expect the bounded wait added in #182
+- #187 [REC-070] manual-mode advice: reopen with auto only once no older-release process uses the root
+- #188 [REC-075] Pin the migrate=off bound with a POSIX test; steady real-Windows bounds; fix stale CHANGELOG
+- #189 [REC-076] Restore the nightly CHANGELOG entries; drop an agent name from a workflow comment
+- #190 [REC-077] Tighten two root-lock test asserts; harden the manual-mode docs tests
+- #191 [REC-072] Follow-up to #177: pin every runs-root .tenant.lock position, make tenant export --dry-run match --execute, fix the lock wording
+- #192 [REC-078] Remove agent and person names from workflow comments
+- #193 [REC-079] Remove old review labels, pin the lock poll interval, fix changelog wording
+- #195 [REC-081] Drop leftover review tags and work-order ids from comments and docstrings
+- #196 [REC-060] Include ADR-0020 to ADR-0022 in docs/architecture2.md
+- #197 [REC-082] Drop remaining internal review tags from comments and docstrings
+- #198 [REC-083] Fix a test header and drop remaining internal review labels
+- #199 [REC-084] Rename review-tagged test names
+- #200 [REC-085] Rename single-letter-tag test names
+- #201 [REC-086] Replace ruling-phrase wording
+- #202 [REC-087] Remove internal wording from comments, docs and test labels
+- #203 [REC-088] Remove leftover bug-number wording from comments
+- #205 [REC-089] Remove reviewer provenance and finding ids from ADR-0022
+- #213 REC-063/REC-066: T3 history check; root-lock or documented exception for direct stores
+- #214 [REC-059] Add RootBusy class, exit-code and retryable-flag tests
+- #218 [REC-067] Narrow the ops-schema lock exception mapping, reuse the lock-timeout helper, drop the path from the busy message
+- #220 [REC-059] Round Retry-After up to whole seconds in recertia_error_response
+- #223 [REC-059] Make root_busy retryable on envelopes built by the error helpers and init RootBusy via RecertiaError
+- #226 [REC-067] Test the operations-schema lock: own shared lock self-deadlock case and success after release
+- #232 [REC-059] Add optional retry_after_s to v1_error and validate Retry-After in one helper
+- #234 [REC-056g] SSE follow mode with byte-offset ids and Last-Event-ID resume
+- #239 [REC-056f] Add an opaque keyset cursor for GET /v1/runs ordered by created_at desc, run_id desc
+- #241 [REC-056g] SSE follow: lone-error doc fix, gap-kill tests, ASGI idle-slot caveat
+- #244 [REC-066] Tidy duplicated docstrings, exception reasons and a dead fallback
+- #248 [REC-059] Return root_busy (503, retryable) from GET, create, resume and cancel under /v1/runs when the root is busy
+- #250 [REC-067] Keep lock and root paths out of RootBusy messages
+- #251 [REC-056g] SSE follow: end the stream for a run the queue marks dead
+- #254 [REC-059] Map RootBusy to root_busy on the /v1/programs routes
+- #256 [REC-067] End an async run when opening its persistence fails with a non-busy OSError
+- #259 [REC-056g] SSE follow: end the stream for a run the queue marks failed
+- #260 [REC-059] Check the step's preview before binding a run
+
+#### Other changes
+
+Pull requests merged in the same range without a REC id in the title: #55-#71, #73, #74,
+#76, #78-#80, #82-#90, #92-#94, #210, #212.
+
 ### Security
 
 - **In-process buffer caps (REC-056a, #131)** — `Telemetry.spans` and `Telemetry.events` are
@@ -954,3 +1113,5 @@ this version as production-ready.
 Research outcomes `a1`–`a4` stay in [`docs/assumptions.md`](docs/assumptions.md)
 until real traffic produces intervals. Remaining ops gates:
 [`docs/architecture/remaining-work.md`](docs/architecture/remaining-work.md).
+
+[0.4.0]: https://github.com/recertia/recertia/compare/0.3.0...0.4.0
