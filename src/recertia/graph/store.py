@@ -12,7 +12,7 @@ import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from contracts.run import RouteEntry, RunState
 from contracts.trajectory import TrajectoryEvent
@@ -102,6 +102,10 @@ class CheckpointStore:
                 created_at TEXT NOT NULL
             )
             """
+        )
+        # Keyset order of the run list (``created_at DESC, run_id DESC``).
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS run_summaries_created ON run_summaries (created_at DESC, run_id DESC)"
         )
         self._conn.commit()
         ensure_hop_tables(self._conn)
@@ -333,22 +337,89 @@ class CheckpointStore:
                 """,
                 (cursor, cursor, task_class, task_class, terminal, terminal, limit),
             ).fetchall()
-        summaries: list[dict[str, object]] = []
-        for run_id, task, terminal_value, attempt_no, arm, cost, created_at in rows:
-            terminal_text = str(terminal_value) if terminal_value not in (None, "") else None
-            summaries.append(
-                {
-                    "run_id": str(run_id),
-                    "task_class": str(task or "repo-chore"),
-                    "terminal": terminal_text,
-                    "status": terminal_text or "running",
-                    "attempt_no": int(attempt_no) if attempt_no is not None else None,
-                    "created_at": created_at,
-                    "cost_usd": float(cost) if cost is not None else None,
-                    "arm": str(arm) if arm is not None else None,
-                }
-            )
-        return summaries
+        return [_summary_dict(row) for row in rows]
+
+    def list_summaries_page(
+        self,
+        *,
+        limit: int,
+        created_at_before: str | None = None,
+        run_id_before: str | None = None,
+        task_class: str | None = None,
+        terminal: str | None = None,
+        backfill: bool = True,
+    ) -> list[dict[str, object]]:
+        """A keyset page of ``run_summaries``: ``created_at DESC, run_id DESC``, at most ``limit`` rows.
+
+        ``created_at_before`` is in this table's own text form (``YYYY-MM-DD HH:MM:SS``,
+        UTC). With ``run_id_before`` too, only rows strictly after that position in the
+        order are returned. With ``created_at_before`` alone, rows whose ``created_at`` is
+        at or before it are returned (a whole second, for a position that has a
+        sub-second part). ``backfill`` fills summaries for checkpoints that predate the
+        table first; it scans checkpoints, so a walk needs it only on its first page.
+        """
+
+        if limit < 1:
+            return []
+        clause = ""
+        params: list[object] = []
+        if created_at_before is not None and run_id_before is not None:
+            clause += " AND (created_at, run_id) < (?, ?)"
+            params += [created_at_before, run_id_before]
+        elif created_at_before is not None:
+            clause += " AND created_at <= ?"
+            params.append(created_at_before)
+        if task_class is not None:
+            clause += " AND task_class = ?"
+            params.append(task_class)
+        if terminal is not None:
+            clause += " AND IFNULL(terminal, '') = ?"
+            params.append(terminal)
+        params.append(limit)
+        with self._lock:
+            if backfill:
+                self._backfill_summaries()
+            rows = self._conn.execute(
+                f"SELECT {_SUMMARY_COLUMNS} FROM run_summaries WHERE 1 = 1{clause} "
+                "ORDER BY created_at DESC, run_id DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [_summary_dict(row) for row in rows]
+
+    def get_summaries(self, run_ids: Sequence[str]) -> dict[str, dict[str, object]]:
+        """The ``run_summaries`` rows of ``run_ids`` that exist, keyed by run id."""
+
+        found: dict[str, dict[str, object]] = {}
+        with self._lock:
+            for start in range(0, len(run_ids), _IN_CHUNK):
+                chunk = list(run_ids[start : start + _IN_CHUNK])
+                marks = ",".join("?" * len(chunk))
+                rows = self._conn.execute(
+                    f"SELECT {_SUMMARY_COLUMNS} FROM run_summaries WHERE run_id IN ({marks})",
+                    chunk,
+                ).fetchall()
+                for row in rows:
+                    found[str(row[0])] = _summary_dict(row)
+        return found
+
+
+_SUMMARY_COLUMNS = "run_id, task_class, terminal, attempt_no, arm, cost_usd, created_at"
+_IN_CHUNK = 500
+
+
+def _summary_dict(row: Sequence[Any]) -> dict[str, object]:
+    run_id, task, terminal_value, attempt_no, arm, cost, created_at = row
+    terminal_text = str(terminal_value) if terminal_value not in (None, "") else None
+    return {
+        "run_id": str(run_id),
+        "task_class": str(task or "repo-chore"),
+        "terminal": terminal_text,
+        "status": terminal_text or "running",
+        "attempt_no": int(attempt_no) if attempt_no is not None else None,
+        "created_at": created_at,
+        "cost_usd": float(cost) if cost is not None else None,
+        "arm": str(arm) if arm is not None else None,
+    }
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:

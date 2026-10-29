@@ -95,6 +95,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `--operator-detail`. `scripts/install_seed_library.py --promote` needs `--audit-root`.
   - `recertia eval run` exits 2 for a `--golden-root`/`--golden-dir` outside a git checkout.
 
+- **`GET /v1/runs` lists newest first with an opaque cursor (#136)** — the list was in
+  run-id order and is now newest first (`created_at` descending, run id descending).
+  `next_cursor` is an opaque keyset cursor instead of the last run id, so a walk with
+  `limit` pages sees every run once, with no 10,000-run ceiling. A cursor that is malformed,
+  over 512 characters or not in the canonical form returns `400` `invalid_cursor`, and so
+  does a cursor from before this change (a bare run id): restart the walk without a cursor.
+  Runs that were accepted but have no checkpoint yet are now listed (status `accepted`) and
+  take their stored state once they have one; they match neither the `task_class` nor the
+  `terminal` filter. `limit` stays 1 to 100, and a value outside that range is still `422`.
+  A page reads about `limit` rows from each table, plus the accepted runs whose registry
+  date falls inside the page. Opening the registry and the checkpoint store adds the
+  `runs_list` index on `runs` and the `run_summaries_created` index on `run_summaries`, so
+  the first request after an upgrade builds them.
+
 ### Fixed
 
 - **`Retry-After` rounds up to whole seconds (#145)** — `recertia_error_response` truncated
