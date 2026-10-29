@@ -11,7 +11,6 @@ each one either no-ops (already applied) or runs exactly once (not yet applied) 
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import threading
 import time
@@ -19,7 +18,8 @@ from pathlib import Path
 from typing import Callable, Literal, TypeVar
 
 from recertia.persistence.db import open_db
-from recertia.persistence.root_lock import RootBusy, RootLock
+from recertia.persistence.import_legacy import import_lock_timeout_s
+from recertia.persistence.root_lock import RootBusy, RootLock, RootLockBusy
 
 T = TypeVar("T")
 
@@ -371,12 +371,14 @@ def _init_operations_table(conn: sqlite3.Connection, db_path: Path) -> None:
 
     if _operations_schema_ready(conn):
         return
-    timeout_s = float(os.environ.get("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "5"))
     lock = RootLock(Path(db_path).parent / ".lock")
     try:
-        lock.acquire_exclusive(timeout_s=timeout_s)
-    except Exception as exc:
-        raise RootBusy(f"operations schema lock held: {lock.path}") from exc
+        lock.acquire_exclusive(timeout_s=import_lock_timeout_s())
+    except RootLockBusy as exc:
+        # Only a refused bounded wait is a busy root. Any other failure (a directory at
+        # the lock path, permissions, a full disk) propagates as itself. The lock path
+        # stays out of the message: it reaches API responses and run events.
+        raise RootBusy("operations schema lock held") from exc
     try:
         if _operations_schema_ready(conn):
             return
