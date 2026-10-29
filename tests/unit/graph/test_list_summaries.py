@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -71,30 +71,43 @@ def test_run_service_list_is_keyset(tmp_path: Path) -> None:
     store.close()
 
     class _Rec:
-        def __init__(self, run_id: str) -> None:
+        def __init__(self, run_id: str, created_at: datetime, tenant_id: str = "tenant-a") -> None:
             self.run_id = run_id
             self.task_class = "repo-chore"
             self.terminal = "solved"
             self.status = "solved"
             self.attempt_no = 1
-            self.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            self.created_at = created_at
             self.cost_usd = 0.0
             self.arm = "treatment"
-            self.tenant_id = "tenant-a"
+            self.tenant_id = tenant_id
 
-    runs = {("tenant-a", "b"): _Rec("b"), ("tenant-b", "z"): _Rec("z")}
+    # Checkpoint rows carry the (naive, UTC) time they were saved. "b" is newer than
+    # all of them and "d" is older; "z" belongs to another tenant.
+    now = datetime.now(UTC)
+    runs = {
+        ("tenant-a", "b"): _Rec("b", now + timedelta(hours=1)),
+        ("tenant-a", "d"): _Rec("d", datetime(2020, 1, 1, tzinfo=UTC)),
+        ("tenant-b", "z"): _Rec("z", now + timedelta(hours=2), tenant_id="tenant-b"),
+    }
     service = RunService(_Quota(), runs, lambda _tenant, _run: None)
+
+    # Order is created_at DESC, run_id DESC, across all sources and across pages.
     first = service.list("tenant-a", runs_root=root, limit=2)
-    # REC-056f: created_at DESC, run_id DESC. In-memory "b" has a created_at;
-    # checkpoint rows "a","c","e" have none and sort after.
-    ids = [item["run_id"] for item in first["items"]]
-    assert "b" in ids
+    assert [item["run_id"] for item in first["items"]] == ["b", "e"]
     assert first["next_cursor"] is not None
-    second = service.list("tenant-a", runs_root=root, limit=10, cursor=first["next_cursor"])
-    all_ids = ids + [item["run_id"] for item in second["items"]]
-    assert set(all_ids) == {"a", "b", "c", "e"}
-    assert second["next_cursor"] is None
-    assert all(item["tenant_id"] == "tenant-a" for item in second["items"])
+    second = service.list("tenant-a", runs_root=root, limit=2, cursor=first["next_cursor"])
+    assert [item["run_id"] for item in second["items"]] == ["c", "a"]
+    assert second["next_cursor"] is not None
+    third = service.list("tenant-a", runs_root=root, limit=2, cursor=second["next_cursor"])
+    assert [item["run_id"] for item in third["items"]] == ["d"]
+    assert third["next_cursor"] is None
+    assert all(item["tenant_id"] == "tenant-a" for page in (first, second, third) for item in page["items"])
+
+    # A cursor from page one with a larger limit returns the rest with no repeats.
+    rest = service.list("tenant-a", runs_root=root, limit=10, cursor=first["next_cursor"])
+    assert [item["run_id"] for item in rest["items"]] == ["c", "a", "d"]
+    assert rest["next_cursor"] is None
 
 
 def test_list_cursor_is_opaque_and_rejects_tampered(tmp_path: Path) -> None:

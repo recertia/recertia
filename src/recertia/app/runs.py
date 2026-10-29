@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 from uuid import uuid4
@@ -66,6 +66,35 @@ def _summary_from_record(rec: Any) -> dict[str, Any]:
         "arm": rec.arm,
         "tenant_id": rec.tenant_id,
     }
+
+
+_NO_DATE = datetime.min.replace(tzinfo=UTC)
+
+
+def _created_key(value: object) -> tuple[bool, datetime]:
+    """Sortable ``(has_date, utc_datetime)``; naive values are UTC, missing or unparseable sort last."""
+    parsed: datetime
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return (False, _NO_DATE)
+    else:
+        return (False, _NO_DATE)
+    try:
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return (True, parsed.astimezone(UTC))
+    except (OverflowError, ValueError):
+        return (False, _NO_DATE)
+
+
+def _row_key(row: dict[str, Any]) -> tuple[bool, datetime, str]:
+    """Total order key for run list rows; sort descending for ``created_at DESC, run_id DESC``."""
+    has_date, created = _created_key(row.get("created_at"))
+    return (has_date, created, str(row["run_id"]))
 
 
 def _create_request_hash(body: Any, run_id: str) -> str:
@@ -264,9 +293,13 @@ class RunService:
         from recertia.runtime.cursor import decode_cursor, encode_cursor
         from recertia.runtime.registry import RunRegistry
 
-        created_at_before = run_id_before = None
+        created_at_before = run_id_before = registry_before = None
+        boundary: tuple[bool, datetime, str] | None = None
         if cursor:
             created_at_before, run_id_before = decode_cursor(cursor)
+            boundary = _row_key({"created_at": created_at_before, "run_id": run_id_before})
+            # The registry stores UTC isoformat text; compare in that format.
+            registry_before = boundary[1].isoformat() if boundary[0] else created_at_before
 
         chosen: dict[str, dict[str, Any]] = {}
         # Checkpoint rows (pre-migration runs that are not in the registry).
@@ -277,7 +310,7 @@ class RunService:
         if db is not None:
             store = CheckpointStore(db)
             try:
-                for row in store.list_summaries(limit=10_000):
+                for row in store.list_summaries(limit=10_000, task_class=task_class, terminal=terminal):
                     rid = str(row["run_id"])
                     if rid not in chosen:
                         chosen[rid] = {**row, "tenant_id": tenant_id}
@@ -293,7 +326,7 @@ class RunService:
                     for row in reg.list_page(
                         tenant_id,
                         limit=limit + 1,
-                        created_at_before=created_at_before,
+                        created_at_before=registry_before,
                         run_id_before=run_id_before,
                     ):
                         chosen[str(row["run_id"])] = {**row, "tenant_id": tenant_id}
@@ -305,20 +338,15 @@ class RunService:
         for (tid, run_id), rec in self.runs.items():
             if tid != tenant_id or rec is None:
                 continue
-            if created_at_before is not None:
-                rec_created = str(getattr(rec, "created_at", "") or "")
-                if (rec_created, run_id) >= (created_at_before, run_id_before or ""):
-                    continue
             if task_class and getattr(rec, "task_class", None) != task_class:
                 continue
             if terminal and (getattr(rec, "terminal", None) or "") != terminal:
                 continue
             chosen[run_id] = _summary_from_record(rec)
-        ordered = sorted(
-            chosen.values(),
-            key=lambda row: (str(row.get("created_at") or ""), str(row["run_id"])),
-            reverse=True,
-        )
+        # Every source is merged first, then cut at the cursor in one total order
+        # (created_at DESC, run_id DESC; rows without a date last) and sliced.
+        candidates = [row for row in chosen.values() if boundary is None or _row_key(row) < boundary]
+        ordered = sorted(candidates, key=_row_key, reverse=True)
         has_more = len(ordered) > limit
         items = ordered[:limit]
         if items and has_more:
