@@ -163,9 +163,7 @@ def open_run_persistence(
         if legacy_sqlite_pending(layout):
             # Decided before the lock; a restore may have brought leftover files back.
             shared.release()
-            raise RootBusy(
-                f"leftover runtime files appeared while waiting for the root lock: {shared.root.path}"
-            )
+            raise RootBusy("leftover runtime files appeared while waiting for the root lock")
     else:
         # REC-064: the leftover (migrate=off) path is also bounded. It used to
         # block forever; now it waits at most RECERTIA_IMPORT_LOCK_TIMEOUT_S
@@ -180,9 +178,7 @@ def open_run_persistence(
             # open treats as the source of truth; a write to the leftover files would
             # be lost (REC-058). Fail closed; the retry reads runtime.db.
             shared.release()
-            raise RootBusy(
-                f"the runtime root was imported while waiting for the root lock: {shared.root.path}"
-            )
+            raise RootBusy("the runtime root was imported while waiting for the root lock")
     handle_lock: TenantLock | None = shared
     try:
         if use_runtime:

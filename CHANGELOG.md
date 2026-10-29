@@ -137,6 +137,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`RootBusy` messages carry no filesystem path (#160)** — a refused open or leftover import
+  put the lock path or the runtime root path in the `RootBusy` text, which reaches the
+  `root_busy` run event, queue rows and logs. `TenantLock.refused` is now `root lock is held`
+  or `tenant lock is held`, and the two re-check messages in `open_run_persistence` no longer
+  end in the root path. The wording otherwise stays: `cannot open the runtime root while the
+  root lock is held`, `cannot import leftover runtime files while the tenant lock is held`,
+  `leftover runtime files appeared while waiting for the root lock`, `the runtime root was
+  imported while waiting for the root lock`. Anything that matched the path in these
+  messages must match the lock name instead. `RootLockBusy` (the cause, not the `RootBusy`
+  text) still names the lock file.
 - **SSE follow: docs match `error` and disconnect handling; no proxy buffering (#137)** —
   `docs/specifications/product-console.md` section 4.3 now says that an `error` event never
   ends a follow stream by itself (a failed run ends with `run.finished`, `terminal: "error"`),
