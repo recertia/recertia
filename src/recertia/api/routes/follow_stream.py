@@ -4,11 +4,13 @@ A follow waits with ``asyncio.sleep`` and reads the log in short thread-pool cal
 open stream does not pin a worker thread. The concurrency slot is released when the
 response ends for any reason, including a client that disconnects.
 
-A run whose worker died on its last attempt is marked ``dead`` by the queue and never gets
-a ``run.finished`` line in its log. Once a follow has read everything in the log it asks
-``ending`` whether the run ended that way. If so it reads the log once more, because the
-worker may have appended its own terminal event just before it died: a real terminal event
-is sent instead of the given frame, and otherwise the given frame is sent. Then it stops.
+Some runs end without a ``run.finished`` line in their log: the queue marks them ``dead``
+(the worker died on its last attempt) or ``failed`` (``run_busy``, ``workspace_busy`` or a
+start-up failure). Once a follow has read everything in the log it asks ``ending`` whether
+the run ended that way. If so it reads the log once more, because the worker may have
+appended its own terminal event first: a real terminal event is sent instead of the given
+frame, and otherwise the given frame is sent. Then it stops. The re-read also stops at the
+max duration, without the given frame, so the client reconnects as usual.
 """
 
 from __future__ import annotations
@@ -30,8 +32,8 @@ from recertia.api.event_follow import KEEPALIVE_FRAME, EventFollower, FollowSett
 SSE_HEADERS: Mapping[str, str] = MappingProxyType({"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-def dead_run_frame(tenant_id: str, run_id: str, error_code: str | None) -> str:
-    """``run.finished`` (``terminal: "error"``) for a run the queue marked dead.
+def ended_run_frame(tenant_id: str, run_id: str, error_code: str | None) -> str:
+    """``run.finished`` (``terminal: "error"``) for a run the queue ended with no terminal event.
 
     The event is not a line of the log, so the frame has no ``id:``: a client keeps the offset
     of the last logged event, and a reconnect from it ends with this frame again.
@@ -68,15 +70,17 @@ async def aiter_follow(
         if ending is not None:
             final = await run_in_threadpool(ending)
             if final is not None:
-                # A dead run has no live writer, so one more drain of the log is final.
+                # An ended run has no live writer, so one more drain of the log is final.
                 while True:
                     frames, done, more = await run_in_threadpool(follower.poll)
                     for frame in frames:
                         yield frame
-                    if done:
+                    if done or time.monotonic() >= deadline:
                         return
                     if not more:
                         break
+                if follower.last_is_terminal:
+                    return  # a real terminal event was sent; a torn line after it changes nothing
                 yield final
                 return
         if now - last_sent >= settings.keepalive_s:

@@ -672,6 +672,146 @@ def test_dead_run_with_a_backlog_larger_than_one_read_gets_all_of_it_first(
     assert elapsed < 4
 
 
+def test_dead_run_with_run_finished_then_a_torn_line_gets_only_that_event(
+    make_env: Callable[..., Env], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The worker wrote its own run.finished, then died part-way through one more line.
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    env.events.append("t1", "r", "run.started", {})
+    env.events.append("t1", "r", "run.finished", {"terminal": "solved"})
+    with env.log_path().open("ab") as f:
+        f.write(b'{"type":"tick","payl')
+    _mark_dead(env, monkeypatch)
+    elapsed, resp = _elapsed(env)
+    frames = parse(resp.text)
+    assert types(resp.text) == ["run.started", "run.finished"]
+    assert json.loads(frames[-1]["data"])["payload"] == {"terminal": "solved"}
+    assert [int(f["id"]) for f in frames] == line_ends(env.log_path())
+    assert elapsed < 2
+
+
+def test_a_finished_log_of_a_dead_run_never_reads_the_queue(
+    make_env: Callable[..., Env], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    env.seed(n=2)
+    _mark_dead(env, monkeypatch)
+    queue = env.app.state.recertia.queue
+    real_get = queue.get
+    calls: list[tuple[Any, ...]] = []
+
+    def counting_get(*args: Any, **kwargs: Any) -> Any:
+        calls.append(args)
+        return real_get(*args, **kwargs)
+
+    monkeypatch.setattr(queue, "get", counting_get)
+    resp = env.get()
+    assert types(resp.text) == ["tick", "tick", "run.finished"]
+    assert calls == []
+
+
+# --- a run the queue marks failed without a terminal event in its log ----------------------
+
+
+def _queued_run(env: Env, run: str = "r", tenant: str = "t1") -> Any:
+    from recertia.workers.run_worker import dump_async_request, load_async_request
+
+    tdir = env.root / "runs" / tenant
+    req = load_async_request(
+        {
+            "run_id": run,
+            "tenant_id": tenant,
+            "request": run,
+            "budget": {"max_attempts": 1},
+            "workdir": str(env.root / "workspaces" / tenant / run),
+            "skills_root": str(env.root / "skills"),
+            "facts_root": str(env.root / "facts"),
+            "runs_root": str(tdir),
+            "index_path": str(tdir / "skill_index.db"),
+        }
+    )
+    req.workdir.mkdir(parents=True, exist_ok=True)
+    queue = env.app.state.recertia.queue
+    queue.enqueue(QueueItem(tenant_id=tenant, run_id=run, kind="run", payload=dump_async_request(req)))
+    return queue
+
+
+def _fail_like(monkeypatch: pytest.MonkeyPatch, code: str) -> None:
+    """Make the real worker end the claim with ``code`` and no terminal event in the log."""
+
+    from recertia.graph.engine import GraphOrchestrator
+    from recertia.graph.lease import RunBusy
+    from recertia.runtime.errors import WorkspaceBusy
+    from recertia.workers import run_worker
+
+    def busy(exc: Exception) -> Callable[..., Any]:
+        def raise_it(*args: Any, **kwargs: Any) -> Any:
+            raise exc
+
+        return raise_it
+
+    if code == "run_busy":
+        monkeypatch.setattr(GraphOrchestrator, "start", busy(RunBusy("run r is busy")))
+    elif code == "workspace_busy":
+        monkeypatch.setattr(GraphOrchestrator, "start", busy(WorkspaceBusy("workspace busy")))
+    else:  # a start-up failure: _run raises before its main try
+        monkeypatch.setattr(run_worker, "build_default_orchestrator", busy(RuntimeError("no orchestrator")))
+
+
+def _run_on_the_embedded_worker(env: Env, run: str = "r", tenant: str = "t1") -> Any:
+    state = env.app.state.recertia
+    claims = state.queue.claim(state.embedded.worker_id, limit=1)
+    assert len(claims) == 1
+    state.embedded._execute(claims[0])
+    return state.queue.get(tenant, run)
+
+
+@pytest.mark.parametrize("code", ["run_busy", "workspace_busy", "run_failed"])
+def test_failed_run_with_no_terminal_event_ends_with_one(
+    make_env: Callable[..., Env], monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    _queued_run(env)
+    _fail_like(monkeypatch, code)
+    row = _run_on_the_embedded_worker(env)
+    assert (row.status, row.error_code) == ("failed", code)
+    log = [json.loads(line) for line in env.log_path().read_bytes().splitlines()]
+    assert [e["type"] for e in log] == ["run.started"]  # the worker wrote no terminal event
+    elapsed, resp = _elapsed(env)
+    assert resp.status_code == 200
+    assert types(resp.text) == ["run.started", "run.finished"]
+    assert int(parse(resp.text)[0]["id"]) == env.log_path().stat().st_size
+    data = _dead_frame(resp.text)
+    assert (data["run_id"], data["tenant_id"]) == ("r", "t1")
+    assert data["payload"] == {"terminal": "error", "error_code": code}
+    assert elapsed < 2  # not held until the max follow duration
+    elapsed, resp = _elapsed(env, leid=str(env.log_path().stat().st_size))
+    assert types(resp.text) == ["run.finished"]
+    assert _dead_frame(resp.text)["payload"] == {"terminal": "error", "error_code": code}
+    assert elapsed < 2
+
+
+def test_failed_run_whose_log_ends_with_run_finished_gets_only_that_event(
+    make_env: Callable[..., Env], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from recertia.graph.engine import GraphOrchestrator
+
+    def boom(*args: Any, **kwargs: Any) -> Any:
+        raise ValueError("solver blew up")
+
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    _queued_run(env)
+    monkeypatch.setattr(GraphOrchestrator, "start", boom)
+    row = _run_on_the_embedded_worker(env)
+    assert (row.status, row.error_code) == ("failed", "run_failed")
+    elapsed, resp = _elapsed(env)
+    frames = parse(resp.text)
+    assert types(resp.text) == ["run.started", "error", "run.finished"]
+    assert [int(f["id"]) for f in frames] == line_ends(env.log_path())
+    assert json.loads(frames[-1]["data"])["payload"]["terminal"] == "error"
+    assert elapsed < 2
+
+
 # --- max duration and keep-alive -----------------------------------------------------------
 
 
@@ -1144,3 +1284,84 @@ def test_backlog_larger_than_one_read_drains_without_waiting_for_a_poll(tmp_path
     assert len(frames) == 60001
     assert "run.finished" in frames[-1]
     assert elapsed < 5  # one read per poll would wait out poll_s before the second chunk
+
+
+class _ScriptedFollower(EventFollower):
+    """Returns the given ``(frames, done, more)`` passes in order, then idle passes."""
+
+    def __init__(self, tmp_path: Path, passes: list[tuple[list[str], bool, bool]]) -> None:
+        super().__init__(tmp_path / "unused.jsonl", 0)
+        self.passes = passes
+        self.polls = 0
+
+    def poll(self) -> tuple[list[str], bool, bool]:
+        self.polls += 1
+        return self.passes.pop(0) if self.passes else ([], False, False)
+
+
+def _tick(i: int) -> str:
+    return f"id: {i}\nevent: tick\ndata: {{}}\n\n"
+
+
+def test_ending_is_asked_only_once_the_follow_has_caught_up(tmp_path: Path) -> None:
+    # Behind for three passes (more bytes each time), then caught up on the fourth.
+    follower = _ScriptedFollower(
+        tmp_path, [([_tick(1)], False, True), ([_tick(2)], False, True), ([_tick(3)], False, True)]
+    )
+    asked_at: list[int] = []
+
+    def ending() -> str | None:
+        asked_at.append(follower.polls)
+        return "END"
+
+    settings = FollowSettings(max_seconds=5, poll_s=0.01, keepalive_s=100)
+
+    async def drain() -> list[str]:
+        return [frame async for frame in aiter_follow(follower, settings, ending=ending)]
+
+    frames = asyncio.run(drain())
+    assert asked_at == [4]
+    assert frames == [_tick(1), _tick(2), _tick(3), "END"]
+
+
+def test_ending_is_not_asked_when_the_log_is_finished(tmp_path: Path) -> None:
+    follower = _ScriptedFollower(tmp_path, [([_tick(1)], True, False)])
+    asked: list[bool] = []
+
+    def ending() -> str | None:
+        asked.append(True)
+        return "END"
+
+    settings = FollowSettings(max_seconds=5, poll_s=0.01, keepalive_s=100)
+
+    async def drain() -> list[str]:
+        return [frame async for frame in aiter_follow(follower, settings, ending=ending)]
+
+    assert asyncio.run(drain()) == [_tick(1)]
+    assert asked == []
+
+
+class _EndlessFollower(_ScriptedFollower):
+    """Caught up on the first pass, then always has more (a writer that never stops)."""
+
+    def poll(self) -> tuple[list[str], bool, bool]:
+        self.polls += 1
+        if self.polls == 1:
+            return [], False, False
+        time.sleep(0.005)
+        return [_tick(self.polls)], False, self.polls < 400
+
+
+def test_the_re_read_of_an_ended_run_stops_at_the_max_duration(tmp_path: Path) -> None:
+    follower = _EndlessFollower(tmp_path, [])
+    settings = FollowSettings(max_seconds=0.2, poll_s=0.01, keepalive_s=100)
+
+    async def drain() -> list[str]:
+        return [frame async for frame in aiter_follow(follower, settings, ending=lambda: "END")]
+
+    started = time.monotonic()
+    frames = asyncio.run(drain())
+    elapsed = time.monotonic() - started
+    assert "END" not in frames  # unread bytes remain, so the synthetic frame is not sent
+    assert follower.polls < 200, follower.polls
+    assert elapsed < 1.5

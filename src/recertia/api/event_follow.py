@@ -174,6 +174,12 @@ class EventFollower:
         progressed = self.offset != before
         return frames, self._last_terminal and self.offset == size, progressed and self.offset < size
 
+    @property
+    def last_is_terminal(self) -> bool:
+        """The last complete event read (or the one just before the start offset) is terminal."""
+
+        return self._last_terminal
+
     def _consume(self, data: bytes, frames: list[str]) -> None:
         if self._skipping:
             newline = data.find(b"\n")
