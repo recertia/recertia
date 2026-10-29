@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from recertia.api import create_app, event_follow
 from recertia.api.event_follow import EventFollower, FollowLimiter, FollowSettings, InvalidOffset
+from recertia.api.routes.follow_stream import aiter_follow
 from recertia.errors import ConfigError
 
 KNOBS = {
@@ -264,7 +265,9 @@ def test_last_event_id_sent_twice_is_a_400(env: Env) -> None:
 
 def test_offset_beyond_end_of_log_is_a_400_not_a_skipped_backlog(env: Env) -> None:
     path = env.seed()
-    assert env.get(leid=str(path.stat().st_size + 1)).status_code == 400
+    resp = env.get(leid=str(path.stat().st_size + 1))
+    assert resp.status_code == 400
+    assert resp.json()["error"]["message"] == "Last-Event-ID is beyond the end of the run's event log"
     assert env.get(leid="1000000").status_code == 400
 
 
@@ -314,6 +317,15 @@ def test_last_event_id_wins_over_after(env: Env) -> None:
     ends = line_ends(path)
     resp = env.get(leid=str(ends[2]), query=f"follow=1&after={log[0]['event_id']}")
     assert ids(resp.text) == ends[3:]
+
+
+def test_follow_and_backlog_responses_tell_proxies_not_to_buffer(env: Env) -> None:
+    env.seed()
+    for query in ("follow=1", "follow=0"):
+        resp = env.get(query=query)
+        assert resp.status_code == 200
+        assert resp.headers["cache-control"] == "no-cache"
+        assert resp.headers["x-accel-buffering"] == "no"
 
 
 def test_backlog_mode_is_unchanged_and_ignores_last_event_id(env: Env) -> None:
@@ -420,6 +432,18 @@ def test_retryable_error_does_not_end_the_follow(make_env: Callable[..., Env]) -
     env.events.append("t1", "r", "error", {"code": "root_busy", "message": "x", "retryable": True})
     elapsed, resp = _elapsed(env)
     assert types(resp.text) == ["run.queued", "error"]
+    assert ids(resp.text) == line_ends(env.log_path())
+    assert elapsed >= 0.5  # held open until the max follow duration
+
+
+def test_lone_non_retryable_error_holds_until_the_max_duration(make_env: Callable[..., Env]) -> None:
+    # A failed run always appends run.finished after its error; the error alone never ends it.
+    env = make_env(RECERTIA_SSE_MAX_S="0.6")
+    env.events.append("t1", "r", "run.started", {})
+    env.events.append("t1", "r", "error", {"code": "run_failed", "message": "x", "retryable": False})
+    elapsed, resp = _elapsed(env)
+    assert resp.status_code == 200
+    assert types(resp.text) == ["run.started", "error"]
     assert ids(resp.text) == line_ends(env.log_path())
     assert elapsed >= 0.5  # held open until the max follow duration
 
@@ -850,3 +874,67 @@ def test_windows_style_line_endings_keep_exact_offsets(tmp_path: Path) -> None:
     frames, done, _ = follower.poll()
     assert [int(parse(f)[0]["id"]) for f in frames] == [len(lines[0]), len(lines[0]) + len(lines[1])]
     assert done
+
+
+def test_a_lone_carriage_return_in_the_type_is_sent_as_unknown() -> None:
+    # A bare CR ends an SSE line, so it could start a new field just like LF.
+    assert event_follow.event_name("a\rid: 9") == "unknown"
+    assert event_follow.event_name("a\r") == "unknown"
+    assert event_follow.event_name("\r") == "unknown"
+
+
+def test_event_name_is_capped_at_128_characters() -> None:
+    assert event_follow.event_name("a" * 128) == "a" * 128
+    assert event_follow.event_name("a" * 129) == "unknown"
+
+
+def test_terminal_event_with_unread_bytes_after_it_is_not_done(tmp_path: Path) -> None:
+    path = tmp_path / "log.jsonl"
+    cancelled = raw_line("b", "run.cancelled")
+    path.write_bytes(raw_line("a", "run.finished") + cancelled[:10])
+    follower = EventFollower(path, 0)
+    frames, done, _ = follower.poll()
+    assert len(frames) == 1 and not done  # the half-written line must still be flushed
+    with path.open("ab") as f:
+        f.write(cancelled[10:])
+    frames, done, _ = follower.poll()
+    assert len(frames) == 1 and "run.cancelled" in frames[0] and done
+
+
+class _CountingFollower(EventFollower):
+    polls = 0
+
+    def poll(self) -> tuple[list[str], bool, bool]:
+        self.polls += 1
+        return super().poll()
+
+
+def test_idle_follow_sleeps_between_polls(tmp_path: Path) -> None:
+    path = tmp_path / "log.jsonl"
+    path.write_bytes(raw_line("a", "tick"))
+    follower = _CountingFollower(path, 0)
+    settings = FollowSettings(max_seconds=0.5, poll_s=0.1, keepalive_s=100)
+
+    async def drain() -> list[str]:
+        return [frame async for frame in aiter_follow(follower, settings)]
+
+    assert len(asyncio.run(drain())) == 1
+    assert follower.polls <= 10, follower.polls
+
+
+def test_backlog_larger_than_one_read_drains_without_waiting_for_a_poll(tmp_path: Path) -> None:
+    path = tmp_path / "log.jsonl"
+    body = b"".join(raw_line(f"e{i}", "tick") for i in range(60000)) + raw_line("end", "run.finished")
+    assert len(body) > 2 * event_follow.MAX_LINE_BYTES  # needs several bounded reads
+    path.write_bytes(body)
+    settings = FollowSettings(max_seconds=10, poll_s=60, keepalive_s=100)
+
+    async def drain() -> list[str]:
+        return [frame async for frame in aiter_follow(EventFollower(path, 0), settings)]
+
+    started = time.monotonic()
+    frames = asyncio.run(drain())
+    elapsed = time.monotonic() - started
+    assert len(frames) == 60001
+    assert "run.finished" in frames[-1]
+    assert elapsed < 5  # one read per poll would wait out poll_s before the second chunk
