@@ -1390,7 +1390,8 @@ def test_same_tenant_import_refuses_a_second_import_without_a_root_lock_wait(
         with pytest.raises(RootBusy) as busy:
             open_run_persistence(tdir_a, runtime_root=root)
         layout_a = RuntimeLayout(root).tenant("tenant-a")
-        assert str(layout_a.tenant_lock) in str(busy.value)
+        assert "tenant lock is held" in str(busy.value)
+        assert str(layout_a.tenant_lock) not in str(busy.value)
         assert "root lock is held" not in str(busy.value)
         p = open_run_persistence(root / "runs" / "tenant-c", runtime_root=root)
         p.close()
@@ -1486,7 +1487,7 @@ def test_tenant_lock_refused_on_the_tenant_lock_holds_nothing(
             with pytest.raises(RootLockBusy):
                 second.acquire(exclusive=exclusive, timeout_s=0.2)
             assert time.monotonic() - started <= _JOIN_BOUND_S
-            assert second.refused == f"tenant lock is held: {layout.tenant_lock}"
+            assert second.refused == "tenant lock is held"
             assert second.root._fd is None and second.tenant._fd is None
             assert len(opened) >= 2  # the root lock, then each try on the tenant lock
             assert [fd for fd, st in opened if _still_open(fd, st)] == []
@@ -1504,7 +1505,7 @@ def test_tenant_lock_refused_on_the_tenant_lock_holds_nothing(
     try:
         with pytest.raises(RootLockBusy):
             other.acquire(exclusive=False, timeout_s=0)
-        assert other.refused == f"root lock is held: {RuntimeLayout(root).root_lock}"
+        assert other.refused == "root lock is held"
         assert other.root._fd is None and other.tenant._fd is None
         assert len(opened) == 1  # the root lock only; the tenant lock was never opened
         assert [fd for fd, st in opened if _still_open(fd, st)] == []
@@ -1594,7 +1595,7 @@ def test_root_lock_tenant_lock_one_deadline_covers_both_waits(tmp_path: Path, ex
     finally:
         releaser.join(_JOIN_BOUND_S)
         tenant_holder.release()
-    assert waiter.refused == f"tenant lock is held: {layout.tenant_lock}"  # it got past the root
+    assert waiter.refused == "tenant lock is held"  # it got past the root
     # One deadline: about timeout_s. M7 would be about root_wait_s + timeout_s (1.0 s).
     assert timeout_s - 0.05 <= waited < timeout_s + 0.25, waited
     assert waiter.root._fd is None and waiter.tenant._fd is None

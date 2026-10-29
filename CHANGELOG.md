@@ -137,6 +137,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`RootBusy` messages carry no filesystem path (#160)** — a refused open or leftover import
+  put the lock path or the runtime root path in the `RootBusy` text, which reaches the
+  `root_busy` run event, queue rows and logs. `TenantLock.refused` is now `root lock is held`
+  or `tenant lock is held`, and the two re-check messages in `open_run_persistence` no longer
+  end in the root path. The wording otherwise stays: `cannot open the runtime root while the
+  root lock is held`, `cannot import leftover runtime files while the tenant lock is held`,
+  `leftover runtime files appeared while waiting for the root lock`, `the runtime root was
+  imported while waiting for the root lock`. Anything that matched the path in these
+  messages must match the lock name instead. `RootLockBusy` (the cause, not the `RootBusy`
+  text) still names the lock file.
 - **`GET /v1/runs/{run_id}` reports `root_busy` while the runtime root is busy (#145)** — when
   the runtime root lock is held (a backup, a restore, or another process importing leftover
   run files), `GET /v1/runs/{run_id}` answered `503` with code `unavailable` and
