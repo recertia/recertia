@@ -103,6 +103,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Whole values are unchanged, and no header is sent for a missing `retry_after_s`. This
   changes the value sent for any `RecertiaError` with a fractional `retry_after_s`.
 
+- **`GET /v1/runs` lists newest first with an opaque cursor (#136)** — the list was in
+  run-id order and is now newest first (`created_at` descending, run id descending), and
+  `next_cursor` is an opaque keyset cursor, so a walk with `limit` pages sees every run
+  once, with no 10,000-run ceiling and a per-page cost that depends on `limit`, not on the
+  number of runs. Runs that were accepted but have no checkpoint yet are listed (status
+  `accepted`) and take their stored state once they have one; `task_class` and `terminal`
+  filter every source. A cursor that is malformed, over 512 characters or not in the
+  canonical form returns `400` `invalid_cursor`; a cursor from before this change (a bare
+  run id) is rejected the same way, so restart the walk without a cursor. Adds the
+  `runs_list` index on `runs` and the `run_summaries_created` index on `run_summaries`,
+  both created on open.
+
 - **`manual` mode named a command that does not exist (REC-070, #172)** — with leftover
   `checkpoints.db` / `operations.db` still pending, `RECERTIA_RUNTIME_DB_MIGRATE=manual`
   refused to open with "run recertia migrate apply" (message and `details.action`), but

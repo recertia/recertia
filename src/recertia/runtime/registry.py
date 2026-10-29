@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,11 @@ CREATE TABLE IF NOT EXISTS runs (
 )
 """
 
+# Keyset order for the run list (REL-6): newest first, ties broken by run id.
+_LIST_INDEX = """
+CREATE INDEX IF NOT EXISTS runs_list ON runs (tenant_id, created_at DESC, run_id DESC)
+"""
+
 
 @dataclass(frozen=True)
 class ReserveResult:
@@ -47,6 +53,7 @@ class RunRegistry:
         self._conn.row_factory = sqlite3.Row
         with self._conn:
             self._conn.execute(_SCHEMA)
+            self._conn.execute(_LIST_INDEX)
 
     def close(self) -> None:
         self._conn.close()
@@ -110,3 +117,65 @@ class RunRegistry:
             (str(tenant), run_id),
         ).fetchone()
         return row
+
+    def list_page(
+        self,
+        tenant_id: str,
+        *,
+        limit: int,
+        created_at_before: str | None = None,
+        run_id_before: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Up to ``limit`` rows of one tenant, ``created_at DESC, run_id DESC``.
+
+        With both ``created_at_before`` and ``run_id_before`` set, only rows strictly after
+        that position in this order are returned. ``created_at_before`` must be written
+        the way :meth:`reserve` writes ``created_at`` (UTC ISO text), so that text order is
+        time order. The query is served by the ``runs_list`` index.
+        """
+
+        sql = "SELECT run_id, status, summary_json, created_at, updated_at FROM runs WHERE tenant_id = ?"
+        params: list[object] = [tenant_id]
+        if created_at_before is not None and run_id_before is not None:
+            sql += " AND (created_at < ? OR (created_at = ? AND run_id < ?))"
+            params += [created_at_before, created_at_before, run_id_before]
+        sql += " ORDER BY created_at DESC, run_id DESC LIMIT ?"
+        params.append(limit)
+        return [_listing_row(row) for row in self._conn.execute(sql, params).fetchall()]
+
+    def get_many(self, tenant_id: str, run_ids: Sequence[str]) -> dict[str, dict[str, object]]:
+        """The listing rows of ``run_ids`` that exist for the tenant, keyed by run id."""
+
+        found: dict[str, dict[str, object]] = {}
+        for start in range(0, len(run_ids), _IN_CHUNK):
+            chunk = list(run_ids[start : start + _IN_CHUNK])
+            marks = ",".join("?" * len(chunk))
+            rows = self._conn.execute(
+                "SELECT run_id, status, summary_json, created_at, updated_at "
+                f"FROM runs WHERE tenant_id = ? AND run_id IN ({marks})",
+                [tenant_id, *chunk],
+            ).fetchall()
+            for row in rows:
+                found[str(row["run_id"])] = _listing_row(row)
+        return found
+
+
+_IN_CHUNK = 500
+
+
+def _listing_row(row: sqlite3.Row) -> dict[str, object]:
+    """A run row as the list returns it. A summary that is not a JSON object counts as empty."""
+
+    try:
+        summary = json.loads(row["summary_json"] or "{}")
+    except json.JSONDecodeError:
+        summary = {}
+    if not isinstance(summary, dict):
+        summary = {}
+    return {
+        **summary,
+        "run_id": row["run_id"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }

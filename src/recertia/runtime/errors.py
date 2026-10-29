@@ -8,6 +8,7 @@ __all__ = [
     "Busy",
     "ConfigError",
     "ExecutionUnavailable",
+    "InvalidCursor",
     "LedgerLockTimeout",
     "LedgerUnavailable",
     "QuotaExceeded",
@@ -65,3 +66,11 @@ class LeaseLost(Busy):
     retryable = True
     exit_code = 6
 
+
+class InvalidCursor(RecertiaError):
+    """A list cursor that is malformed, oversized, non-canonical or has bad fields."""
+
+    code = "invalid_cursor"
+    http_status = 400
+    retryable = False
+    exit_code = 2
