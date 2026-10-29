@@ -1,6 +1,6 @@
 [project]
 name = "recertia"
-version = "0.1.0"
+version = "0.4.0"
 description = "Recertia: a self-improving agent system. contracts/ (ADR-0009) is the structural source of truth; src/recertia/ implements the M0–M9 runtime."
 readme = "README.md"
 license = "PolyForm-Noncommercial-1.0.0"
