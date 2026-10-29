@@ -137,6 +137,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The wheel ships every persistence migration, so the API starts from an installed wheel**
+  — the package data covered only the store migrations. The control, runtime and quota
+  migrations, and the notes kept beside the Postgres migrations, were left out of the wheel,
+  so starting the API on a fresh root from an installed wheel failed with
+  `no such table: run_queue`. The wheel now ships all of them. No released version is
+  affected: those migrations arrived with #69, after the `0.3.0` tag, so 0.4.0 would have
+  been the first release without them. A new test builds the wheel offline, checks that its
+  `RECORD` lists every non-Python file in the package, installs it into a temporary venv
+  and starts the API there. The `dev` extra now includes `setuptools`, which that offline
+  build needs.
 - **Binding a run to a program step checks the step's preview** — since 0.1.0, `POST
   /v1/programs/{program_id}/steps/{step_id}/run` with `bind_run_id` replaced the step's
   `criteria_preview_hash` with the hash of the goal it had just materialized before its two
