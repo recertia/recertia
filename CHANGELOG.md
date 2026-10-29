@@ -145,6 +145,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which needs the runtime root lock. The mapper now leaves a `RootBusy` to the app-level
   handler, so every programs route sends the same envelope as `/v1/runs`: code
   `root_busy`, `503`, `retryable: true`, with no `Retry-After`.
+- **SSE follow ends for a run the queue marks failed with no terminal event (#137)** — a run
+  the worker ended with `run_busy`, `workspace_busy` or a start-up failure is marked `failed`
+  in the queue but gets no terminal event in its log, so a `follow=1` stream held until
+  `RECERTIA_SSE_MAX_S`. It now ends the way a dead run does: after one more read of the log
+  it sends `run.finished` with payload `{"terminal": "error", "error_code": ...}` (the
+  queue's code), and a real `run.finished` in the log still wins. The re-read of such a run
+  now stops at `RECERTIA_SSE_MAX_S`, and a log that ends with a real terminal event and then
+  a partly written line no longer gets a second, synthetic `run.finished`. Section 4.3 of
+  `docs/specifications/product-console.md` now lists `401` among the JSON error responses
+  and notes when the queue's answer can go stale.
 - **SSE follow ends for a run the queue marks dead (#137)** — a run whose worker process died
   on its last attempt is marked `dead` (`lease_expired`) and gets no terminal event in its
   log, so a `follow=1` stream held until `RECERTIA_SSE_MAX_S` and the client reconnected
@@ -152,12 +162,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `run.finished` with payload `{"terminal": "error", "error_code": ...}` and ends. It reads
   the log once more first, so a `run.finished` the worker wrote just before it died is sent
   instead. The frame has no `id:` (it is not a line of the log), so a reconnect gets it again
-  and ends. The
-  shared SSE response headers are now read-only. `docs/specifications/product-console.md`
-  section 4.3 documents the dead-run end and the `Cache-Control: no-cache` and
-  `X-Accel-Buffering: no` headers, and its ASGI 2.4 note now says that Starlette stops
-  watching for the disconnect and that an idle slot can be held for up to
-  `RECERTIA_SSE_KEEPALIVE_S` + `RECERTIA_SSE_POLL_S`.
+  and ends. The shared SSE response headers are now read-only.
+  `docs/specifications/product-console.md` section 4.3 documents the dead-run end and the
+  `Cache-Control: no-cache` and `X-Accel-Buffering: no` headers, and its ASGI 2.4 note now
+  says that Starlette stops watching for the disconnect and that an idle slot can be held for
+  up to `RECERTIA_SSE_KEEPALIVE_S` + `RECERTIA_SSE_POLL_S`.
 
 - **`RootBusy` messages carry no filesystem path (#160)** — a refused open or leftover import
   put the lock path or the runtime root path in the `RootBusy` text, which reaches the

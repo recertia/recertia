@@ -3537,21 +3537,29 @@ sends a `: keep-alive` comment every `RECERTIA_SSE_KEEPALIVE_S` seconds.
 
 **Headers.** Every `text/event-stream` response of this endpoint, with or without `follow`,
 carries `Cache-Control: no-cache` and `X-Accel-Buffering: no`, so caches and buffering
-proxies (such as nginx) pass each frame on at once. Error responses (`400`, `404`, `429`) are
-JSON and do not carry them.
+proxies (such as nginx) pass each frame on at once. Error responses (for example `400`, `401`,
+`404`, `429`) are JSON and do not carry them.
 
 **Termination.** The stream ends when the last event in the log is `run.finished` or
 `run.cancelled` (decided by the event's `type`, not by its payload), after that event has been
 sent. This works for a run that is not held in memory, such as after a restart. An `error`
 event never ends the stream by itself; a failed run ends with `run.finished`
-(`terminal: "error"`). A run whose worker process died on its last attempt is marked `dead`
-by the queue and has no terminal event in its log. Once the stream has sent the whole log of
-such a run, it reads the log once more: if the worker appended its own `run.finished` before
-it died, that event is sent and the stream ends. Otherwise the stream sends `run.finished`
-with payload `{"terminal": "error", "error_code": ...}` (the queue's error code,
-`lease_expired`) and ends. That frame has no `id:` because
-it is not a line of the log, so a client that reconnects with its last `Last-Event-ID` gets
-the same frame again and the stream ends. Otherwise the stream ends after
+(`terminal: "error"`). Some runs end in the queue with no terminal event in their log: a run
+whose worker process died on its last attempt is marked `dead` (`lease_expired`), and a run
+the worker could not start is marked `failed` (`run_busy`, `workspace_busy`, or `run_failed`
+for a start-up failure). Once the stream has sent the whole log of such a run, it reads the
+log once more: if the worker appended its own `run.finished` first, that event is sent and
+the stream ends. Otherwise the stream sends `run.finished` with payload
+`{"terminal": "error", "error_code": ...}` (the queue's error code) and ends. That frame has
+no `id:` because it is not a line of the log, so a client that reconnects with its last
+`Last-Event-ID` gets the same frame again and the stream ends. A log that ends with a real
+terminal event and then a partly written line ends after the real event, with no extra
+frame. The re-read also stops at `RECERTIA_SSE_MAX_S`, without the frame. The queue is read
+only once the stream has caught up with the log, and its answer can go stale: for
+`run_busy` another process may still be writing the log, and a run resumed between the
+queue read and the re-read can have its first new events sent before the frame. In both
+cases the client's last `id:` is a real offset, so a reconnect delivers the new events.
+Otherwise the stream ends after
 `RECERTIA_SSE_MAX_S` seconds; the client reconnects with `Last-Event-ID`. If the log shrinks
 below the cursor, the stream ends.
 
