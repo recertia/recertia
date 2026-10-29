@@ -309,11 +309,15 @@ class ProgramService:
             if remaining <= 0 or (step_cap is not None and need > remaining):
                 raise QuotaExceeded("program budget exhausted")
         ph = preview_hash(goal)
+        # The hash the last preview stored. The bind checks below compare against it, so
+        # read it before this call's hash replaces it, and store nothing for a bind yet: a
+        # rejected bind must not count as a preview.
+        previewed_hash = step.criteria_preview_hash
         step = step.model_copy(update={"criteria_preview_hash": ph})
         prog = self._replace_step(prog, step)
-        runtime.programs.put(prog)
 
         if body.plan_only or body.bind_run_id is None:
+            runtime.programs.put(prog)
             return {
                 "plan_only": body.plan_only or body.bind_run_id is None,
                 "run_create": {
@@ -343,9 +347,9 @@ class ProgramService:
         if rec is None:
             raise NotFound("run not found for tenant")
 
-        if not step.criteria_preview_hash:
+        if not previewed_hash:
             raise ConfigError("preview step before bind (missing criteria_preview_hash)")
-        if ph != step.criteria_preview_hash:
+        if ph != previewed_hash:
             raise Conflict("goal changed since preview; re-run preview before bind")
         run_hash = rec.criteria_hash
         if run_hash is None:

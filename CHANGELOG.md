@@ -137,6 +137,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Binding a run to a program step checks the step's preview again (#254)** — `POST
+  /v1/programs/{program_id}/steps/{step_id}/run` with `bind_run_id` replaced the step's
+  `criteria_preview_hash` with the hash of the goal it had just materialized before its two
+  checks read it, so neither could fire: a bind with no preview, or after the goal changed
+  since the preview (for example new freeze paths under `hard` enforcement), went through. The
+  checks now read the hash the last preview stored, and answer as documented: `400`
+  `preview step before bind (missing criteria_preview_hash)` and `409` `goal changed since
+  preview; re-run preview before bind`. A bind no longer stores the hash before its checks,
+  so a rejected bind leaves the program unchanged and does not count as a preview. A
+  `plan_only` call or one without `bind_run_id` still stores it, as does a bind that succeeds.
+  Clients that preview, or ask for the run envelope, before they bind (the console does) see
+  no change.
 - **A non-busy lock failure ends an async run instead of leaving it queued (#160)** — when
   opening a run's persistence failed with an `OSError` that is not a busy refusal (for
   example the lock path is a directory, or the disk is full), the in-process async worker
