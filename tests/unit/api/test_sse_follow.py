@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -19,8 +20,10 @@ from fastapi.testclient import TestClient
 
 from recertia.api import create_app, event_follow
 from recertia.api.event_follow import EventFollower, FollowLimiter, FollowSettings, InvalidOffset
-from recertia.api.routes.follow_stream import aiter_follow
+from recertia.api.routes.follow_stream import SSE_HEADERS, aiter_follow
 from recertia.errors import ConfigError
+from recertia.workers import queue as run_queue
+from recertia.workers.queue import QueueItem
 
 KNOBS = {
     "RECERTIA_SSE_POLL_S": "0.02",
@@ -328,6 +331,12 @@ def test_follow_and_backlog_responses_tell_proxies_not_to_buffer(env: Env) -> No
         assert resp.headers["x-accel-buffering"] == "no"
 
 
+def test_shared_sse_headers_cannot_be_changed() -> None:
+    with pytest.raises(TypeError):
+        SSE_HEADERS["Cache-Control"] = "max-age=60"  # type: ignore[index]
+    assert dict(SSE_HEADERS) == {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+
 def test_backlog_mode_is_unchanged_and_ignores_last_event_id(env: Env) -> None:
     path = env.seed(n=2)
     log = [json.loads(line) for line in path.read_bytes().splitlines()]
@@ -464,6 +473,203 @@ def test_events_after_a_terminal_event_are_still_delivered(make_env: Callable[..
     env.events.append("t1", "r", "run.queued", {"mode": "resume"})
     env.events.append("t1", "r", "run.finished", {"terminal": "solved"})
     assert types(env.get().text) == ["run.finished", "run.queued", "run.finished"]
+
+
+# --- a run the queue marks dead ------------------------------------------------------------
+
+
+def _claim_for_a_worker(env: Env, run: str = "r", tenant: str = "t1") -> Any:
+    """Queue the run with one attempt and claim it for a worker that reports this process's pid."""
+
+    queue = env.app.state.recertia.queue
+    queue.enqueue(QueueItem(tenant_id=tenant, run_id=run, kind="run", payload={}, max_attempts=1))
+    queue.register_worker("w-follow", capacity=1, hostname="host", pid=os.getpid())
+    assert len(queue.claim("w-follow")) == 1
+    return queue
+
+
+def _mark_dead(env: Env, monkeypatch: pytest.MonkeyPatch, run: str = "r", tenant: str = "t1") -> None:
+    """The worker's process is gone on its last attempt, so reconciliation marks the claim dead."""
+
+    queue = _claim_for_a_worker(env, run, tenant)
+    with monkeypatch.context() as m:
+        m.setattr(run_queue, "_pid_alive", lambda pid: False)
+        assert queue.reconcile_orphans() == 1
+    assert queue.get(tenant, run).status == "dead"
+
+
+def _dead_frame(text: str) -> dict[str, Any]:
+    last = parse(text)[-1]
+    assert "id" not in last  # not a line of the log, so it carries no resume offset
+    assert last["event"] == "run.finished"
+    return dict(json.loads(last["data"]))
+
+
+def test_dead_run_ends_with_a_terminal_event(
+    make_env: Callable[..., Env], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    env.events.append("t1", "r", "run.queued", {"mode": "async"})
+    env.events.append("t1", "r", "run.started", {})
+    _mark_dead(env, monkeypatch)
+    elapsed, resp = _elapsed(env)
+    assert resp.status_code == 200
+    assert types(resp.text) == ["run.queued", "run.started", "run.finished"]
+    assert [int(f["id"]) for f in parse(resp.text)[:-1]] == line_ends(env.log_path())
+    data = _dead_frame(resp.text)
+    assert data["type"] == "run.finished"
+    assert (data["run_id"], data["tenant_id"]) == ("r", "t1")
+    assert data["payload"] == {"terminal": "error", "error_code": "lease_expired"}
+    assert elapsed < 2  # not held until the max follow duration
+
+
+def test_run_that_goes_dead_while_followed_ends_promptly(
+    make_env: Callable[..., Env], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    env.events.append("t1", "r", "run.started", {})
+    queue = _claim_for_a_worker(env)
+
+    def worker_dies() -> None:
+        time.sleep(0.4)
+        env.events.append("t1", "r", "tick", {"n": 1})
+        with monkeypatch.context() as m:
+            m.setattr(run_queue, "_pid_alive", lambda pid: False)
+            queue.reconcile_orphans()
+
+    thread = threading.Thread(target=worker_dies)
+    thread.start()
+    elapsed, resp = _elapsed(env)
+    thread.join()
+    assert types(resp.text) == ["run.started", "tick", "run.finished"]
+    assert _dead_frame(resp.text)["payload"]["terminal"] == "error"
+    assert 0.3 <= elapsed < 3
+
+
+def test_reconnect_to_a_dead_run_gets_only_the_terminal_event(
+    make_env: Callable[..., Env], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    env.events.append("t1", "r", "run.started", {})
+    _mark_dead(env, monkeypatch)
+    end = str(env.log_path().stat().st_size)
+    elapsed, resp = _elapsed(env, leid=end)
+    assert types(resp.text) == ["run.finished"]
+    _dead_frame(resp.text)
+    assert elapsed < 2
+
+
+def test_a_claimed_run_whose_worker_is_alive_still_holds(make_env: Callable[..., Env]) -> None:
+    env = make_env(RECERTIA_SSE_MAX_S="0.6")
+    env.events.append("t1", "r", "run.started", {})
+    queue = _claim_for_a_worker(env)
+    assert queue.reconcile_orphans() == 0  # this process is alive, so the claim stays
+    elapsed, resp = _elapsed(env)
+    assert types(resp.text) == ["run.started"]
+    assert elapsed >= 0.5  # held open until the max follow duration
+
+
+def test_a_queued_run_that_was_never_claimed_still_holds(make_env: Callable[..., Env]) -> None:
+    env = make_env(RECERTIA_SSE_MAX_S="0.6")
+    env.events.append("t1", "r", "run.queued", {"mode": "async"})
+    queue = env.app.state.recertia.queue
+    queue.enqueue(QueueItem(tenant_id="t1", run_id="r", kind="run", payload={}))
+    assert queue.get("t1", "r").status == "queued"
+    elapsed, resp = _elapsed(env)
+    assert types(resp.text) == ["run.queued"]
+    assert elapsed >= 0.5  # held open until the max follow duration
+
+
+def test_a_run_requeued_after_its_worker_died_still_holds(
+    make_env: Callable[..., Env], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(RECERTIA_SSE_MAX_S="0.6")
+    env.events.append("t1", "r", "run.started", {})
+    queue = env.app.state.recertia.queue
+    queue.enqueue(QueueItem(tenant_id="t1", run_id="r", kind="run", payload={}, max_attempts=2))
+    queue.register_worker("w-follow", capacity=1, hostname="host", pid=os.getpid())
+    assert len(queue.claim("w-follow")) == 1
+    with monkeypatch.context() as m:
+        m.setattr(run_queue, "_pid_alive", lambda pid: False)
+        assert queue.reconcile_orphans() == 1
+    assert queue.get("t1", "r").status == "queued"  # an attempt is left, so it is not dead
+    elapsed, resp = _elapsed(env)
+    assert types(resp.text) == ["run.started"]
+    assert elapsed >= 0.5  # held open until the max follow duration
+
+
+def test_dead_run_whose_log_ends_with_run_finished_gets_only_that_event(
+    make_env: Callable[..., Env], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The worker appended run.finished and died before it could record the outcome.
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    env.events.append("t1", "r", "run.started", {})
+    env.events.append("t1", "r", "run.finished", {"terminal": "solved"})
+    _mark_dead(env, monkeypatch)
+    for leid in (None, str(line_ends(env.log_path())[0])):
+        elapsed, resp = _elapsed(env, leid=leid)
+        frames = parse(resp.text)
+        assert types(resp.text).count("run.finished") == 1
+        assert json.loads(frames[-1]["data"])["payload"] == {"terminal": "solved"}
+        assert int(frames[-1]["id"]) == env.log_path().stat().st_size
+        assert elapsed < 2
+    elapsed, resp = _elapsed(env, leid=str(env.log_path().stat().st_size))
+    assert resp.text == ""
+    assert elapsed < 2
+
+
+@pytest.mark.parametrize("burst", [0, 1200])
+def test_run_finished_written_just_before_the_worker_died_wins_over_the_dead_frame(
+    make_env: Callable[..., Env], monkeypatch: pytest.MonkeyPatch, burst: int
+) -> None:
+    # The worker appends its last events (``burst`` ticks, more than one read when large) and
+    # run.finished and dies, and the row is marked dead, after the follow has read the log
+    # but before it reads the queue.
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    env.events.append("t1", "r", "run.started", {})
+    queue = _claim_for_a_worker(env)
+    real_get = queue.get
+    injected: list[bool] = []
+
+    def get_after_the_worker_died(*args: Any, **kwargs: Any) -> Any:
+        if not injected:
+            injected.append(True)
+            for i in range(burst):
+                env.events.append("t1", "r", "tick", {"i": i, "pad": "x" * 1000})
+            env.events.append("t1", "r", "run.finished", {"terminal": "solved"})
+            with monkeypatch.context() as m:
+                m.setattr(run_queue, "_pid_alive", lambda pid: False)
+                assert queue.reconcile_orphans() == 1
+        return real_get(*args, **kwargs)
+
+    monkeypatch.setattr(queue, "get", get_after_the_worker_died)
+    elapsed, resp = _elapsed(env)
+    assert injected == [True]
+    assert queue.get("t1", "r").status == "dead"
+    frames = parse(resp.text)
+    assert types(resp.text) == ["run.started"] + ["tick"] * burst + ["run.finished"]
+    assert json.loads(frames[-1]["data"])["payload"] == {"terminal": "solved"}
+    assert [int(f["id"]) for f in frames] == line_ends(env.log_path())
+    assert elapsed < 4
+    elapsed, resp = _elapsed(env, leid=frames[-2]["id"])
+    assert types(resp.text) == ["run.finished"]
+    assert json.loads(parse(resp.text)[-1]["data"])["payload"] == {"terminal": "solved"}
+    assert elapsed < 2
+
+
+def test_dead_run_with_a_backlog_larger_than_one_read_gets_all_of_it_first(
+    make_env: Callable[..., Env], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    n = 1200
+    for i in range(n):
+        env.events.append("t1", "r", "tick", {"i": i, "pad": "x" * 1000})
+    assert env.log_path().stat().st_size > event_follow.MAX_LINE_BYTES
+    _mark_dead(env, monkeypatch)
+    elapsed, resp = _elapsed(env)
+    assert types(resp.text) == ["tick"] * n + ["run.finished"]
+    assert _dead_frame(resp.text)["payload"] == {"terminal": "error", "error_code": "lease_expired"}
+    assert elapsed < 4
 
 
 # --- max duration and keep-alive -----------------------------------------------------------
