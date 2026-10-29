@@ -10,7 +10,15 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from recertia.api.auth import Principal
 from recertia.api.deps import RouteState
 from recertia.api.errors import quota_error, v1_error
+from recertia.api.event_follow import (
+    FollowCapExceeded,
+    FollowLimiter,
+    FollowSettings,
+    InvalidOffset,
+    parse_offset,
+)
 from recertia.api.quotas import QuotaExceeded
+from recertia.api.routes.follow_stream import FollowResponse, aiter_follow
 from recertia.api.schemas import RunCreate, RunRecord
 from recertia.app.runs import AcceptedRun
 from recertia.errors import ConfigError, Forbidden, NotFound, RateLimited, RecertiaError
@@ -65,6 +73,8 @@ def register_runs_routes(app: FastAPI, rs: RouteState) -> None:
     run_service = ctx.run_service
     require_runs = rs.require_runs
     _resolve_tenant = rs.resolve_tenant
+    follow_settings = FollowSettings.from_env()
+    follow_limiter = FollowLimiter(follow_settings.tenant_max, follow_settings.global_max)
 
     @app.post("/v1/runs", response_model=None)
     def create_run(
@@ -180,18 +190,55 @@ def register_runs_routes(app: FastAPI, rs: RouteState) -> None:
             raise HTTPException(status_code=404, detail="trajectory not found")
         return traj.model_dump(mode="json")
 
+    def _open_follow(request: Request, tenant_id: str, run_id: str, after: str | None) -> StreamingResponse:
+        """Resume cursor: ``Last-Event-ID`` (a byte offset) wins over ``?after=`` (an event id,
+        translated once). Everything is checked before the stream starts, so a bad cursor
+        is a real 400, never a truncated 200."""
+
+        try:
+            ids = request.headers.getlist("last-event-id")
+            if len(ids) > 1:
+                raise InvalidOffset("Last-Event-ID must be sent once")
+            if ids:
+                offset = parse_offset(ids[0])
+            elif after is not None:
+                found = ctx.events.offset_after(tenant_id, run_id, after)
+                if found is None:
+                    raise InvalidOffset("after is not an event id of this run")
+                offset = found
+            else:
+                offset = 0
+            follower = ctx.events.follower(tenant_id, run_id, after_offset=offset)
+        except InvalidOffset as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            release = follow_limiter.acquire(tenant_id)
+        except FollowCapExceeded as exc:
+            who = "this tenant" if exc.scope == "tenant" else "the server"
+            raise RateLimited(
+                f"too many open follow streams for {who}", run_id=run_id, retry_after_s=1
+            ) from exc
+        return FollowResponse(aiter_follow(follower, follow_settings), release)
+
     @app.get("/v1/runs/{run_id}/events")
     def run_events(
         run_id: str,
         request: Request,
         principal=Depends(require_runs),
         after: str | None = None,
+        follow: bool = False,
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
+        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     ) -> StreamingResponse:
+        """Backlog replay, or with ``follow=1`` a live stream resumed from a byte offset."""
+
         run_id = ctx.validate_run_id(run_id)
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         if not _tenant_owns_run(ctx, tenant_id, run_id):
             raise HTTPException(status_code=404, detail="run not found")
+
+        if follow:
+            return _open_follow(request, tenant_id, run_id, after)
 
         def gen() -> Any:
             yield from ctx.events.iter_sse(tenant_id, run_id, after=after)

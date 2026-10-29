@@ -171,6 +171,10 @@ OIDC login routes MAY live on the BFF (`/auth/login`, `/auth/callback`) rather t
 
 `GET /v1/runs/{run_id}/events` streams `text/event-stream` for callers authorized on that run.
 
+Without `follow`, the stream is the current backlog and then closes, as before, and each
+frame's `id:` is the event id. With `follow=1` the stream stays open and `id:` is a byte
+offset (see 4.3).
+
 ### 4.1 Event envelope
 
 ```json
@@ -198,6 +202,58 @@ OIDC login routes MAY live on the BFF (`/auth/login`, `/auth/callback`) rather t
 
 SSE MUST support Last-Event-ID (or `?after=`) for reconnect. Events MUST be tenant-scoped.
 Payloads MUST NOT include raw secrets; use blob digests for large transcript chunks.
+
+### 4.3 Follow mode and resume
+
+`GET /v1/runs/{run_id}/events?follow=1` replays the backlog from the cursor and then keeps
+sending events as they are appended to the run's log.
+
+**Contract change.** In follow mode the SSE `id:` of each frame is the **byte offset** just
+past that event's line in the run's event log, not the event id. A client that stores an id
+and sends it back as `Last-Event-ID` must store this offset. Event ids still appear in the
+`data:` payload, and without `follow` the `id:` is unchanged (the event id).
+
+**Cursor.** The cursor is, in order of precedence:
+
+1. The `Last-Event-ID` header: a decimal byte offset, ASCII digits only (at most 15). It must
+   be sent once, and it must be `0` or the `id:` of a frame the server sent: not past the end
+   of the log and not inside a line.
+2. `?after=<event_id>`: translated once to the offset just after that event. An unknown event
+   id is an error.
+3. Otherwise `0` (the whole backlog).
+
+An invalid cursor (not a plain decimal number, a sign, spaces, underscores, an empty value, a
+repeated header, an offset past the end of the log or inside a line, a legacy event id read as
+a number, an unknown `after`) is answered with `400` and the error envelope before any
+streaming starts. It is never clamped and never silently skips the backlog. Authorization
+(`404` for another tenant's run) is decided before the cursor is looked at.
+
+**Frames.** Every frame carries its own `id:`, so a client that reconnects after any frame
+loses nothing and sees nothing twice. A line that is still being written is delivered once it
+is complete. Lines that are not JSON objects, or longer than 1 MiB, are skipped. An idle stream
+sends a `: keep-alive` comment every `RECERTIA_SSE_KEEPALIVE_S` seconds.
+
+**Termination.** The stream ends when the last event in the log is `run.finished` or
+`run.cancelled` (decided by the event's `type`, not by its payload), after that event has been
+sent. This works for a run that is not held in memory, such as after a restart. A retryable
+`error` event does not end the stream. Otherwise the stream ends after
+`RECERTIA_SSE_MAX_S` seconds; the client reconnects with `Last-Event-ID`. If the log shrinks
+below the cursor, the stream ends.
+
+**Limits.** Each tenant may have `RECERTIA_TENANT_MAX_SSE` follow streams open at once, and the
+server `RECERTIA_GLOBAL_MAX_SSE` in total. A request over a limit gets `429` with
+`Retry-After`. A slot is released when the stream ends or the client disconnects. An open
+follow does not hold a worker thread while it waits.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `RECERTIA_TENANT_MAX_SSE` | `16` | Open follow streams per tenant |
+| `RECERTIA_GLOBAL_MAX_SSE` | `64` | Open follow streams in the server |
+| `RECERTIA_SSE_MAX_S` | `30` | Longest a follow stream stays open, in seconds |
+| `RECERTIA_SSE_POLL_S` | `0.5` | Interval between checks of the log |
+| `RECERTIA_SSE_KEEPALIVE_S` | `15` | Idle interval between keep-alive comments |
+
+Each setting must be a positive number; a bad value stops the server at startup.
 
 ## 5. Durable proposals
 

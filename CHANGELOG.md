@@ -62,6 +62,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
+- **SSE `id:` is a byte offset in follow mode (#137)** — `GET /v1/runs/{run_id}/events` takes
+  a new `follow` query flag. With `follow=1` the stream stays open and sends events as they
+  are appended. **Contract break:** each frame's SSE `id:` is now the byte offset just past
+  that event in the run's log, no longer the event id, so a client that stores ids and sends
+  them back as `Last-Event-ID` must store the offset. Without `follow` the stream and its
+  event-id `id:` are unchanged. `Last-Event-ID` is the cursor (a plain decimal offset that is
+  `0` or a frame's `id:`); `?after=<event_id>` is translated once to an offset and is
+  overridden by the header. A bad cursor (sign, spaces, underscore, empty or repeated header,
+  past the end of the log, inside a line, unknown `after`) is a `400` before streaming starts.
+  Every frame has its own `id:`, a half-written line is delivered once complete, and the
+  stream ends after `run.finished` or `run.cancelled` (by event type), including for a run
+  not held in memory, or after `RECERTIA_SSE_MAX_S` (default 30 s). Open follows are capped
+  per tenant (`RECERTIA_TENANT_MAX_SSE`, default 16) and in total
+  (`RECERTIA_GLOBAL_MAX_SSE`, default 64) with `429` and `Retry-After`; a waiting follow does
+  not hold a worker thread, so `/ready` and the other endpoints stay responsive. New
+  settings: `RECERTIA_SSE_POLL_S` (0.5), `RECERTIA_SSE_KEEPALIVE_S` (15). An `event:` name
+  that is not a single line of printable text is sent as `unknown`, in both modes. See
+  `docs/specifications/product-console.md` section 4.3.
+
 - **Stub lock-identity helper removed (REC-056b1, #132)** —
   `recertia.persistence.root_lock.exclusive_held_by_this_thread` is deleted. It was a stub
   that always returned `False`: the root lock is the flock alone and the `.lock` file text is

@@ -10,6 +10,13 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 from recertia.api.auth import validate_tenant_id
+from recertia.api.event_follow import (
+    EventFollower,
+    check_offset,
+    event_name,
+    iter_follow,
+    offset_after_event_id,
+)
 
 
 class RunEventLog:
@@ -84,6 +91,46 @@ class RunEventLog:
         last_id = after
         for event in events:
             last_id = event["event_id"]
-            yield f"id: {event['event_id']}\nevent: {event['type']}\ndata: {json.dumps(event)}\n\n"
+            name = event_name(event.get("type"))
+            yield f"id: {event['event_id']}\nevent: {name}\ndata: {json.dumps(event)}\n\n"
         if last_id:
             yield f": cursor {last_id}\n\n"
+
+    def follower(self, tenant_id: str, run_id: str, *, after_offset: int = 0) -> EventFollower:
+        """A cursor over complete events from ``after_offset``.
+
+        Raises ``InvalidOffset`` unless the offset is 0 or the end of a logged event.
+        """
+
+        path = self._path(tenant_id, run_id)
+        check_offset(path, after_offset)
+        return EventFollower(path, after_offset)
+
+    def offset_after(self, tenant_id: str, run_id: str, event_id: str) -> int | None:
+        """Byte offset just past ``event_id``; ``None`` when this run has no such event."""
+
+        return offset_after_event_id(self._path(tenant_id, run_id), event_id)
+
+    def follow(
+        self,
+        tenant_id: str,
+        run_id: str,
+        *,
+        after_offset: int = 0,
+        max_seconds: float = 30.0,
+        poll_s: float = 0.5,
+        keepalive_s: float = 15.0,
+    ) -> Iterator[str]:
+        """Yield SSE frames from ``after_offset``, then newly appended ones.
+
+        Each frame's ``id:`` is the byte offset just past its event. Ends once the log's
+        last event is terminal (``run.finished`` or ``run.cancelled``) or after
+        ``max_seconds``.
+        """
+
+        yield from iter_follow(
+            self.follower(tenant_id, run_id, after_offset=after_offset),
+            max_seconds=max_seconds,
+            poll_s=poll_s,
+            keepalive_s=keepalive_s,
+        )
