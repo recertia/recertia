@@ -78,13 +78,15 @@ def reported_resolution(stored: str | None) -> str:
 
 
 class EvalStore:
-    """SQLite eval store (REC-066).
+    """SQLite store keyed by snapshot so baselines survive across library versions.
 
-    Opened by the API (covered by api.lock) and by CLI/worker paths.
-    CLI callers are operator-only and take no root lock; a concurrent
-    backup may see a partial evals.db. Documented exception.
+    Root-lock exception (#159): the store takes no root lock. Opens in the API process
+    are covered by the shared ``api.lock``. Writers that take no lock on the backed-up
+    root (the eval CLI commands and jobs run from the CLI) are not refused and do not
+    refuse. That is safe against a backup, which copies a consistent snapshot of the
+    file with the SQLite online backup API, but not against a restore, which overwrites
+    files in place. Do not run eval commands or jobs during a restore.
     """
-    """SQLite store keyed by snapshot so baselines survive across library versions."""
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)

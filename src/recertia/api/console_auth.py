@@ -181,11 +181,11 @@ def pkce_challenge(verifier: str) -> str:
 
 
 class SessionStore:
-    """API-process-only store (REC-066).
+    """Cookie v2 carries a session id. Roles live in sqlite (or an in-memory row).
 
-    Covered by the API shared ``api.lock``.
+    API-process-only store (#159): it takes no root lock and is covered by the API
+    shared ``api.lock``.
     """
-    """Cookie v2 carries a session id. Roles live in sqlite (or an in-memory row)."""
 
     def __init__(self, secret: str | None = None, *, path: Path | None = None) -> None:
         self._hmac_key = resolve_session_secret(secret)
