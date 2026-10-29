@@ -148,6 +148,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   temporary venv and starts the API there. Another builds the sdist offline and checks that
   it carries the same files. The `dev` extra now includes `setuptools`, which those offline
   builds need.
+- **A missing authoring prior raises a named error with no absolute path** — wheels do not
+  include the default authoring prior, and a successful run loads it when it drafts a skill.
+  From a wheel install that was a bare file-not-found error carrying the absolute path it
+  looked in, and `recertia run` printed a traceback. It is now `AuthoringPriorMissing` (code
+  `authoring_prior_missing`), and its message names the missing prior and says to run from a
+  source checkout. A prior path passed in by the caller is named by file name only.
+  `recertia run` and `recertia resume` now print a Recertia error as `code: message` and exit
+  with its code (7 for this one) instead of printing a traceback.
+  **Behaviour change:** a run started through `POST /v1/runs` that ends on a Recertia error
+  now has an `error` event with that error's own code instead of `run_failed`. Event and SSE
+  consumers can now see `authoring_prior_missing`, `busy`, `conflict`,
+  `execution_unavailable`, `forbidden`, `internal_error`, `invalid_config`,
+  `invalid_cursor`, `invalid_input`, `lease_lost`, `ledger_unavailable`, `lock_timeout`,
+  `not_found`, `quota_exceeded`, `rate_limited`, `receipt_error`, `run_id_exists`,
+  `secret_unavailable`, `state_corrupt` and `unauthorized`. Other exceptions still give
+  `run_failed`, and the run's queue record keeps `error_code` `run_failed`.
+- **`recertia run --local-exec` rejects a malformed spec or goal with exit 2 and no
+  traceback** — with `--local-exec`, a `--spec` that is not valid JSON or a `--goal` that
+  fails validation (for example `{}`) printed a traceback with absolute paths and exited 1.
+  It now exits 2 with one `invalid_config: ...` line that names only the file.
 - **Binding a run to a program step checks the step's preview** — since 0.1.0, `POST
   /v1/programs/{program_id}/steps/{step_id}/run` with `bind_run_id` replaced the step's
   `criteria_preview_hash` with the hash of the goal it had just materialized before its two

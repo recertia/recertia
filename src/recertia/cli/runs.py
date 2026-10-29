@@ -10,13 +10,16 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from pydantic import ValidationError
 
 from contracts.budget import Budget
 from contracts.criteria import TaskCriterion
 from contracts.goal import Goal, compile_goal
 from contracts.run import Task
 from recertia.bootstrap import build_default_orchestrator, resolve_task_class
+from recertia.cli.exit import raise_exit
 from recertia.config import load_model_config
+from recertia.errors import ConfigError, RecertiaError
 from recertia.ids import InvalidIdError, validate_run_id
 from recertia.ledger import HashChainLedger, LedgerVerificationError
 from recertia.runtime.errors import LedgerUnavailable
@@ -30,7 +33,18 @@ goal_app = typer.Typer(help="Goal helpers (Variant B).")
 
 
 def _load_spec(spec_path: Path) -> dict:
-    return json.loads(spec_path.read_text())
+    try:
+        return json.loads(spec_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ConfigError(
+            f"spec {spec_path.name} is not valid JSON: line {exc.lineno} column {exc.colno}: {exc.msg}"
+        ) from None
+
+
+def _first_error(exc: ValidationError) -> str:
+    first = exc.errors(include_url=False)[0]
+    where = ".".join(str(part) for part in first["loc"]) or "(root)"
+    return f"{exc.error_count()} error(s); first at {where}: {first['msg']}"
 
 
 def _prepare_execution() -> None:
@@ -117,21 +131,24 @@ def run_cmd(
     scope = execution_backend_override("local") if local_exec else nullcontext()
     with scope:
         _prepare_execution()
-        _execute_run(
-            spec=spec,
-            goal=goal,
-            runs_root=runs_root,
-            run_id=run_id,
-            workdir=workdir,
-            workspace_id=workspace_id,
-            tenant=tenant,
-            skills_root=skills_root,
-            facts_root=facts_root,
-            index=index,
-            ablation=ablation,
-            model=model,
-            verifier=verifier,
-        )
+        try:
+            _execute_run(
+                spec=spec,
+                goal=goal,
+                runs_root=runs_root,
+                run_id=run_id,
+                workdir=workdir,
+                workspace_id=workspace_id,
+                tenant=tenant,
+                skills_root=skills_root,
+                facts_root=facts_root,
+                index=index,
+                ablation=ablation,
+                model=model,
+                verifier=verifier,
+            )
+        except RecertiaError as exc:
+            raise_exit(exc)
 
 
 def _execute_run(
@@ -167,10 +184,14 @@ def _execute_run(
         data = _load_spec(spec)
 
     task_goal: Goal | None = None
-    if goal is not None:
-        task_goal = Goal.model_validate_json(goal.read_text())
-    elif "goal" in data:
-        task_goal = Goal.model_validate(data["goal"])
+    try:
+        if goal is not None:
+            task_goal = Goal.model_validate_json(goal.read_text())
+        elif "goal" in data:
+            task_goal = Goal.model_validate(data["goal"])
+    except ValidationError as exc:
+        source = f"goal {goal.name}" if goal is not None else "the spec's goal"
+        raise ConfigError(f"{source} is not a valid goal: {_first_error(exc)}") from None
 
     task_data = data.get("task", {})
     request = task_data.get("request") or data.get("request")
@@ -287,13 +308,16 @@ def resume_cmd(
     scope = execution_backend_override("local") if local_exec else nullcontext()
     with scope:
         _prepare_execution()
-        _execute_resume(
-            run_id=run_id,
-            runs_root=runs_root,
-            spec=spec,
-            skills_root=skills_root,
-            facts_root=facts_root,
-        )
+        try:
+            _execute_resume(
+                run_id=run_id,
+                runs_root=runs_root,
+                spec=spec,
+                skills_root=skills_root,
+                facts_root=facts_root,
+            )
+        except RecertiaError as exc:
+            raise_exit(exc)
 
 
 def _execute_resume(

@@ -24,6 +24,7 @@ from contracts.run import Task
 from recertia.api.events import RunEventLog
 from recertia.bootstrap import build_default_orchestrator, resolve_task_class
 from recertia.config import ModelConfig
+from recertia.errors import RecertiaError
 from recertia.graph.hooks import RunCancelled
 from recertia.graph.lease import RunBusy
 from recertia.persistence.root_lock import RootBusy
@@ -351,11 +352,12 @@ class AsyncRunWorker:
             self._root_busy(req, exc)
             raise
         except Exception as exc:  # noqa: BLE001
+            code = exc.code if isinstance(exc, RecertiaError) else "run_failed"
             self.events.append(
                 req.tenant_id,
                 req.run_id,
                 "error",
-                {"code": "run_failed", "message": str(exc)[:500], "retryable": False},
+                {"code": code, "message": str(exc)[:500], "retryable": False},
             )
             self.events.append(
                 req.tenant_id,

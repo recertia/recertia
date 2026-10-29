@@ -14,6 +14,7 @@ import csv
 import hashlib
 import importlib.util
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -194,3 +195,186 @@ def test_api_starts_from_an_installed_wheel(installed_python: tuple[Path, Path],
         """,
     )
     assert out.startswith("started "), out
+
+
+def test_default_authoring_prior_from_a_wheel_raises_a_named_error(
+    installed_python: tuple[Path, Path], tmp_path: Path
+) -> None:
+    # Wheels do not ship policy/; a successful run reaches load_authoring_prior via distill.
+    out = _run_in_install(
+        installed_python,
+        tmp_path,
+        """
+        from recertia.distill.prior import load_authoring_prior
+
+        try:
+            load_authoring_prior()
+        except Exception as exc:
+            print(type(exc).__name__, getattr(exc, "code", None), exc, sep="|")
+        else:
+            print("loaded")
+        """,
+    )
+    name, code, message = out.splitlines()[-1].split("|", 2)
+    assert (name, code) == ("AuthoringPriorMissing", "authoring_prior_missing"), out
+    assert "policy/authoring-prior.json" in message and "source checkout" in message, message
+    assert str(installed_python[1].parents[2]) not in message and str(tmp_path) not in message, message
+
+
+def test_cli_run_from_a_wheel_names_the_missing_prior_without_a_traceback(
+    installed_python: tuple[Path, Path], tmp_path: Path
+) -> None:
+    # The installed console script, on the default passing path, which drafts a skill.
+    child, child_site = installed_python
+    assert _run_in_install(installed_python, tmp_path, 'print("from-wheel")') == "from-wheel"
+    script = child.parent / ("recertia.exe" if os.name == "nt" else "recertia")
+    spec = {
+        "goal": {
+            "desired": [{"id": "f", "kind": "file_exists", "path": "output.txt"}],
+            "context": "write output.txt",
+            "task_class": "repo-chore",
+        },
+        "script": ["python3 -c \"open('output.txt','w').write('done')\""],
+    }
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(spec))
+    cmd = [str(script), "run", "--spec", str(spec_path), "--local-exec"]
+    for flag, name in (("--runs-root", "runs"), ("--skills-root", "skills"), ("--facts-root", "facts")):
+        cmd += [flag, str(tmp_path / name)]
+    env = {k: v for k, v in _clean_env().items() if k != "RECERTIA_EXECUTION_BACKEND"}
+    proc = subprocess.run(
+        cmd, cwd=tmp_path, env=env, capture_output=True, text=True, timeout=_STEP_TIMEOUT_S, check=False
+    )
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 7, output
+    assert "Traceback" not in output and 'File "' not in output, output
+    venv_dir = child_site.parents[2] if os.name != "nt" else child_site.parents[1]
+    for absolute in (str(venv_dir), str(child_site), str(tmp_path), "site-packages"):
+        assert absolute not in output, (absolute, output)
+    assert "authoring_prior_missing: " in proc.stderr, output
+    assert "policy/authoring-prior.json" in proc.stderr, output
+
+
+def test_api_run_from_a_wheel_ends_with_the_missing_prior_code(
+    installed_python: tuple[Path, Path], tmp_path: Path
+) -> None:
+    # POST /v1/runs (sync) on the default passing path; the run's error event keeps the code.
+    root = tmp_path / "api-root"
+    out = _run_in_install(
+        installed_python,
+        tmp_path,
+        f"""
+        import json
+        import os
+
+        os.environ["RECERTIA_EXECUTION_BACKEND"] = "local"
+        from fastapi.testclient import TestClient
+        from recertia.api import create_app
+        from recertia.api.events import RunEventLog
+
+        root = pathlib.Path({str(root)!r})
+        app = create_app(root=root)
+        issued = app.state.api_keys.issue(tenant_id="t1", scopes={{"runs", "exec"}}, actor="test-admin")
+        body = {{
+            "run_id": "wheel-sync",
+            "goal": {{
+                "desired": [{{"id": "f", "kind": "file_exists", "path": "output.txt"}}],
+                "context": "write output.txt",
+                "task_class": "repo-chore",
+            }},
+            "script": ["python3 -c \\"open('output.txt','w').write('done')\\""],
+        }}
+        with TestClient(app) as client:
+            resp = client.post("/v1/runs", json=body, headers={{"X-API-Key": issued.secret}})
+        events = RunEventLog(root).list_after("t1", "wheel-sync")
+        errors = [e["payload"] for e in events if e["type"] == "error"]
+        terminal = resp.json().get("terminal")
+        print(json.dumps({{"status": resp.status_code, "terminal": terminal, "errors": errors}}))
+        """,
+    )
+    result = json.loads(out.splitlines()[-1])
+    assert result["terminal"] == "error", result
+    assert [e["code"] for e in result["errors"]] == ["authoring_prior_missing"], result
+    message = result["errors"][0]["message"]
+    assert "policy/authoring-prior.json" in message and "source checkout" in message, result
+    for absolute in (str(installed_python[1].parents[2]), str(tmp_path), "site-packages"):
+        assert absolute not in out, (absolute, out)
+
+
+def _run_installed_cli(
+    installed: tuple[Path, Path], cwd: Path, args: list[str], env_extra: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    child, _ = installed
+    script = child.parent / ("recertia.exe" if os.name == "nt" else "recertia")
+    env = {
+        k: v
+        for k, v in _clean_env().items()
+        if k not in {"RECERTIA_EXECUTION_BACKEND", "RECERTIA_CONTAINER_RUNTIME"}
+    }
+    env.update(env_extra or {})
+    return subprocess.run(
+        [str(script), *args],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=_STEP_TIMEOUT_S,
+        check=False,
+    )
+
+
+def _stub_container_runtime(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    """A ``docker`` on PATH that only records being called, so the container path gets past
+    its runtime check without a real runtime. Bad input must stop before it is ever called."""
+
+    bin_dir = tmp_path / "stub-bin"
+    bin_dir.mkdir()
+    called = tmp_path / "stub-docker-called"
+    if os.name == "nt":
+        (bin_dir / "docker.bat").write_text(f'@echo called>>"{called}"\r\n@exit /b 1\r\n')
+    else:
+        stub = bin_dir / "docker"
+        stub.write_text(f'#!/bin/sh\necho called >> "{called}"\nexit 1\n')
+        stub.chmod(0o755)
+    env = {
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "RECERTIA_EXECUTION_BACKEND": "container",
+        "RECERTIA_CONTAINER_RUNTIME": "docker",
+    }
+    return env, called
+
+
+@pytest.mark.parametrize(
+    ("flag", "content", "named"),
+    [
+        ("--spec", "{not json", "spec bad.json is not valid JSON"),
+        ("--goal", "{}", "goal bad.json is not a valid goal"),
+    ],
+    ids=["malformed-spec", "empty-goal"],
+)
+@pytest.mark.parametrize("backend", ["local-exec", "container-runtime-on-path"])
+def test_cli_run_from_a_wheel_rejects_bad_input_with_invalid_config(
+    installed_python: tuple[Path, Path], tmp_path: Path, flag: str, content: str, named: str, backend: str
+) -> None:
+    # Both arms reach input parsing: --local-exec, or the container backend with a (stub)
+    # runtime on PATH. Each exits 2 with one invalid_config line naming only the file.
+    _, child_site = installed_python
+    bad = tmp_path / "bad.json"
+    bad.write_text(content)
+    args = ["run", flag, str(bad), "--model", "stub", "--runs-root", str(tmp_path / "runs")]
+    called = None
+    if backend == "local-exec":
+        proc = _run_installed_cli(installed_python, tmp_path, [*args, "--local-exec"])
+    else:
+        env_extra, called = _stub_container_runtime(tmp_path)
+        proc = _run_installed_cli(installed_python, tmp_path, args, env_extra)
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 2, output
+    assert proc.stderr.startswith(f"invalid_config: {named}"), output
+    assert len(proc.stderr.strip().splitlines()) == 1, output
+    assert "Traceback" not in output and 'File "' not in output, output
+    venv_dir = child_site.parents[2] if os.name != "nt" else child_site.parents[1]
+    for absolute in (str(venv_dir), str(child_site), str(tmp_path), "site-packages"):
+        assert absolute not in output, (absolute, output)
+    if called is not None:
+        assert not called.exists(), "the container runtime was called before the input was checked"
