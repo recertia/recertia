@@ -360,7 +360,7 @@ class ProgramService:
                     runtime.runs[(tenant, run_id)] = rec.model_copy(
                         update={"criteria_hash": loaded.criteria_hash}
                     )
-        if run_hash is not None and run_hash != step.criteria_preview_hash:
+        if run_hash is not None and run_hash != ph:
             raise Conflict(
                 "bound run criteria_hash does not match step criteria_preview_hash; "
                 "submit the materialized Goal from preview"
@@ -399,7 +399,6 @@ class ProgramService:
                 "run_ids": run_ids,
                 "current_run_id": run_id,
                 "status": new_status,
-                "criteria_preview_hash": ph,
             }
         )
         prog = self._replace_step(prog, updated)

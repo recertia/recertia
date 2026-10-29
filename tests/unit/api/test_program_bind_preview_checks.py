@@ -104,6 +104,7 @@ def test_bind_after_the_goal_was_patched_needs_a_new_preview(tmp_path: Path) -> 
 
     resp = _bind(client, headers, pid, "run-2")
     assert resp.status_code == 400, resp.text
+    assert resp.json()["error"]["code"] == "bad_request"
     assert error_text(resp) == "preview step before bind (missing criteria_preview_hash)"
     assert _stored_step(client, headers, pid)["criteria_preview_hash"] is None
 
@@ -157,3 +158,146 @@ def test_plan_only_still_stores_the_preview_hash(tmp_path: Path) -> None:
     assert _stored_step(client, headers, pid)["criteria_preview_hash"] == plan.json()["criteria_preview_hash"]
     _solved_run_matching_the_current_goal(app, client, headers, pid, "run-4")
     assert _bind(client, headers, pid, "run-4").status_code == 200
+
+
+class _PutCounter:
+    """Counts writes to the program store, so a test can tell "stored nothing" apart from
+    "stored the same program again" (a write still moves ``updated_at``)."""
+
+    def __init__(self, app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        store = app.state.recertia.programs
+        self.calls = 0
+        real_put = store.put
+
+        def put(program: MigrationProgram) -> MigrationProgram:
+            self.calls += 1
+            return real_put(program)
+
+        monkeypatch.setattr(store, "put", put)
+
+
+def _stored(app: Any, pid: str) -> dict[str, Any]:
+    prog = app.state.recertia.programs.get(pid, tenant_id="t1")
+    assert prog is not None
+    return prog.model_dump(mode="json")
+
+
+def _bind_storing_nothing(
+    app: Any,
+    client: TestClient,
+    headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    pid: str,
+    run_id: str,
+) -> Any:
+    before = _stored(app, pid)
+    puts = _PutCounter(app, monkeypatch)
+    resp = _bind(client, headers, pid, run_id)
+    assert puts.calls == 0, resp.text
+    assert _stored(app, pid) == before
+    monkeypatch.undo()
+    return resp
+
+
+def _previewed_program(client: TestClient, headers: dict[str, str]) -> str:
+    pid = _program(client, headers)
+    assert client.post(f"/v1/programs/{pid}/steps/s1/preview", headers=headers).status_code == 200
+    return pid
+
+
+def test_bind_to_an_unknown_run_is_rejected_and_stores_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, app = _client(tmp_path)
+    headers = _issue(app)
+    pid = _previewed_program(client, headers)
+    resp = _bind_storing_nothing(app, client, headers, monkeypatch, pid, "no-such-run")
+    assert resp.status_code == 404, resp.text
+    assert error_text(resp) == "run not found for tenant"
+
+
+def test_bind_to_an_unknown_run_answers_404_before_the_preview_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run lookup comes before the preview checks: with no preview and no such run, the
+    answer is ``404``, not the ``400`` a known run would get."""
+
+    client, app = _client(tmp_path)
+    headers = _issue(app)
+    pid = _program(client, headers)
+    resp = _bind_storing_nothing(app, client, headers, monkeypatch, pid, "no-such-run")
+    assert resp.status_code == 404, resp.text
+    assert error_text(resp) == "run not found for tenant"
+
+
+def test_bind_to_a_program_that_is_not_active_is_rejected_and_stores_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, app = _client(tmp_path)
+    headers = _issue(app)
+    pid = _previewed_program(client, headers)
+    _solved_run_matching_the_current_goal(app, client, headers, pid, "run-5")
+    abandoned = client.post(f"/v1/programs/{pid}/abandon", headers=headers)
+    assert abandoned.status_code == 200, abandoned.text
+    resp = _bind_storing_nothing(app, client, headers, monkeypatch, pid, "run-5")
+    assert resp.status_code == 409, resp.text
+    assert error_text(resp) == "program is not active"
+
+
+def test_bind_before_the_previous_step_succeeded_is_rejected_and_stores_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, app = _client(tmp_path)
+    headers = _issue(app)
+    created = client.post(
+        "/v1/programs", headers=headers, json={"title": "p", "steps": [_step("s0", 0), _step("s1", 1)]}
+    )
+    assert created.status_code == 200, created.text
+    pid = created.json()["program"]["program_id"]
+    accepted = client.post(f"/v1/programs/{pid}/accept", headers=headers, json={"ack_disclaimer": True})
+    assert accepted.status_code == 200, accepted.text
+    assert client.post(f"/v1/programs/{pid}/steps/s1/preview", headers=headers).status_code == 200
+    _solved_run_matching_the_current_goal(app, client, headers, pid, "run-6")
+    resp = _bind_storing_nothing(app, client, headers, monkeypatch, pid, "run-6")
+    assert resp.status_code == 409, resp.text
+    assert error_text(resp) == "previous step s0 not succeeded"
+
+
+def test_bind_to_a_run_with_another_criteria_hash_is_rejected_and_stores_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, app = _client(tmp_path)
+    headers = _issue(app)
+    pid = _previewed_program(client, headers)
+    _solved_run_matching_the_current_goal(app, client, headers, pid, "run-7")
+    rec = app.state.runs[("t1", "run-7")]
+    app.state.runs[("t1", "run-7")] = rec.model_copy(update={"criteria_hash": "0" * 64})
+    resp = _bind_storing_nothing(app, client, headers, monkeypatch, pid, "run-7")
+    assert resp.status_code == 409, resp.text
+    assert error_text(resp).startswith("bound run criteria_hash does not match step criteria_preview_hash")
+
+
+def test_an_idempotent_rebind_stores_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rebinding the step's current run answers ``idempotent`` without a write.
+
+    The branch needs an active program whose step is still runnable (``ready``) while its
+    ``current_run_id`` is already the run, so that state is seeded in the store; the run's
+    criteria hash matches the previewed goal, so every earlier check passes."""
+
+    client, app = _client(tmp_path)
+    headers = _issue(app)
+    pid = _previewed_program(client, headers)
+    _solved_run_matching_the_current_goal(app, client, headers, pid, "run-8")
+    store = app.state.recertia.programs
+    prog = store.get(pid, tenant_id="t1")
+    assert prog is not None and prog.status == "active"
+    steps = [
+        s.model_copy(update={"status": "ready", "current_run_id": "run-8", "run_ids": ["run-8"]})
+        if s.step_id == "s1"
+        else s
+        for s in prog.steps
+    ]
+    store.put(prog.model_copy(update={"steps": steps}))
+    resp = _bind_storing_nothing(app, client, headers, monkeypatch, pid, "run-8")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["idempotent"] is True
