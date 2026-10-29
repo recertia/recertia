@@ -144,9 +144,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written, and the run record stayed `queued`. The worker now writes an `error` event with
   code `run_failed`, `retryable: false` and a message that names only the exception class
   (`cannot open the run's persistence (IsADirectoryError)`), then `run.finished` with
-  `terminal: "error"`, and calls the failure hook, so the run record ends as `error` and its
-  in-flight quota slot is released. The full error, path included, goes to the server log
-  only. A busy refusal (`RootBusy`) is still retryable and requeued.
+  `terminal: "error"`, and calls the failure hook, so the run record ends as `error` instead
+  of staying `queued`. The failure hook runs even if writing those events fails (for example
+  on a full disk). The full error, path included, goes to the server log only. A busy refusal
+  (`RootBusy`) is still retryable and requeued.
 - **`/v1/programs` routes report `root_busy` while the runtime root is busy (#145)** — the
   routes under `/v1/programs` share one error mapper, and it turned a `RootBusy` from the
   program service into `503` with code `unavailable` and `retryable: false`. Binding a run

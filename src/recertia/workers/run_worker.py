@@ -388,23 +388,26 @@ class AsyncRunWorker:
         """
 
         _log.error("run %s/%s: opening run persistence failed", req.tenant_id, req.run_id, exc_info=exc)
-        self.events.append(
-            req.tenant_id,
-            req.run_id,
-            "error",
-            {
-                "code": "run_failed",
-                "message": f"cannot open the run's persistence ({type(exc).__name__})",
-                "retryable": False,
-            },
-        )
-        self.events.append(
-            req.tenant_id,
-            req.run_id,
-            "run.finished",
-            {"terminal": "error", "cost_usd": 0.0, "attempt_no": 0},
-        )
-        self._fail(req, cancelled=False)
+        try:
+            self.events.append(
+                req.tenant_id,
+                req.run_id,
+                "error",
+                {
+                    "code": "run_failed",
+                    "message": f"cannot open the run's persistence ({type(exc).__name__})",
+                    "retryable": False,
+                },
+            )
+            self.events.append(
+                req.tenant_id,
+                req.run_id,
+                "run.finished",
+                {"terminal": "error", "cost_usd": 0.0, "attempt_no": 0},
+            )
+        finally:
+            # The event log may sit on the same full disk; the run record still ends.
+            self._fail(req, cancelled=False)
 
     def _cancel_flag(self, req: AsyncRunRequest) -> bool:
         if req.cancel_check is None:
