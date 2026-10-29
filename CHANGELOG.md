@@ -137,6 +137,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SSE follow ends for a run the queue marks dead (#137)** — a run whose worker process died
+  on its last attempt is marked `dead` (`lease_expired`) and gets no terminal event in its
+  log, so a `follow=1` stream held until `RECERTIA_SSE_MAX_S` and the client reconnected
+  without end. Once a follow has sent the whole log of such a run, it now sends
+  `run.finished` with payload `{"terminal": "error", "error_code": ...}` and ends. The frame
+  has no `id:` (it is not a line of the log), so a reconnect gets it again and ends. The
+  shared SSE response headers are now read-only. `docs/specifications/product-console.md`
+  section 4.3 documents the dead-run end and the `Cache-Control: no-cache` and
+  `X-Accel-Buffering: no` headers, and its ASGI 2.4 note now says that Starlette stops
+  watching for the disconnect and that an idle slot can be held for up to
+  `RECERTIA_SSE_KEEPALIVE_S` + `RECERTIA_SSE_POLL_S`.
+
 - **SSE follow: docs match `error` and disconnect handling; no proxy buffering (#137)** —
   `docs/specifications/product-console.md` section 4.3 now says that an `error` event never
   ends a follow stream by itself (a failed run ends with `run.finished`, `terminal: "error"`),

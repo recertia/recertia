@@ -3,13 +3,19 @@
 A follow waits with ``asyncio.sleep`` and reads the log in short thread-pool calls, so an
 open stream does not pin a worker thread. The concurrency slot is released when the
 response ends for any reason, including a client that disconnects.
+
+A run whose worker died on its last attempt is marked ``dead`` by the queue and never gets
+a ``run.finished`` line in its log. Once a follow has read everything in the log it asks
+``ending`` whether the run ended that way; if so it sends the frame it is given and stops.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
+from types import MappingProxyType
 from typing import Any
 
 from starlette.concurrency import run_in_threadpool
@@ -19,10 +25,31 @@ from starlette.types import Receive, Scope, Send
 from recertia.api.event_follow import KEEPALIVE_FRAME, EventFollower, FollowSettings
 
 #: Sent on every SSE response so that caches and buffering proxies (nginx) pass frames on at once.
-SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+SSE_HEADERS: Mapping[str, str] = MappingProxyType({"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-async def aiter_follow(follower: EventFollower, settings: FollowSettings) -> AsyncIterator[str]:
+def dead_run_frame(tenant_id: str, run_id: str, error_code: str) -> str:
+    """``run.finished`` (``terminal: "error"``) for a run the queue marked dead.
+
+    The event is not a line of the log, so the frame has no ``id:``: a client keeps the offset
+    of the last logged event, and a reconnect from it ends with this frame again.
+    """
+
+    event = {
+        "run_id": run_id,
+        "tenant_id": tenant_id,
+        "type": "run.finished",
+        "payload": {"terminal": "error", "error_code": error_code},
+    }
+    return f"event: run.finished\ndata: {json.dumps(event)}\n\n"
+
+
+async def aiter_follow(
+    follower: EventFollower,
+    settings: FollowSettings,
+    *,
+    ending: Callable[[], str | None] | None = None,
+) -> AsyncIterator[str]:
     deadline = time.monotonic() + settings.max_seconds
     last_sent = time.monotonic()
     while True:
@@ -36,6 +63,11 @@ async def aiter_follow(follower: EventFollower, settings: FollowSettings) -> Asy
             return
         if more:
             continue
+        if ending is not None:
+            final = await run_in_threadpool(ending)
+            if final is not None:
+                yield final
+                return
         if now - last_sent >= settings.keepalive_s:
             yield KEEPALIVE_FRAME
             last_sent = now

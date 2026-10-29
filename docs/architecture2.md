@@ -3535,11 +3535,20 @@ loses nothing and sees nothing twice. A line that is still being written is deli
 is complete. Lines that are not JSON objects, or longer than 1 MiB, are skipped. An idle stream
 sends a `: keep-alive` comment every `RECERTIA_SSE_KEEPALIVE_S` seconds.
 
+**Headers.** Every run-events response, with or without `follow`, carries
+`Cache-Control: no-cache` and `X-Accel-Buffering: no`, so caches and buffering proxies (such
+as nginx) pass each frame on at once.
+
 **Termination.** The stream ends when the last event in the log is `run.finished` or
 `run.cancelled` (decided by the event's `type`, not by its payload), after that event has been
 sent. This works for a run that is not held in memory, such as after a restart. An `error`
 event never ends the stream by itself; a failed run ends with `run.finished`
-(`terminal: "error"`). Otherwise the stream ends after
+(`terminal: "error"`). A run whose worker process died on its last attempt is marked `dead`
+by the queue and has no terminal event in its log. Once the stream has sent the whole log of
+such a run, it sends `run.finished` with payload `{"terminal": "error", "error_code": ...}`
+(the queue's error code, such as `lease_expired`) and ends. That frame has no `id:` because
+it is not a line of the log, so a client that reconnects with its last `Last-Event-ID` gets
+the same frame again and the stream ends. Otherwise the stream ends after
 `RECERTIA_SSE_MAX_S` seconds; the client reconnects with `Last-Event-ID`. If the log shrinks
 below the cursor, the stream ends.
 
@@ -3547,10 +3556,14 @@ below the cursor, the stream ends.
 each server process `RECERTIA_GLOBAL_MAX_SSE` in total. The limits are counted per process, so
 a server with several worker processes allows that many times more. A request over a limit
 gets `429` with `Retry-After`. A slot is released when the stream ends or the client
-disconnects. On an ASGI 2.4 server, which does not report a disconnect while the stream is
-idle, the slot is released once the server notices the client has gone, at the next
-keep-alive at the latest (`RECERTIA_SSE_KEEPALIVE_S`, or `RECERTIA_SSE_MAX_S` if that is
-shorter). An open follow does not hold a worker thread while it waits.
+disconnects. On a server that reports ASGI spec 2.4 or later, Starlette (not the server)
+stops watching for the disconnect message and notices a client has gone only when a send
+fails. An idle stream then releases its slot at the next keep-alive at the latest. The
+keep-alive is sent on the first poll after `RECERTIA_SSE_KEEPALIVE_S` has passed since the
+last send, so the hold can overrun by up to one poll interval: at most
+`RECERTIA_SSE_KEEPALIVE_S` + `RECERTIA_SSE_POLL_S` after the last send, or
+`RECERTIA_SSE_MAX_S` if that is shorter. An open follow does not hold a worker thread while
+it waits.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
