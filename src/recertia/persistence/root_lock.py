@@ -323,6 +323,7 @@ class TenantLock:
         self.root = RootLock(root_lock)
         self.tenant = RootLock(tenant_lock)
         # After a refused ``acquire``: which lock was held, for the caller's RootBusy.
+        # Names the lock, never its path: the text reaches RootBusy and run events.
         self.refused = ""
 
     @property
@@ -345,7 +346,7 @@ class TenantLock:
         try:
             self.root.acquire_shared(timeout_s=timeout_s)
         except RootLockBusy:
-            self.refused = f"root lock is held: {self.root.path}"
+            self.refused = "root lock is held"
             raise
         try:
             remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
@@ -355,7 +356,7 @@ class TenantLock:
                 self.tenant.acquire_shared(timeout_s=remaining)
         except BaseException as exc:
             if isinstance(exc, RootLockBusy):
-                self.refused = f"tenant lock is held: {self.tenant.path}"
+                self.refused = "tenant lock is held"
             self.root.release()
             raise
 
