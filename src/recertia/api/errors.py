@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from fastapi import Request
@@ -62,7 +63,7 @@ def recertia_error_response(exc: Any) -> JSONResponse:
     body = exc.error_body()
     headers = {}
     if exc.retry_after_s is not None:
-        headers["Retry-After"] = str(int(exc.retry_after_s))
+        headers["Retry-After"] = str(math.ceil(exc.retry_after_s))
     return JSONResponse(status_code=exc.http_status, content=body, headers=headers or None)
 
 

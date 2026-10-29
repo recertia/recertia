@@ -97,6 +97,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Retry-After` rounds up to whole seconds (#145)** — `recertia_error_response` truncated
+  `retry_after_s` (`int()`), so a fractional value was sent short: `0.2` gave `Retry-After: 0`
+  and `1.2` gave `1`. It now rounds up (`0.2` gives `1`, `1.2` gives `2`, `2.5` gives `3`).
+  Whole values are unchanged, and no header is sent for a missing `retry_after_s`. This
+  changes the value sent for any `RecertiaError` with a fractional `retry_after_s`.
+
 - **`manual` mode named a command that does not exist (REC-070, #172)** — with leftover
   `checkpoints.db` / `operations.db` still pending, `RECERTIA_RUNTIME_DB_MIGRATE=manual`
   refused to open with "run recertia migrate apply" (message and `details.action`), but
