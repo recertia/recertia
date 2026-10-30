@@ -22,8 +22,8 @@ new value.
 Clock: ``created_at`` and the lease are wall-clock whole seconds (``int(time.time())``),
 so every process on the host reads the same clock. A backward clock step stretches how
 long a row answers ``in_progress``; a forward step can let a retry take over a request
-that is still running. Whole seconds make the effective lease 29 to 31 s for
-:data:`LEASE_SECONDS` = 30.
+that is still running. Whole seconds make the effective lease more than 29 s and at most
+30 s for :data:`LEASE_SECONDS` = 30.
 
 Every write is one ``BEGIN IMMEDIATE`` transaction. The store opens no connection until
 its first write, so building it creates no file and no directory.
