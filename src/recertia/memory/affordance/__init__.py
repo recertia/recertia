@@ -20,7 +20,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -131,7 +131,11 @@ def _reserve_aside(path: Path, names: Iterator[str]) -> Path:
 
 
 def _move_aside(path: Path, names: Iterator[str]) -> Path | None:
-    """Rename ``path`` to a reserved fresh name. ``None`` when ``path`` is already gone."""
+    """Rename ``path`` to a reserved fresh name. ``None`` when ``path`` is already gone.
+
+    On any failure the empty placeholder is removed, so a failed rename never leaves
+    an empty file behind.
+    """
 
     dest = _reserve_aside(path, names)
     try:
@@ -139,6 +143,9 @@ def _move_aside(path: Path, names: Iterator[str]) -> Path | None:
     except FileNotFoundError:
         dest.unlink(missing_ok=True)
         return None
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
     return dest
 
 
@@ -233,9 +240,11 @@ class AffordanceStore:
 
         The marker row and the imported rows commit together under ``BEGIN IMMEDIATE``;
         a second process waits for the lock, sees the marker and imports nothing. A torn
-        file is moved aside as ``.corrupt-<ns>``. The imported file is renamed to
-        ``.imported`` after the commit; a crash before the rename leaves it for the next
-        writer to rename, never to import again.
+        file is moved aside as ``.corrupt-<ns>``; if that rename fails, the transaction
+        rolls back and the next write tries again. The imported file is renamed to
+        ``.imported`` after the commit, best-effort: a crash or a failed rename (for
+        example a sharing violation on Windows) leaves it for the next writer to rename,
+        never to import again, and the current write goes ahead.
         """
 
         imported = False
@@ -261,7 +270,9 @@ class AffordanceStore:
             else:
                 imported = self.path.is_file()
         if imported:
-            _move_aside(self.path, _imported_names(self.path))
+            # Best-effort: the marker is committed; the next writer retries the rename.
+            with suppress(OSError):
+                _move_aside(self.path, _imported_names(self.path))
 
     def _insert_legacy(
         self,
@@ -388,14 +399,24 @@ class AffordanceStore:
         try:
             conn = sqlite3.connect(f"file:{uri}?mode=ro", uri=True, timeout=5.0)
         except sqlite3.Error:
-            return None
+            if not self.runtime_db.exists():
+                return None
+            raise
         conn.isolation_level = None
         try:
             marked = conn.execute(
                 "SELECT 1 FROM schema_migrations WHERE version=?", (IMPORT_MARKER,)
             ).fetchone()
-        except sqlite3.Error:
+        except sqlite3.OperationalError as exc:
+            # Only a database no writer has migrated yet counts as "not imported";
+            # corruption, I/O and lock errors surface instead of reading as empty.
+            if str(exc) != "no such table: schema_migrations":
+                conn.close()
+                raise
             marked = None
+        except BaseException:
+            conn.close()
+            raise
         if marked is None:
             conn.close()
             return None

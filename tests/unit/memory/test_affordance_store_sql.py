@@ -20,6 +20,10 @@ from recertia.memory import affordance as affordance_mod
 from recertia.memory.affordance import IMPORT_MARKER, AffordanceStore, locate_runtime_db
 from recertia.persistence.db import apply_migrations, open_db
 from recertia.solver.tools import ToolResult
+from tests.support.affordance import (
+    check_corrupt_quarantine_never_overwrites,
+    check_imported_rename_never_overwrites,
+)
 
 _RUNTIME = Path(affordance_mod.__file__).resolve().parents[2] / "persistence" / "migrations" / "runtime"
 
@@ -329,33 +333,13 @@ def test_root_not_under_runs_is_the_local_tenant(tmp_path: Path, store_at) -> No
 
 
 def test_corrupt_quarantine_never_overwrites_an_existing_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, store_at
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(affordance_mod.time, "time_ns", lambda: 123)
-    path = tmp_path / "affordances.json"
-    path.write_text("{torn", encoding="utf-8")
-    taken = tmp_path / "affordances.json.corrupt-123"
-    taken.write_text("earlier", encoding="utf-8")
-    store = store_at(path)
-    store.record_tool(ToolResult(tool="t", ok=True))
-    assert taken.read_text(encoding="utf-8") == "earlier"
-    assert (tmp_path / "affordances.json.corrupt-123-1").read_text(encoding="utf-8") == "{torn"
-    assert not path.exists()
-    assert _query(
-        tmp_path / "runtime.db", "SELECT checksum FROM schema_migrations WHERE version=?", IMPORT_MARKER
-    ) == [("corrupt",)]
+    check_corrupt_quarantine_never_overwrites(tmp_path, monkeypatch)
 
 
-def test_imported_rename_never_overwrites_an_existing_file(tmp_path: Path, store_at) -> None:
-    path = tmp_path / "affordances.json"
-    _legacy(path, t={"invocations": 1})
-    taken = tmp_path / "affordances.json.imported"
-    taken.write_text("earlier", encoding="utf-8")
-    store = store_at(path)
-    store.save()
-    assert taken.read_text(encoding="utf-8") == "earlier"
-    assert len(list(tmp_path.glob("affordances.json.imported-*"))) == 1
-    assert not path.exists()
+def test_imported_rename_never_overwrites_an_existing_file(tmp_path: Path) -> None:
+    check_imported_rename_never_overwrites(tmp_path)
 
 
 # -- a failed write changes nothing -------------------------------------------------------
@@ -442,3 +426,131 @@ def test_a_failed_import_marker_rolls_the_import_back(
     store.record_tool(ToolResult(tool="t", ok=True))
     agg = store.tools["t"]
     assert agg.invocations == 6
+
+
+# -- a failed rename leaves nothing behind and loses no record ------------------------------
+
+
+class _RefuseReplace:
+    """Make ``os.replace`` raise a non-``FileNotFoundError`` ``OSError`` while on."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.on = True
+        real = affordance_mod.os.replace
+
+        def replace(src: object, dst: object) -> None:
+            if self.on:
+                raise PermissionError(13, "sharing violation (injected)", str(src))
+            real(src, dst)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(affordance_mod.os, "replace", replace)
+
+
+def test_a_failed_imported_rename_keeps_the_record_and_leaves_no_empty_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, store_at
+) -> None:
+    path = tmp_path / "affordances.json"
+    _legacy(path, t={"invocations": 5})
+    refuse = _RefuseReplace(monkeypatch)
+    store = store_at(path)
+    store.record_tool(ToolResult(tool="t", ok=True))
+    assert list(tmp_path.glob("affordances.json.*")) == []
+    assert path.is_file()
+    agg = store.tool("t")
+    assert agg is not None and agg.invocations == 6
+    refuse.on = False
+    later = store_at(path)
+    later.record_tool(ToolResult(tool="t", ok=True))
+    assert not path.exists()
+    assert (tmp_path / "affordances.json.imported").stat().st_size > 0
+    agg = later.tool("t")
+    assert agg is not None and agg.invocations == 7
+
+
+def test_a_failed_corrupt_rename_rolls_back_and_leaves_no_empty_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, store_at
+) -> None:
+    path = tmp_path / "affordances.json"
+    path.write_text("{torn", encoding="utf-8")
+    refuse = _RefuseReplace(monkeypatch)
+    store = store_at(path)
+    with pytest.raises(PermissionError):
+        store.record_tool(ToolResult(tool="t", ok=True))
+    assert list(tmp_path.glob("affordances.json.*")) == []
+    assert path.read_text(encoding="utf-8") == "{torn"
+    db = tmp_path / "runtime.db"
+    assert _query(db, "SELECT COUNT(*) FROM schema_migrations WHERE version=?", IMPORT_MARKER) == [(0,)]
+    refuse.on = False
+    store.record_tool(ToolResult(tool="t", ok=True))
+    assert [p.read_text(encoding="utf-8") for p in tmp_path.glob("affordances.json.corrupt-*")] == ["{torn"]
+    agg = store.tool("t")
+    assert agg is not None and agg.invocations == 1
+
+
+# -- the read path surfaces database errors ------------------------------------------------
+
+
+def test_a_corrupt_runtime_db_raises_on_read_instead_of_reading_empty(tmp_path: Path, store_at) -> None:
+    path = tmp_path / "affordances.json"
+    _legacy(path, t={"invocations": 3})
+    writer = store_at(path)
+    writer.record_tool(ToolResult(tool="t", ok=True))
+    writer.close()
+    db = tmp_path / "runtime.db"
+    assert not path.exists()
+    with db.open("r+b") as fh:
+        fh.write(b"this is not an sqlite database header" * 4)
+    reader = store_at(path)
+    with pytest.raises(sqlite3.DatabaseError):
+        reader.tool("t")
+
+
+def test_a_runtime_db_no_writer_has_migrated_still_reads_legacy_json(tmp_path: Path, store_at) -> None:
+    path = tmp_path / "affordances.json"
+    _legacy(path, t={"invocations": 4})
+    sqlite3.connect(tmp_path / "runtime.db").close()  # an empty database, no tables yet
+    store = store_at(path)
+    agg = store.tool("t")
+    assert agg is not None and agg.invocations == 4
+
+
+# -- every transaction takes the write lock up front ---------------------------------------
+
+
+def test_the_import_transaction_holds_the_write_lock_from_its_first_statement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, store_at
+) -> None:
+    """``BEGIN IMMEDIATE``: no other writer can start between the marker read and the
+    import write, so concurrent first writes wait on the busy timeout instead of failing
+    with ``SQLITE_BUSY`` on a read-to-write upgrade."""
+
+    db = tmp_path / "runtime.db"
+    probes: list[str] = []
+    real_open = affordance_mod.open_db
+
+    def traced(*args: object, **kwargs: object) -> sqlite3.Connection:
+        conn = real_open(*args, **kwargs)  # type: ignore[arg-type]
+
+        def on_statement(sql: str) -> None:
+            if sql.startswith("SELECT 1 FROM schema_migrations") and IMPORT_MARKER in sql:
+                other = sqlite3.connect(db, timeout=0, isolation_level=None)
+                try:
+                    other.execute("BEGIN IMMEDIATE")
+                    other.execute("ROLLBACK")
+                    probes.append("free")
+                except sqlite3.OperationalError as exc:
+                    probes.append(str(exc))
+                finally:
+                    other.close()
+
+        conn.set_trace_callback(on_statement)
+        return conn
+
+    monkeypatch.setattr(affordance_mod, "open_db", traced)
+    path = tmp_path / "affordances.json"
+    _legacy(path, t={"invocations": 2})
+    store = store_at(path)
+    store.record_tool(ToolResult(tool="t", ok=True))
+    assert probes == ["database is locked"]
+    agg = store.tool("t")
+    assert agg is not None and agg.invocations == 3

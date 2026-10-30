@@ -9,6 +9,7 @@ memory, inflating the failure rates retrieval and failure classification depend 
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,6 +35,16 @@ from recertia.solver.transcript import TranscriptStore
 from recertia.workspace import WorkspaceManager
 
 NOW = datetime(2026, 8, 1, tzinfo=timezone.utc)
+_OPEN_AFFORDANCE_STORES: list[AffordanceStore] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_affordance_stores() -> Iterator[None]:
+    """Close each harness's affordance store at test end, as ``GraphOrchestrator.close()`` does."""
+
+    yield
+    while _OPEN_AFFORDANCE_STORES:
+        _OPEN_AFFORDANCE_STORES.pop().close()
 
 
 def _skill(*commands: str) -> SkillVersion:
@@ -97,6 +108,7 @@ class _Harness:
         self.workspaces = WorkspaceManager(tmp_path / "snaps")
         self.applicator = SkillApplicator(self.tools, self.workspaces)
         self.affordances = AffordanceStore(tmp_path / "affordance.json")
+        _OPEN_AFFORDANCE_STORES.append(self.affordances)
         self.transcripts = TranscriptStore(tmp_path / "transcripts")
         self.ledger = HashChainLedger(tmp_path / "ledger.jsonl")
         self.ops = OperationLedger(tmp_path / "ops.db")

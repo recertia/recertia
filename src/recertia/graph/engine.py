@@ -160,7 +160,11 @@ class GraphOrchestrator:
             raise
 
     def close(self) -> None:
-        self.persistence.close()
+        try:
+            self.persistence.close()
+        finally:
+            if self.affordances is not None:
+                self.affordances.close()
 
     def _build_trajectory(
         self,

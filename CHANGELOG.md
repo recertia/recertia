@@ -70,10 +70,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transaction of SQL increments. The first write imports an existing `affordances.json`
   once and renames it to `affordances.json.imported`; a torn file is renamed to
   `affordances.json.corrupt-<ns>` at that first write instead of when the store opens,
-  and neither rename overwrites an existing file.
+  and neither rename overwrites an existing file. A failed rename leaves no empty file
+  behind; a failed `.imported` rename does not fail the write, and the next store to open
+  for writing retries it. `GraphOrchestrator.close()` now also closes the affordance store.
 - **Reading affordances creates nothing** — `GET /v1/affordances` and the memory query
   read `runtime.db` read-only when it holds imported data, and otherwise read
-  `affordances.json` (or nothing) without creating, migrating or importing.
+  `affordances.json` (or nothing) without creating, migrating or importing. A database
+  error on that read (corruption, I/O, a lock) is raised instead of reading as empty.
 
 ## [0.4.0] - 2026-10-29
 
