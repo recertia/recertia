@@ -357,6 +357,7 @@ One base type. HTTP bodies stay `{"error": {code, message, retryable, run_id?, d
 | 3 | Unauthorized or forbidden | `tenant_inactive` (403), existing 401/403 scope failures |
 | 4 | Quota or rate limit | `quota_exceeded` (429, not retryable), `tenant_limit_exceeded` (429, retryable) |
 | 5 | Conflict | `run_id_exists`, `idempotency_mismatch`, `checkpoint_conflict`, `op_fingerprint_mismatch`, `run_cancelled`, `program_conflict` (all 409) |
+| 5 | Note (2026-10-30) | Superseded by REC-056c (2026-10-30): `precondition_failed` (412), `PreconditionFailed`; test renamed `test_stale_if_match_is_precondition_failed`. It replaces `program_conflict` (409) in the row above for a failed program `If-Match`. |
 | 6 | Busy, caller may retry | `run_busy`, `workspace_busy`, `lease_lost` (409); `root_busy`, `lock_timeout` (503) |
 | 7 | State or availability | `state_corrupt`, `ledger_unavailable`, `maintenance`, `model_unavailable`, `disk_space_low`, `execution_unavailable` (503). `TenantContextMissing` is HTTP 500 `internal_error` and is always logged. |
 

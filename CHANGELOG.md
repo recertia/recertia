@@ -105,6 +105,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now raises `MigrationChecksumError` (`state_corrupt`) instead of being skipped, and a store
   migration file with its own transaction control raises
   `recertia.persistence.db.MigrationError`.
+  New `applied_at` values are ISO-8601 UTC timestamps (the store runner wrote
+  `CURRENT_TIMESTAMP`). The first open of a store db written before this change takes the
+  write lock once for the checksum backfill; if another process holds a write transaction
+  on it, the open waits 5 s and then raises `OperationalError: database is locked`.
 - **Attempts in separate processes no longer lose affordance counts** (#134) — each process
   loaded `affordances.json`, counted in memory and rewrote the whole file, so the last
   writer won. Tool and resource counters now live in the runs root's `runtime.db` (runtime
@@ -119,6 +123,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read `runtime.db` read-only when it holds imported data, and otherwise read
   `affordances.json` (or nothing) without creating, migrating or importing. A database
   error on that read (corruption, I/O, a lock) is raised instead of reading as empty.
+  Reading an existing WAL `runtime.db` can leave `-shm` and `-wal` sidecar files beside it.
+  **Behaviour change:** in a read-only directory with no `-shm` file the read now raises
+  `OperationalError: attempt to write a readonly database` where it used to read as empty.
 
 ## [0.4.0] - 2026-10-29
 

@@ -391,7 +391,13 @@ class AffordanceStore:
     # -- read path ----------------------------------------------------------------
 
     def _open_reader(self) -> sqlite3.Connection | None:
-        """A read-only handle on an imported ``runtime.db``, or ``None``. Never creates or migrates."""
+        """A read-only handle on an imported ``runtime.db``, or ``None``. Never creates or migrates.
+
+        Reading an existing WAL ``runtime.db`` can leave ``-shm`` and ``-wal`` sidecar files
+        beside it. In a read-only directory with no ``-shm`` file the read raises
+        ``sqlite3.OperationalError: attempt to write a readonly database``, where it used to
+        read as empty.
+        """
 
         if not self.runtime_db.is_file():
             return None

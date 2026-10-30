@@ -19,6 +19,12 @@ can neither complete nor delete the taker's row. A takeover only happens
 :data:`LEASE_SECONDS` after the row's ``created_at``, so the taker's lease is always a
 new value.
 
+Clock: ``created_at`` and the lease are wall-clock whole seconds (``int(time.time())``),
+so every process on the host reads the same clock. A backward clock step stretches how
+long a row answers ``in_progress``; a forward step can let a retry take over a request
+that is still running. Whole seconds make the effective lease 29 to 31 s for
+:data:`LEASE_SECONDS` = 30.
+
 Every write is one ``BEGIN IMMEDIATE`` transaction. The store opens no connection until
 its first write, so building it creates no file and no directory.
 """

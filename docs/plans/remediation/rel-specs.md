@@ -289,6 +289,7 @@ class RunIdExists(RunOwnershipError):                 # code run_id_exists;     
 class IdempotencyMismatch(RunOwnershipError):         # code idempotency_mismatch;     409; retryable False; exit 5
 class CheckpointConflict(RunOwnershipError):          # code checkpoint_conflict;      409; retryable False; exit 5
 class ProgramConflict(RecertiaError):                 # code program_conflict;         409; retryable False; exit 5
+# Note (2026-10-30): Superseded by REC-056c (2026-10-30): precondition_failed (412), PreconditionFailed; test renamed test_stale_if_match_is_precondition_failed. ProgramConflict above is replaced for a failed If-Match.
 class OperationFingerprintMismatch(RunOwnershipError):# code op_fingerprint_mismatch; 409; retryable False; exit 5
 class RunCancelled(RecertiaError):                    # code run_cancelled;            409; retryable False; exit 5
 class RunBusy(RunOwnershipError):                     # code run_busy;                 409; retryable True;  exit 6
@@ -329,6 +330,7 @@ CLI exits (section 17):
 | 3 | unauthorized or forbidden | `tenant_inactive`, missing scope |
 | 4 | quota or rate | `quota_exceeded`, `tenant_limit_exceeded` |
 | 5 | conflict | `run_id_exists`, `idempotency_mismatch`, `checkpoint_conflict`, `program_conflict`, `op_fingerprint_mismatch`, `run_cancelled` |
+| 5 | note (2026-10-30) | Superseded by REC-056c (2026-10-30): `precondition_failed` (412), `PreconditionFailed`; test renamed `test_stale_if_match_is_precondition_failed`. It replaces `program_conflict` in the row above for a failed program `If-Match`. |
 | 6 | busy | `run_busy`, `workspace_busy`, `lease_lost`, `root_busy`, `lock_timeout` |
 | 7 | state or availability | `state_corrupt`, `ledger_unavailable`, `maintenance`, `model_unavailable`, `disk_space_low`, `execution_unavailable` |
 
@@ -1231,6 +1233,7 @@ On resume, `op_once` returns the stored dict and does not call `complete`. The m
 | Write lost the fencing compare | `lease_lost` | yes | 409 |
 | Cancel observed at a hop boundary | `run_cancelled` | no | 409 |
 | Program `If-Match` failed (REL-5) | `program_conflict` | no | 409 |
+| Note (2026-10-30), replaces the row above: Superseded by REC-056c (2026-10-30): `precondition_failed` (412), `PreconditionFailed`; test renamed `test_stale_if_match_is_precondition_failed` | `precondition_failed` | no | 412 |
 
 The body is the S4 envelope. `details` includes `holder_owner_id` for busy codes and `seq` for checkpoint conflicts. Today's `HTTPException(409, detail="run_id already exists")` (`api/__init__.py:385`) is replaced by `RunIdExists`.
 
@@ -1917,6 +1920,7 @@ The transaction is a SQLite transaction on single node and a Postgres transactio
 | `tests/unit/jobs/test_quota_reserve.py::test_computer_use_reservation_persists` | `computer_use_tokens_spent` in `job_quota_week` matches charges. |
 | `tests/unit/memory/test_affordance_concurrent.py::test_two_attempts_do_not_lose_increments` | **F19 repro.** 50 concurrent `record_tool` calls. `invocations=50`. |
 | `tests/unit/programs/test_program_version.py::test_stale_if_match_is_program_conflict` | **F20 repro.** `If-Match: 1` after version 2 returns 409 `program_conflict`. |
+| Note (2026-10-30), replaces the row above | Superseded by REC-056c (2026-10-30): `precondition_failed` (412), `PreconditionFailed`; test renamed `test_stale_if_match_is_precondition_failed`. It asserts 412 `precondition_failed`. |
 | `tests/unit/programs/test_program_version.py::test_idempotency_survives_restart` | Same key replays; a different hash returns `idempotency_mismatch`. The dict in `console_deps.py` is gone. |
 
 ### Risks
@@ -3201,11 +3205,13 @@ HTTP mapping is `RecertiaError.http_status`. The CLI uses `exit_code`. `recertia
 | `idempotency_mismatch` | 409 | 5 | no | REL-3, REL-5 |
 | `checkpoint_conflict` | 409 | 5 | no | REL-3 |
 | `program_conflict` | 409 | 5 | no | REL-5 |
+| `precondition_failed` | 412 | 5 | no | REL-5. Note (2026-10-30): Superseded by REC-056c (2026-10-30): `precondition_failed` (412), `PreconditionFailed`; test renamed `test_stale_if_match_is_precondition_failed`. It replaces the `program_conflict` row above. |
 | `op_fingerprint_mismatch` | 409 | 5 | no | REL-3 |
 | `run_cancelled` | 409 | 5 | no | REL-4 |
 | `run_busy` | 409 | 6 | yes | REL-3 |
 | `workspace_busy` | 409 | 6 | yes | REL-3 |
 | `lease_lost` | 409 | 6 | yes | REL-3 |
+| `idempotency_in_progress` | 409 | 6 | yes | REL-5 (REC-056e). Note (2026-10-30): added to match `cli/exit.py`. |
 | `root_busy` | 503 | 6 | yes | REL-9 |
 | `lock_timeout` | 503 | 6 | yes | REL-2 |
 | `quota_exceeded` | 429 | 4 | no | REL-4, REL-5 |
@@ -3257,6 +3263,7 @@ Today's invalid-chain exit is 1 (`cli/runs.py:309`). REL-2 changes it to 2.
 | F18 | `tests/unit/jobs/test_quota_reserve.py::test_crash_after_reserve_does_not_double_spend` |
 | F19 | `tests/unit/memory/test_affordance_concurrent.py::test_two_attempts_do_not_lose_increments` |
 | F20 | `tests/unit/programs/test_program_version.py::test_stale_if_match_is_program_conflict`, `::test_idempotency_survives_restart` |
+| F20 (note, 2026-10-30) | Superseded by REC-056c (2026-10-30): `precondition_failed` (412), `PreconditionFailed`; test renamed `test_stale_if_match_is_precondition_failed`; `::test_idempotency_survives_restart` is unchanged. |
 | F21 | `tests/unit/test_performance_regressions.py::test_list_runs_parses_at_most_limit_states` |
 | F22 | `tests/unit/api/test_sse_follow.py::test_follow_emits_events_appended_after_connect` |
 | F23 | `tests/unit/bootstrap/test_services_cache.py::test_second_request_does_not_spawn_git` |

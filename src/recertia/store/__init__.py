@@ -25,6 +25,9 @@ def apply_sqlite_migrations(db_path: Path) -> list[str]:
     processes that open the same new file at once apply each migration exactly once.
     A ``schema_migrations`` table written by the earlier store runner (``version`` and
     ``applied_at`` only) gains a ``checksum`` column, filled from the current file bytes.
+    The first call on such a db takes the write lock (``BEGIN IMMEDIATE``) once to add and
+    fill the column; if another process holds a write transaction on the file, the call
+    waits up to 5 s and then raises ``sqlite3.OperationalError: database is locked``.
 
     Raises :class:`recertia.persistence.db.MigrationChecksumError` (``state_corrupt``)
     when an applied migration file has changed, and
