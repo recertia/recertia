@@ -143,6 +143,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `state_corrupt` on the `/v1/programs` routes instead of `unavailable`.
 - `open_db` closes the connection it opened when setting the journal mode or a `PRAGMA`
   fails, instead of leaking the handle.
+- **An async run whose database is locked, malformed or read-only when the worker opens it
+  now ends** (follow-up to #256). Before, the `sqlite3.Error` escaped and the run stayed
+  `queued` with no terminal event. The run now ends as #256 ends a non-busy `OSError` from
+  the same open: an `error` event that names no path, `run.finished` with
+  `terminal: "error"`, and the run record set to `error`. Only `sqlite3.Error` is added;
+  other exceptions from that open still escape. When the embedded queue worker marks a run
+  failed because the run worker raised (for example, writing the terminal events failed),
+  it now logs the exception.
 
 ### Corrections
 

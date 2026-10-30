@@ -178,6 +178,11 @@ class EmbeddedQueueWorker:
             self.queue.requeue(claim, delay_s=ROOT_BUSY_RETRY_S, error_code="root_busy")
             return
         except Exception:
+            # The run worker could not end the run itself (for example, writing its
+            # terminal events failed). Keep the cause for the operator.
+            _log.exception(
+                "run %s/%s: the run worker raised; the run is marked failed", claim.tenant_id, claim.run_id
+            )
             self.queue.finish(claim, status="failed", error_code="run_failed")
             return
         if outcome == "cancelled":

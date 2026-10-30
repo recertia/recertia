@@ -7,6 +7,7 @@ refuses an unsafe ``multi_node`` configuration before any run is claimed.
 from __future__ import annotations
 
 import logging
+import sqlite3
 import threading
 import weakref
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -279,9 +280,10 @@ class AsyncRunWorker:
         except RootBusy as exc:
             self._root_busy(req, exc)
             raise
-        except OSError as exc:
-            # A lock or open failure that is not a busy refusal: nothing was opened, so
-            # end the run here instead of leaving it queued with no terminal event.
+        except (OSError, sqlite3.Error) as exc:
+            # A lock or open failure that is not a busy refusal, or a database that is
+            # locked, malformed or read-only: nothing was opened, so end the run here
+            # instead of leaving it queued with no terminal event.
             self._open_failed(req, exc)
             return "failed"
         ws_handle = None
@@ -382,11 +384,12 @@ class AsyncRunWorker:
             {"code": "root_busy", "message": str(exc)[:500], "retryable": True},
         )
 
-    def _open_failed(self, req: AsyncRunRequest, exc: OSError) -> None:
+    def _open_failed(self, req: AsyncRunRequest, exc: OSError | sqlite3.Error) -> None:
         """End a run whose persistence could not be opened.
 
         The ``OSError`` text usually names the lock or database path, so the event
-        carries only the exception class; the full error stays with the operator.
+        carries only the exception class (an ``sqlite3.Error`` is reported the same
+        way); the full error stays with the operator.
         """
 
         _log.error("run %s/%s: opening run persistence failed", req.tenant_id, req.run_id, exc_info=exc)
