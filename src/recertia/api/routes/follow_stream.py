@@ -6,11 +6,12 @@ response ends for any reason, including a client that disconnects.
 
 Some runs end without a ``run.finished`` line in their log: the queue marks them ``dead``
 (the worker died on its last attempt) or ``failed`` (``run_busy``, ``workspace_busy`` or a
-start-up failure). Once a follow has read everything in the log it asks ``ending`` whether
-the run ended that way. If so it reads the log once more, because the worker may have
-appended its own terminal event first: a real terminal event is sent instead of the given
-frame, and otherwise the given frame is sent. Then it stops. The re-read also stops at the
-max duration, without the given frame, so the client reconnects as usual.
+start-up failure other than an ``OSError`` opening the run's persistence, which writes its
+own terminal event). Once a follow has read everything in the log it asks ``ending``
+whether the run ended that way. If so it reads the log once more, because the worker may
+have appended its own terminal event first: a real terminal event is sent instead of the
+given frame, and otherwise the given frame is sent. Then it stops. The re-read also stops at
+the max duration, without the given frame, so the client reconnects as usual.
 """
 
 from __future__ import annotations

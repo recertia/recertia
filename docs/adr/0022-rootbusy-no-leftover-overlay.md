@@ -1,4 +1,4 @@
-# ADR-0022: REL-3 R4 — an open that finds the root lock held is typed `RootBusy`, never a leftover overlay
+# ADR-0022: Typed RootBusy instead of a leftover overlay when the root lock is held
 
 - **Status:** accepted
 - **Date:** 2026-10-22
@@ -6,6 +6,7 @@
 - **Decides:** [#138](https://github.com/recertia/recertia/issues/138) (REC-056h). It re-scopes and unblocks [#139](https://github.com/recertia/recertia/issues/139) (REC-056b2).
 - **Related:** [ADR-0003](0003-criteria-preregistration.md), [ADR-0020](0020-store-receipts.md) (backup/restore unit), [ADR-0021](0021-deployment-model.md) (D2: local execution only in `single_node`, behind the break-glass)
 - **Plan:** REC-056 re-slice of closed [#91](https://github.com/recertia/recertia/pull/91) (rows REC-056h and REC-056b2)
+- **Tracker:** REL-3 R4
 - **Evidence:** Independent verification of the accepted text passed, and an independent spot-check of the amended text passed with no blocking findings.
 - **Reviewed assertion text:** the b2 prototype patch, sha256 `84886788a0a9084c0cd2438ee41f970ec261b506fe62fc921ad86085a8ce695b`, a test-only `git diff` of four files against main `49619a6cf0436c11c5c784f6b97a4e1e1777f2d8`. It lands as the test commit(s) of the #139 PR.
 - **Follow-ups:** [#144](https://github.com/recertia/recertia/issues/144) (REC-058), [#145](https://github.com/recertia/recertia/issues/145) (REC-059), [#146](https://github.com/recertia/recertia/issues/146) (REC-060), [#147](https://github.com/recertia/recertia/issues/147) (REC-061), plus one proposed new item (Follow-ups, item 5)

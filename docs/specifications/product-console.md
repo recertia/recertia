@@ -255,10 +255,12 @@ no `id:` because it is not a line of the log, so a client that reconnects with i
 `Last-Event-ID` gets the same frame again and the stream ends. A log that ends with a real
 terminal event and then a partly written line ends after the real event, with no extra
 frame. The re-read also stops at `RECERTIA_SSE_MAX_S`, without the frame. The queue is read
-only once the stream has caught up with the log, and its answer can go stale: for
-`run_busy` another process may still be writing the log, and a run resumed between the
-queue read and the re-read can have its first new events sent before the frame. In both
-cases the client's last `id:` is a real offset, so a reconnect delivers the new events.
+only once the stream has caught up with the log, and its answer can go stale: a run
+resumed between the queue read and the re-read can have its first new events sent before
+the frame. A resume also appends `run.queued` to the log before it flips the queue row
+from `failed` to `queued`, so a stream that reads the queue between the two can send that
+`run.queued` event and still end on the stale `failed` row. The client's last `id:` is a
+real offset, so a reconnect delivers the new events.
 Otherwise the stream ends after
 `RECERTIA_SSE_MAX_S` seconds; the client reconnects with `Last-Event-ID`. If the log shrinks
 below the cursor, the stream ends.

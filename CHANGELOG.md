@@ -144,6 +144,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `open_db` closes the connection it opened when setting the journal mode or a `PRAGMA`
   fails, instead of leaking the handle.
 
+### Corrections
+
+- 2026-10-30: the 0.4.0 **Corrections** note left the faithfulness half of a REC-058
+  root-lock known limit standing ("the faithfulness command's orchestrator is not closed on
+  every path (#160)"). That half no longer holds either: the faithfulness runner closes its
+  orchestrator and skill index on every path, including a failure after the orchestrator is
+  built and before the run starts (#160, fixed in #213). A test now pins it
+  (`tests/unit/cli/test_faithfulness_runner_close.py`). The 0.4.0 section is kept as
+  written.
+
 ## [0.4.0] - 2026-10-29
 
 Pre-release, like 0.2.0 and 0.3.0. The package version and the API version (`info.version`
