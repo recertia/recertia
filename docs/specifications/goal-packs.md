@@ -48,7 +48,11 @@ See `contracts/program.py`. Summary:
 `program_id`, `tenant_id`, `title`, `intent`, `task_class`, `decomposition`, `status`,
 `steps[]`, `program_bar_desired[]`, `program_bar_constraints[]`, `handoff`,
 `freeze_enforcement` (default `advisory`), `repo_binding`, `budget`, `source`,
-`disclaimer_acked_at`.
+`disclaimer_acked_at`, `version`.
+
+`version` is an integer the store assigns: 1 on the first save, plus 1 on every later
+save. `GET` saves only when the step-status refresh changed something, so reading a
+program does not move its version.
 
 ### `MigrationStep`
 
@@ -125,6 +129,7 @@ materialize. Pack-level remaining budget fails closed on step run (**shipped** G
 | `POST` | `/v1/programs` | Create draft | Shipped |
 | `GET` | `/v1/programs` | List (tenant) | Shipped |
 | `GET` | `/v1/programs/{id}` | Detail + refresh ready | Shipped |
+| `PUT` | `/v1/programs/{id}` | Replace a draft's editable fields; needs `If-Match` | Shipped |
 | `POST` | `/v1/programs/{id}/accept` | draft → active (disclaimer) | Shipped |
 | `POST` | `/v1/programs/{id}/abandon` | Abandon | Shipped |
 | `PATCH` | `/v1/programs/{id}/steps/{step_id}` | Edit while planned/ready/failed | Shipped |
@@ -139,6 +144,22 @@ materialize. Pack-level remaining budget fails closed on step run (**shipped** G
 | `POST` | `…/steps/{step_id}/seed-workdir` | Checkout tip into fresh run workdir | Shipped (GP2) |
 
 Bind body: `{ plan_only, workdir, budget, bind_run_id, idempotency_key }`.
+
+**`PUT` and `If-Match`.** The body has the `POST /v1/programs` fields; status, owner,
+timestamps, `repo_binding` and `budget` stay as stored. Only `draft` programs can be
+replaced (else 409 `conflict`). `If-Match` carries the `version` the client last read, as
+`3` or `"3"`:
+
+| `If-Match` | Result |
+| --- | --- |
+| absent or blank | 428 `precondition_required` |
+| not a version (`*`, a weak tag, a list) | 400 `bad_request` |
+| not the stored version | 409 `program_conflict` (`details.stored_version`) |
+| the stored version | 200; the saved program with `version` + 1 |
+
+The store compares the version and writes in one transaction, so of two writers that read
+the same version exactly one saves. A rejected `PUT` writes nothing. The other program
+routes still save without a version check; they bump `version` too.
 
 ---
 

@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from contracts.goal import Constraint, DesiredState, Goal, compile_goal
 from contracts.program import ExternalHandoff, MigrationProgram, MigrationStep, RepoBinding
 from recertia.app.authz import Resource
@@ -22,6 +24,7 @@ from recertia.programs.materialize import (
     step_is_ready,
 )
 from recertia.programs.stress import stress_program, stress_step
+from recertia.runtime.errors import PreconditionRequired
 
 
 class ProgramService:
@@ -142,11 +145,64 @@ class ProgramService:
         self, principal: Principal, *, tenant: str, runtime: Any, program_id: str
     ) -> dict[str, Any]:
         self._require(principal, "programs.read")
-        prog = self._refresh_step_statuses(self._get_program(runtime, program_id, tenant), runtime)
-        runtime.programs.put(prog)
+        current = self._get_program(runtime, program_id, tenant)
+        prog = self._refresh_step_statuses(current, runtime)
+        # Save only a real change: every save bumps the version, so a read that saved
+        # would make the version a client just read stale.
+        if prog != current:
+            prog = runtime.programs.put(prog)
         return {
             "program": prog.model_dump(mode="json"),
             "warnings": [w.to_dict() for w in stress_program(prog)],
+        }
+
+    def replace(
+        self,
+        principal: Principal,
+        *,
+        tenant: str,
+        runtime: Any,
+        program_id: str,
+        body: Any,
+        if_match: int | None,
+    ) -> dict[str, Any]:
+        """Replace a draft program's editable fields if ``if_match`` is the stored version.
+
+        Server-owned fields (status, owner, timestamps, repo binding, budget) are kept. The
+        version compare happens inside the store's write, not here, so a concurrent save
+        between this read and the write still gets ``ProgramConflict``.
+        """
+
+        self._require(principal, "programs.write")
+        current = self._get_program(runtime, program_id, tenant)
+        if if_match is None:
+            raise PreconditionRequired("If-Match is required to replace an existing program")
+        if current.status != "draft":
+            raise Conflict("only draft programs can be replaced")
+        self._assert_freeze_allowed(body.freeze_enforcement)
+        data = current.model_dump(mode="json")
+        data.update(
+            title=body.title,
+            intent=body.intent,
+            task_class=body.task_class,
+            decomposition=body.decomposition,
+            handoff=body.handoff,
+            freeze_enforcement=body.freeze_enforcement,
+            steps=body.steps,
+            program_bar_desired=body.program_bar_desired,
+            program_bar_constraints=body.program_bar_constraints,
+            source=body.source,
+        )
+        try:
+            prog = MigrationProgram.model_validate(data)
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            where = ".".join(str(part) for part in first["loc"]) or "program"
+            raise ConfigError(f"invalid program: {where}: {first['msg']}") from exc
+        saved = runtime.programs.put(prog, expected_version=if_match)
+        return {
+            "program": saved.model_dump(mode="json"),
+            "warnings": [w.to_dict() for w in stress_program(saved)],
         }
 
     def accept(

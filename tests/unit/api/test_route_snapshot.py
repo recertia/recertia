@@ -44,6 +44,7 @@ SNAPSHOT: list[tuple[str, str]] = [
     ("/v1/programs", "POST"),
     ("/v1/programs/from-pack", "POST"),
     ("/v1/programs/{program_id}", "GET"),
+    ("/v1/programs/{program_id}", "PUT"),
     ("/v1/programs/{program_id}/abandon", "POST"),
     ("/v1/programs/{program_id}/accept", "POST"),
     ("/v1/programs/{program_id}/repo-binding", "POST"),

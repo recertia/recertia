@@ -783,6 +783,13 @@
       ],
       "default": null,
       "title": "Disclaimer Acked At"
+    },
+    "version": {
+      "default": 1,
+      "description": "Store-assigned; starts at 1 and goes up by 1 on every saved change.",
+      "minimum": 1,
+      "title": "Version",
+      "type": "integer"
     }
   },
   "required": [

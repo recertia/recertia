@@ -11,6 +11,8 @@ __all__ = [
     "InvalidCursor",
     "LedgerLockTimeout",
     "LedgerUnavailable",
+    "PreconditionRequired",
+    "ProgramConflict",
     "QuotaExceeded",
     "RunIdExists",
     "StateCorrupt",
@@ -47,6 +49,24 @@ class RunIdExists(RecertiaError):
     http_status = 409
     retryable = False
     exit_code = 5
+
+
+class ProgramConflict(RecertiaError):
+    """A program write named a version that is not the stored one."""
+
+    code = "program_conflict"
+    http_status = 409
+    retryable = False
+    exit_code = 5
+
+
+class PreconditionRequired(RecertiaError):
+    """A replace of an existing program arrived without ``If-Match``."""
+
+    code = "precondition_required"
+    http_status = 428
+    retryable = False
+    exit_code = 2
 
 
 class WorkspaceBusy(Busy):

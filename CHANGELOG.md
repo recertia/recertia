@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Migration programs carry an integer `version`. The store sets it to 1 on the first save
+  and adds 1 on every later save, and it refuses a save that names a version other than the
+  stored one.
+- `PUT /v1/programs/{program_id}` replaces a draft program's editable fields. `If-Match` must
+  carry the version last read; a stale version returns 409 `program_conflict` and nothing is
+  saved. The compare and the write happen together in the store, so two writers that read
+  the same version cannot both save.
+- **Behaviour change:** for API clients, `PUT /v1/programs/{program_id}` on an existing
+  program without `If-Match` returns 428 `precondition_required`.
+
+### Changed
+
+- `GET /v1/programs/{program_id}` saves the program only when refreshing step statuses
+  changed something, so a read no longer moves `updated_at` or `version`.
+
 ## [0.4.0] - 2026-10-29
 
 Pre-release, like 0.2.0 and 0.3.0. The package version and the API version (`info.version`

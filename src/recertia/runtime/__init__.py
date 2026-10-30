@@ -1,6 +1,12 @@
 """Runtime helpers: errors, ownership registry, workspace locks, tenancy."""
 
-from recertia.runtime.errors import LeaseLost, RunIdExists, WorkspaceBusy
+from recertia.runtime.errors import (
+    LeaseLost,
+    PreconditionRequired,
+    ProgramConflict,
+    RunIdExists,
+    WorkspaceBusy,
+)
 from recertia.runtime.hop import OutboxRow, commit_hop
 from recertia.runtime.lease import LeaseToken
 from recertia.runtime.registry import ReserveResult, RunRegistry
@@ -10,6 +16,8 @@ __all__ = [
     "LeaseLost",
     "LeaseToken",
     "OutboxRow",
+    "PreconditionRequired",
+    "ProgramConflict",
     "ReserveResult",
     "RunIdExists",
     "RunRegistry",

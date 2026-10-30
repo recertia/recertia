@@ -94,6 +94,7 @@ _ROUTES = [
     ("create", "post", "/v1/programs", {"title": "p"}),
     ("list", "get", "/v1/programs", None),
     ("get", "get", "/v1/programs/p1", None),
+    ("replace", "put", "/v1/programs/p1", {"title": "p"}),
     ("accept", "post", "/v1/programs/p1/accept", {"ack_disclaimer": True}),
     ("abandon", "post", "/v1/programs/p1/abandon", None),
     ("patch_step", "patch", "/v1/programs/p1/steps/s1", {}),

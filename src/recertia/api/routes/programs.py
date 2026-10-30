@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -18,17 +19,33 @@ from recertia.api.schemas import (
     StepRunBody,
     StepSkipBody,
 )
-from recertia.errors import RecertiaError
+from recertia.errors import ConfigError, RecertiaError
 from recertia.persistence.root_lock import RootBusy
+from recertia.runtime.errors import PreconditionRequired, ProgramConflict
+
+# A program version as a bare or quoted integer: 3 or "3". Weak tags, lists and * are refused.
+_IF_MATCH_RE = re.compile(r'(?:"([0-9]{1,18})"|([0-9]{1,18}))')
 
 
 def _map_program_error(exc: RecertiaError) -> HTTPException:
-    if isinstance(exc, RootBusy):
-        # Re-raise for the app-level RecertiaError handler: root_busy, 503, retryable, the
-        # envelope the runs routes send. A plain HTTPException would say unavailable.
+    if isinstance(exc, (RootBusy, ProgramConflict, PreconditionRequired)):
+        # Re-raise for the app-level RecertiaError handler, which sends the error's own code
+        # (root_busy, program_conflict, precondition_required). A plain HTTPException would
+        # say unavailable, conflict or http_error.
         raise exc
     detail: Any = exc.details.get("http_detail", exc.message) if exc.details else exc.message
     return HTTPException(status_code=exc.http_status, detail=detail)
+
+
+def _parse_if_match(raw: str | None) -> int | None:
+    """``If-Match`` as a program version; ``None`` when the header is absent or blank."""
+
+    if raw is None or not raw.strip():
+        return None
+    m = _IF_MATCH_RE.fullmatch(raw.strip())
+    if m is None:
+        raise ConfigError('If-Match must be a program version, for example "3"')
+    return int(m.group(1) or m.group(2))
 
 
 def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
@@ -95,6 +112,29 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
         try:
             return ctx.program_service.get(
                 principal, tenant=tenant_id, runtime=ctx, program_id=program_id
+            )
+        except RecertiaError as exc:
+            raise _map_program_error(exc) from exc
+    @app.put("/v1/programs/{program_id}")
+    def replace_program(
+        program_id: str,
+        body: ProgramCreate,
+        request: Request,
+        principal=Depends(require_runs),
+        x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
+        if_match: str | None = Header(default=None, alias="If-Match"),
+    ) -> dict[str, Any]:
+        """Replace a draft program. ``If-Match`` must carry the version last read."""
+
+        tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
+        try:
+            return ctx.program_service.replace(
+                principal,
+                tenant=tenant_id,
+                runtime=ctx,
+                program_id=program_id,
+                body=body,
+                if_match=_parse_if_match(if_match),
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
