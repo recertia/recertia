@@ -17,6 +17,7 @@ from tests.support.affordance import (
     check_attempts_do_not_lose_increments,
     check_corrupt_quarantine_never_overwrites,
     check_imported_rename_never_overwrites,
+    check_reader_marker_error_raises,
 )
 
 pytestmark = pytest.mark.windows
@@ -34,3 +35,9 @@ def test_affordance_corrupt_quarantine_never_overwrites_an_existing_file(
 
 def test_affordance_imported_rename_never_overwrites_an_existing_file(tmp_path: Path) -> None:
     check_imported_rename_never_overwrites(tmp_path)
+
+
+def test_affordance_reader_marker_error_raises_instead_of_reading_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    check_reader_marker_error_raises(tmp_path, monkeypatch)

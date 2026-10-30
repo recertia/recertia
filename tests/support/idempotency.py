@@ -286,15 +286,27 @@ def check_concurrent_same_key_different_body(tmp_path: Path) -> None:
 
 def _migrate_worker(path: str, worker: int, barrier: Any, out: Any) -> None:
     try:
-        from recertia.persistence import db
+        from recertia.persistence import idempotency
 
-        directory = Path(db.__file__).resolve().parent / "migrations" / "control"
+        # Migrate the way the server does: IdempotencyStore's first write opens control.db
+        # through _writer(). Record what apply_migrations reports so the parent can check
+        # that each control migration is applied exactly once across processes.
+        real_apply = idempotency.apply_migrations
+        applied: list[str] = []
+
+        def recording_apply(conn: Any, directory: Any) -> list[str]:
+            result = real_apply(conn, directory)
+            applied.extend(result)
+            return result
+
+        idempotency.apply_migrations = recording_apply  # type: ignore[assignment]
+        store = idempotency.IdempotencyStore(path)
         barrier.wait()
-        conn = db.open_db(path)
         try:
-            out.put((worker, "ok", db.apply_migrations(conn, directory)))
+            store._writer()
+            out.put((worker, "ok", applied))
         finally:
-            conn.close()
+            store.close()
     except BaseException as exc:  # pragma: no cover - reported to the parent
         out.put((worker, "crash", f"{type(exc).__name__}: {exc}"))
 

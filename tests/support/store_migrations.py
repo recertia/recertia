@@ -83,6 +83,8 @@ def _race(root: Path, migrations_dir: Path | None) -> list[tuple[int, str, Any]]
             if worker.is_alive():  # never leave a stuck child to hang interpreter exit
                 worker.kill()
                 worker.join(5)
+        out.close()
+        out.join_thread()
 
     errors = sorted(r for r in results if r[1] != "ok")
     assert errors == [], f"concurrent apply_sqlite_migrations failed: {errors}"
@@ -134,6 +136,49 @@ def check_concurrent_existing_store_dbs_apply_an_added_migration_once(
     )
     results = _race(dbs, migrations)
     _assert_each_applied_once(dbs, results, ["999_added"], [*first, "999_added"])
+
+
+def check_apply_closes_its_connection(tmp_path: Path, monkeypatch: Any) -> None:
+    """``apply_sqlite_migrations`` closes the connection it opened, on success and on error."""
+
+    import recertia.store as store
+
+    real_open = store.open_db
+    opened: list[sqlite3.Connection] = []
+
+    def recording_open(path: Any) -> sqlite3.Connection:
+        conn = real_open(path)
+        opened.append(conn)
+        return conn
+
+    def is_closed(conn: sqlite3.Connection) -> bool:
+        try:
+            conn.execute("SELECT 1")
+        except sqlite3.ProgrammingError:
+            return True
+        return False
+
+    monkeypatch.setattr(store, "open_db", recording_open)
+    try:
+        assert store.apply_sqlite_migrations(tmp_path / "ok" / "store.sqlite")
+        assert len(opened) == 1
+        assert is_closed(opened[0]), "connection left open after a successful apply"
+
+        def failing_apply(conn: Any, directory: Any) -> list[str]:
+            raise sqlite3.OperationalError("injected apply failure")
+
+        monkeypatch.setattr(store, "apply_migrations", failing_apply)
+        try:
+            store.apply_sqlite_migrations(tmp_path / "err" / "store.sqlite")
+        except sqlite3.OperationalError as exc:
+            assert str(exc) == "injected apply failure"
+        else:
+            raise AssertionError("apply_sqlite_migrations swallowed the apply error")
+        assert len(opened) == 2
+        assert is_closed(opened[1]), "connection left open after apply_migrations raised"
+    finally:
+        for conn in opened:  # the test's own cleanup if the code under test leaked one
+            conn.close()
 
 
 def _objects(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:

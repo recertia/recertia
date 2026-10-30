@@ -196,6 +196,26 @@ def test_put_of_an_accepted_program_is_conflict(tmp_path: Path) -> None:
     assert (writes.calls, writes.rows) == (0, 0)
 
 
+def test_put_of_an_accepted_program_with_a_stale_if_match_is_precondition_failed(tmp_path: Path) -> None:
+    """A stale If-Match is checked before the status: 412 with the stored version, not 409."""
+
+    client, app = _client(tmp_path)
+    headers = _issue(app)
+    pid = _create(client, headers)["program_id"]
+    accepted = client.post(f"/v1/programs/{pid}/accept", headers=headers, json={"ack_disclaimer": True})
+    assert accepted.status_code == 200, accepted.text
+    current = _read(client, headers, pid)
+    assert current["version"] == 2
+
+    with _count_store_writes(app) as writes:
+        resp = _put(client, headers, pid, {**current, "title": "x"}, "1")
+    assert resp.status_code == 412, resp.text
+    error = resp.json()["error"]
+    assert error["code"] == "precondition_failed"
+    assert error["details"]["stored_version"] == 2
+    assert (writes.calls, writes.rows) == (0, 0)
+
+
 def test_put_of_another_tenants_program_is_not_found(tmp_path: Path) -> None:
     client, app = _client(tmp_path)
     headers = _issue(app)

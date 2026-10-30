@@ -11,6 +11,7 @@ import multiprocessing
 import sqlite3
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -105,7 +106,12 @@ def check_attempts_do_not_lose_increments(tmp_path: Path, monkeypatch: pytest.Mo
     finally:
         conn.close()
     assert not path.exists()
-    assert (tmp_path / "affordances.json.imported").is_file()
+    # Exactly one imported copy, under whichever never-overwrite name the rename chose,
+    # and no 0-byte placeholder left behind.
+    imported = list(tmp_path.glob("affordances.json.imported*"))
+    assert len(imported) == 1, imported
+    left = [p.name for p in tmp_path.glob("affordances.json*") if p.is_file() and p.stat().st_size == 0]
+    assert left == [], left
 
 
 def _legacy(path: Path, invocations: int) -> None:
@@ -152,6 +158,50 @@ def check_corrupt_quarantine_never_overwrites(tmp_path: Path, monkeypatch: pytes
     finally:
         conn.close()
     assert rows == [("corrupt",)]
+
+
+def check_reader_marker_error_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A marker SELECT that fails with anything but "no such table" raises on read.
+
+    The read-only connection's marker query is made to fail with a disk I/O error via
+    monkeypatch, so this runs on every OS; the read must raise, not read as empty.
+    """
+
+    from recertia.memory.affordance import AffordanceStore
+    from recertia.solver.tools import ToolResult
+
+    path = tmp_path / "affordances.json"
+    _legacy(path, invocations=3)
+    writer = AffordanceStore(path)
+    try:
+        writer.record_tool(ToolResult(tool="t", ok=True))
+    finally:
+        writer.close()
+    assert not path.exists()
+
+    class _FailingMarker(sqlite3.Connection):
+        def execute(self, sql: str, parameters: Any = (), /) -> sqlite3.Cursor:
+            if sql.startswith("SELECT 1 FROM schema_migrations"):
+                raise sqlite3.OperationalError("disk I/O error")
+            return super().execute(sql, parameters)
+
+    real_connect = sqlite3.connect
+    failed: list[str] = []
+
+    def connect(database: Any, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        if isinstance(database, str) and database.startswith("file:") and "mode=ro" in database:
+            failed.append(database)
+            return real_connect(database, *args, factory=_FailingMarker, **kwargs)
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    reader = AffordanceStore(path)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+            reader.tool("t")
+    finally:
+        reader.close()
+    assert failed, "the read-only reader connection was not opened"
 
 
 def check_imported_rename_never_overwrites(tmp_path: Path) -> None:

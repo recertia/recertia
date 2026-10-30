@@ -7,6 +7,7 @@ signature caps are applied inside it.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from collections.abc import Callable, Iterator
@@ -373,10 +374,8 @@ class _Deny:
     def arm(self, on: bool = True) -> None:
         self.on = on
         for conn in self.conns:
-            try:
+            with contextlib.suppress(sqlite3.ProgrammingError):  # closed after a failed open
                 conn.set_authorizer(self._authorize)
-            except sqlite3.ProgrammingError:  # closed after a failed open
-                pass
 
 
 @pytest.mark.parametrize(
