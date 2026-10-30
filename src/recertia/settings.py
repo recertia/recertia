@@ -133,6 +133,7 @@ KNOWN_ENV_KEYS = frozenset(
         "RECERTIA_QUOTA_RESERVE_TTL_S",
         "RECERTIA_TENANT_MODEL_KEYS",
         "RECERTIA_TENANT_MODEL_KEYS_FILE",
+        "RECERTIA_AFFORDANCE_SAMPLE_CAP",
     }
 )
 
@@ -205,6 +206,22 @@ def _int(env: Mapping[str, str], key: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise ConfigError(f"{key} must be an integer") from exc
+
+
+# Per-key sample lists and distinct error signatures kept by the affordance store.
+AFFORDANCE_SAMPLE_CAP = 200
+
+
+def affordance_sample_cap(env: Mapping[str, str] | None = None) -> int:
+    """``RECERTIA_AFFORDANCE_SAMPLE_CAP``, checked when an affordance store is built.
+
+    Not part of ``load_settings``, so a bad value fails only the store that reads it.
+    """
+
+    cap = _int(os.environ if env is None else env, "RECERTIA_AFFORDANCE_SAMPLE_CAP", AFFORDANCE_SAMPLE_CAP)
+    if cap < 1:
+        raise ConfigError(f"RECERTIA_AFFORDANCE_SAMPLE_CAP must be at least 1, got {cap}")
+    return cap
 
 
 def _float(env: Mapping[str, str], key: str, default: float) -> float:

@@ -22,7 +22,8 @@ class _FactPlane(Protocol):
 
 
 class _AffordancePlane(Protocol):
-    tools: dict[str, Any]
+    @property
+    def tools(self) -> dict[str, Any]: ...
 
 
 def assemble_bundle(
