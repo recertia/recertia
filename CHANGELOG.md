@@ -32,6 +32,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A step preview saves the program only when the step's criteria preview hash changes, so
   repeating a preview no longer moves `updated_at` or `version`.
 
+### Fixed
+
+- **Two processes opening the same new SQLite file both succeed and apply each migration
+  once** — the migration runner read `schema_migrations`, ran each file with
+  `executescript` (which commits on its own) and then recorded it, so two processes opening
+  a fresh `runtime.db` at the same moment could both apply a migration and one failed with
+  `UNIQUE constraint failed: schema_migrations.version`, `duplicate column name: checksum`
+  or `database is locked`. The runner now takes the write lock with `BEGIN IMMEDIATE`,
+  decides again what to apply, and runs each statement and its `schema_migrations` row in
+  that one transaction. A migration whose statement fails leaves no table and no row behind.
+  An unchanged re-run still writes nothing and no longer waits for another writer. Checksum
+  backfill and the `state_corrupt` error on a changed migration are unchanged; files sorted
+  before the changed one are now kept with their rows. Switching a new file to WAL waits up
+  to the open timeout when another process is switching it at the same time.
+
 ## [0.4.0] - 2026-10-29
 
 Pre-release, like 0.2.0 and 0.3.0. The package version and the API version (`info.version`
