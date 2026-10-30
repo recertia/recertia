@@ -12,6 +12,13 @@ pending row. If the process dies between 2 and 3 the row stays ``pending``; a re
 with the same body takes it over (:attr:`Outcome.TAKEN_OVER`) once it is older than
 :data:`LEASE_SECONDS`. A pending row never answers as a replay.
 
+Fencing: every reservation carries a ``lease``, the ``created_at`` it wrote (on insert or
+on takeover). :meth:`~IdempotencyStore.complete` and :meth:`~IdempotencyStore.release`
+match on it, so a request that was slow rather than dead, and whose row was taken over,
+can neither complete nor delete the taker's row. A takeover only happens
+:data:`LEASE_SECONDS` after the row's ``created_at``, so the taker's lease is always a
+new value.
+
 Every write is one ``BEGIN IMMEDIATE`` transaction. The store opens no connection until
 its first write, so building it creates no file and no directory.
 """
@@ -35,6 +42,7 @@ __all__ = [
     "SWEEP_LIMIT",
     "IdempotencyStore",
     "KeyScope",
+    "Completion",
     "Outcome",
     "Reservation",
 ]
@@ -65,10 +73,18 @@ class Outcome(enum.Enum):
     MISMATCH = "mismatch"  # a live row with a different request hash
 
 
+class Completion(enum.Enum):
+    COMPLETED = "completed"  # this lease's row is complete, or the row already records this run_id
+    SUPERSEDED = "superseded"  # the row was taken over and is still pending under another lease
+    LOST = "lost"  # no row this request can stand behind: gone, other hash, or another run_id
+
+
 @dataclass(frozen=True)
 class Reservation:
     outcome: Outcome
     run_id: str | None = None
+    # created_at of the row this request holds; set for RESERVED and TAKEN_OVER only.
+    lease: int | None = None
 
 
 def _now() -> int:
@@ -125,11 +141,12 @@ class IdempotencyStore:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 yield conn
+                conn.execute("COMMIT")
             except BaseException:
+                # Also covers a failed COMMIT, so the shared writer never stays in a transaction.
                 if conn.in_transaction:
                     conn.rollback()
                 raise
-            conn.execute("COMMIT")
 
     @staticmethod
     def _where(scope: KeyScope) -> tuple[str, tuple[str, str, str, str]]:
@@ -158,7 +175,7 @@ class IdempotencyStore:
                     " VALUES (?, ?, ?, ?, ?, 'pending', NULL, ?, ?)",
                     (*args, request_hash, now, now + self.ttl_seconds),
                 )
-                return Reservation(Outcome.RESERVED)
+                return Reservation(Outcome.RESERVED, lease=now)
             except sqlite3.IntegrityError as exc:
                 if getattr(exc, "sqlite_errorcode", None) != sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY:
                     raise
@@ -178,26 +195,41 @@ class IdempotencyStore:
                 f"UPDATE idempotency_keys SET created_at=?, expires_at=? WHERE {where} AND state='pending'",
                 (now, now + self.ttl_seconds, *args),
             )
-            return Reservation(Outcome.TAKEN_OVER)
+            return Reservation(Outcome.TAKEN_OVER, lease=now)
 
-    def complete(self, scope: KeyScope, request_hash: str, run_id: str) -> bool:
-        """Step 3: mark this request's pending row complete. ``False`` if it is not there."""
+    def complete(self, scope: KeyScope, request_hash: str, run_id: str, *, lease: int) -> Completion:
+        """Step 3: mark the pending row this request holds (``lease``) complete with ``run_id``."""
 
         where, args = self._where(scope)
         with self._txn() as conn:
             cur = conn.execute(
                 f"UPDATE idempotency_keys SET state='complete', run_id=?"
-                f" WHERE {where} AND state='pending' AND request_hash=?",
-                (run_id, *args, request_hash),
+                f" WHERE {where} AND state='pending' AND request_hash=? AND created_at=?",
+                (run_id, *args, request_hash, lease),
             )
-            return cur.rowcount == 1
+            if cur.rowcount == 1:
+                return Completion.COMPLETED
+            row = conn.execute(
+                f"SELECT request_hash, state, run_id FROM idempotency_keys WHERE {where}",
+                args,
+            ).fetchone()
+        if row is None or row[0] != request_hash:
+            return Completion.LOST
+        if row[1] == "complete":
+            # A taker (or this request, before a takeover) already recorded the same bind.
+            return Completion.COMPLETED if row[2] == run_id else Completion.LOST
+        return Completion.SUPERSEDED
 
-    def release(self, scope: KeyScope, request_hash: str) -> None:
-        """After a failed step 2: delete this request's pending row, so it claims nothing."""
+    def release(self, scope: KeyScope, request_hash: str, *, lease: int) -> None:
+        """After a failed step 2: delete the pending row this request holds, so it claims nothing.
+
+        A row taken over by another request has another lease and is left alone.
+        """
 
         where, args = self._where(scope)
         with self._txn() as conn:
             conn.execute(
-                f"DELETE FROM idempotency_keys WHERE {where} AND state='pending' AND request_hash=?",
-                (*args, request_hash),
+                f"DELETE FROM idempotency_keys"
+                f" WHERE {where} AND state='pending' AND request_hash=? AND created_at=?",
+                (*args, request_hash, lease),
             )

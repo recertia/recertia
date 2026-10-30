@@ -26,6 +26,7 @@ from recertia.runtime.errors import (
     IdempotencyMismatch,
     PreconditionFailed,
     PreconditionRequired,
+    StateCorrupt,
 )
 
 _OWN_CODE_ERRORS = (
@@ -34,6 +35,7 @@ _OWN_CODE_ERRORS = (
     PreconditionRequired,
     IdempotencyMismatch,
     IdempotencyInProgress,
+    StateCorrupt,
 )
 
 # A program version as a bare or quoted integer: 3 or "3". Weak tags, lists and * are refused;
@@ -45,9 +47,9 @@ def _map_program_error(exc: RecertiaError) -> HTTPException:
     if isinstance(exc, _OWN_CODE_ERRORS):
         # Re-raise for the app-level RecertiaError handler, which sends the error's own code
         # (root_busy, precondition_failed, precondition_required, idempotency_mismatch,
-        # idempotency_in_progress), its details and Retry-After. A plain HTTPException would
-        # say unavailable for root_busy or conflict for the idempotency errors, and drop
-        # details.stored_version.
+        # idempotency_in_progress, state_corrupt), its details and Retry-After. A plain
+        # HTTPException would say unavailable for root_busy and state_corrupt or conflict for
+        # the idempotency errors, and drop details.stored_version.
         raise exc
     detail: Any = exc.details.get("http_detail", exc.message) if exc.details else exc.message
     return HTTPException(status_code=exc.http_status, detail=detail)

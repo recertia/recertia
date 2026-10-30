@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `control.db` write is one `BEGIN IMMEDIATE` transaction. A failed bind deletes its pending
   row. A pending row older than 30 seconds belongs to a request that died before marking it
   complete, and the next retry with the same body takes it over.
+- A takeover refreshes the row's `created_at` and `expires_at`, and `created_at` is the
+  holder's lease: marking the row complete or deleting it must match the lease, so a request
+  that was slow rather than dead can no longer complete or delete the row a retry took over.
+  If such a request's bind lands after the takeover it gets 409 `idempotency_in_progress`,
+  and its retry gets the replay. Completing a row that already records the same `run_id`
+  succeeds.
 - `RECERTIA_IDEMPOTENCY_TTL_SECONDS` (default 86400, from 60 to 2592000) sets how long a key
   is kept. Zero, a negative number, a non-integer or a value out of range is a configuration
   error when the API starts. An expired key is never honoured.
@@ -46,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `run_id`.
 - **Behaviour change:** `idempotency_key` must be 1 to 255 printable ASCII characters; an
   empty string or any other character returns 422.
+- **Behaviour change:** a `StateCorrupt` error on the `/v1/programs` routes, such as a keyed
+  bind whose key row is gone when the bind completes, now returns 503 with code
+  `state_corrupt` and its details instead of `unavailable`.
 
 ### Changed
 

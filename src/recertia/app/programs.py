@@ -15,7 +15,7 @@ from contracts.goal import Constraint, DesiredState, Goal, compile_goal
 from contracts.program import ExternalHandoff, MigrationProgram, MigrationStep, RepoBinding
 from recertia.app.authz import Resource
 from recertia.errors import ConfigError, Conflict, NotFound, QuotaExceeded
-from recertia.persistence.idempotency import IdempotencyStore, KeyScope, Outcome
+from recertia.persistence.idempotency import Completion, IdempotencyStore, KeyScope, Outcome
 from recertia.ports.identity import Principal
 from recertia.programs.materialize import (
     MaterializeError,
@@ -386,6 +386,8 @@ class ProgramService:
                 "run_id": reservation.run_id,
                 "idempotent": True,
             }
+        lease = reservation.lease
+        assert lease is not None  # RESERVED and TAKEN_OVER always carry the row's lease
         try:
             # Read again under the reservation, so the bind sees any write that landed first.
             prog, step = self._load_step(runtime, program_id, tenant, step_id)
@@ -408,9 +410,16 @@ class ProgramService:
                     step=step,
                 )
         except BaseException:
-            store.release(scope, request_hash)
+            store.release(scope, request_hash, lease=lease)
             raise
-        if not store.complete(scope, request_hash, str(result["run_id"])):
+        completion = store.complete(scope, request_hash, str(result["run_id"]), lease=lease)
+        if completion is Completion.SUPERSEDED:
+            # This request was slow, not dead: a retry took its row over and now owns it.
+            raise IdempotencyInProgress(
+                "a retry with this idempotency_key took over the request and is still in progress",
+                retry_after_s=1,
+            )
+        if completion is not Completion.COMPLETED:
             raise StateCorrupt(
                 "idempotency key row was not pending when its bind completed",
                 details={"program_id": program_id, "step_id": step_id},

@@ -17,7 +17,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from recertia.api.schemas import StepRunBody
-from recertia.app.programs import step_run_request_hash
+from recertia.app.programs import ProgramService, step_run_request_hash
 from recertia.cli.exit import exit_code_for
 from recertia.persistence.idempotency import LEASE_SECONDS, KeyScope, Outcome
 from recertia.runtime.errors import IdempotencyInProgress, IdempotencyMismatch
@@ -200,13 +200,16 @@ def test_the_same_key_for_another_tenant_does_not_collide(api: _Api) -> None:
 
 
 def test_an_expired_key_is_swept_and_no_longer_honoured(api: _Api) -> None:
+    from recertia.persistence.idempotency import Completion
+
     pid, ph = api.program()
     api.seed("run-1", ph)
     store = api.state.idempotency
     scope = KeyScope(TENANT, pid, "s1", "k1")
     # An earlier request used k1 with another body; its row is live, then expires.
-    assert store.reserve(scope, "v1:earlier").outcome is Outcome.RESERVED
-    assert store.complete(scope, "v1:earlier", "run-0")
+    earlier = store.reserve(scope, "v1:earlier")
+    assert earlier.outcome is Outcome.RESERVED and earlier.lease is not None
+    assert store.complete(scope, "v1:earlier", "run-0", lease=earlier.lease) is Completion.COMPLETED
     assert _code(api.bind(pid, _body("run-1"))) == "idempotency_mismatch"
 
     api.now += store.ttl_seconds
@@ -304,6 +307,129 @@ def test_idempotency_errors_are_409_with_their_own_codes_and_exit_codes() -> Non
     assert (mismatch.http_status, mismatch.code, mismatch.retryable) == (409, "idempotency_mismatch", False)
     assert (busy.http_status, busy.code, busy.retryable) == (409, "idempotency_in_progress", True)
     assert (exit_code_for(mismatch), exit_code_for(busy)) == (5, 6)
+
+
+# --- a slow (not dead) request whose row is taken over (review S1) -------------------------
+
+
+def _scope_and_hash(pid: str, body: dict[str, Any]) -> tuple[KeyScope, str]:
+    return KeyScope(TENANT, pid, "s1", body["idempotency_key"]), step_run_request_hash(StepRunBody(**body))
+
+
+def test_a_slow_request_that_fails_after_a_takeover_leaves_the_takers_row(
+    api: _Api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid, ph = api.program()
+    api.seed("run-1", ph)
+    api.seed("run-2", ph)
+    body = _body("run-1")
+    scope, hashed = _scope_and_hash(pid, body)
+    taken: list[Any] = []
+
+    def slow_then_fail(self: Any, **_kwargs: Any) -> Any:
+        api.now += LEASE_SECONDS
+        taken.append(api.state.idempotency.reserve(scope, hashed))  # a retry takes the row over
+        raise RuntimeError("slow bind failed")
+
+    monkeypatch.setattr(ProgramService, "_apply_run_step", slow_then_fail)
+    with pytest.raises(RuntimeError, match="slow bind failed"):
+        api.bind(pid, body)
+    monkeypatch.undo()
+
+    assert taken[0].outcome is Outcome.TAKEN_OVER
+    assert key_rows(api.root) == [(TENANT, pid, "s1", "k1", "pending", None)]
+    other = api.bind(pid, _body("run-2"))
+    assert (other.status_code, _code(other)) == (409, "idempotency_mismatch")
+
+
+def test_a_slow_request_that_lands_after_a_takeover_cannot_complete_the_takers_row(
+    api: _Api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid, ph = api.program()
+    api.seed("run-1", ph)
+    body = _body("run-1")
+    scope, hashed = _scope_and_hash(pid, body)
+    real = ProgramService._apply_run_step
+
+    def slow(self: Any, **kwargs: Any) -> Any:
+        result = real(self, **kwargs)
+        api.now += LEASE_SECONDS
+        assert api.state.idempotency.reserve(scope, hashed).outcome is Outcome.TAKEN_OVER
+        return result
+
+    monkeypatch.setattr(ProgramService, "_apply_run_step", slow)
+    first = api.bind(pid, body)
+    monkeypatch.undo()
+
+    assert first.status_code == 409, first.text
+    assert _code(first) == "idempotency_in_progress"
+    assert first.headers["Retry-After"] == "1"
+    assert key_rows(api.root) == [(TENANT, pid, "s1", "k1", "pending", None)]
+    bound = api.stored(pid)
+    assert bound.steps[0].current_run_id == "run-1"
+
+    api.now += LEASE_SECONDS
+    retry = api.bind(pid, body)
+    assert retry.status_code == 200, retry.text
+    assert (retry.json()["run_id"], retry.json()["idempotent"]) == ("run-1", True)
+    assert key_rows(api.root) == [(TENANT, pid, "s1", "k1", "complete", "run-1")]
+    assert api.stored(pid).version == bound.version
+
+
+def test_a_taker_that_completes_first_does_not_fail_the_slow_request(
+    api: _Api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid, ph = api.program()
+    api.seed("run-1", ph)
+    body = _body("run-1")
+    real = ProgramService._apply_run_step
+    retries: list[Any] = []
+
+    def slow(self: Any, **kwargs: Any) -> Any:
+        result = real(self, **kwargs)
+        api.now += LEASE_SECONDS
+        retries.append(api.bind(pid, body))  # the retry takes over, sees the bind, completes
+        return result
+
+    monkeypatch.setattr(ProgramService, "_apply_run_step", slow)
+    first = api.bind(pid, body)
+    monkeypatch.undo()
+
+    assert first.status_code == 200, first.text
+    assert (retries[0].status_code, retries[0].json()["idempotent"]) == (200, True), retries[0].text
+    assert first.json()["run_id"] == retries[0].json()["run_id"] == "run-1"
+    assert key_rows(api.root) == [(TENANT, pid, "s1", "k1", "complete", "run-1")]
+
+
+# --- a key row lost under a bind (review S2) -----------------------------------------------
+
+
+def test_a_key_row_lost_during_the_bind_is_503_state_corrupt(
+    api: _Api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid, ph = api.program()
+    api.seed("run-1", ph)
+    real = ProgramService._apply_run_step
+
+    def lose_row(self: Any, **kwargs: Any) -> Any:
+        result = real(self, **kwargs)
+        conn = sqlite3.connect(api.root / "api-root" / "control.db")
+        try:
+            conn.execute("DELETE FROM idempotency_keys")
+            conn.commit()
+        finally:
+            conn.close()
+        return result
+
+    monkeypatch.setattr(ProgramService, "_apply_run_step", lose_row)
+    resp = api.bind(pid, _body())
+    monkeypatch.undo()
+
+    assert resp.status_code == 503, resp.text
+    error = resp.json()["error"]
+    assert (error["code"], error["retryable"]) == ("state_corrupt", False)
+    assert error["message"] == "idempotency key row was not pending when its bind completed"
+    assert key_rows(api.root) == []
 
 
 def test_concurrent_same_key_same_body_binds_once(tmp_path: Path) -> None:

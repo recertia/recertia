@@ -9,7 +9,13 @@ from typing import Any
 import pytest
 
 from recertia.persistence import idempotency
-from recertia.persistence.idempotency import LEASE_SECONDS, IdempotencyStore, KeyScope, Outcome
+from recertia.persistence.idempotency import (
+    LEASE_SECONDS,
+    Completion,
+    IdempotencyStore,
+    KeyScope,
+    Outcome,
+)
 from recertia.runtime.errors import ConfigError
 
 SCOPE = KeyScope("t1", "p1", "s1", "k1")
@@ -137,24 +143,25 @@ def test_the_first_write_applies_control_migrations(store: Any, tmp_path: Path) 
 
 
 def test_reserve_then_complete_then_replay(store: Any, tmp_path: Path, clock: _Clock) -> None:
-    assert store.reserve(SCOPE, "v1:a").outcome is Outcome.RESERVED
+    held = store.reserve(SCOPE, "v1:a")
+    assert (held.outcome, held.lease) == (Outcome.RESERVED, clock.now)
     now, exp = clock.now, clock.now + store.ttl_seconds
     assert _rows(tmp_path / "control.db") == [("t1", "p1", "s1", "k1", "v1:a", "pending", None, now, exp)]
-    assert store.complete(SCOPE, "v1:a", "run-1") is True
+    assert store.complete(SCOPE, "v1:a", "run-1", lease=now) is Completion.COMPLETED
     assert _rows(tmp_path / "control.db") == [("t1", "p1", "s1", "k1", "v1:a", "complete", "run-1", now, exp)]
     replay = store.reserve(SCOPE, "v1:a")
     assert (replay.outcome, replay.run_id) == (Outcome.REPLAY, "run-1")
 
 
 def test_a_different_hash_is_a_mismatch_and_changes_nothing(store: Any, tmp_path: Path) -> None:
-    store.reserve(SCOPE, "v1:a")
+    lease = store.reserve(SCOPE, "v1:a").lease
     pending = _rows(tmp_path / "control.db")
     assert store.reserve(SCOPE, "v1:b").outcome is Outcome.MISMATCH
-    store.complete(SCOPE, "v1:a", "run-1")
+    store.complete(SCOPE, "v1:a", "run-1", lease=lease)
     complete = _rows(tmp_path / "control.db")
     assert store.reserve(SCOPE, "v1:b").outcome is Outcome.MISMATCH
-    assert store.complete(SCOPE, "v1:b", "run-2") is False
-    store.release(SCOPE, "v1:b")
+    assert store.complete(SCOPE, "v1:b", "run-2", lease=lease) is Completion.LOST
+    store.release(SCOPE, "v1:b", lease=lease)
     assert pending[0][5] == "pending" and _rows(tmp_path / "control.db") == complete
 
 
@@ -166,22 +173,23 @@ def test_a_pending_row_is_in_progress_inside_its_lease_then_taken_over_once(
     clock.now = start + LEASE_SECONDS - 1
     assert store.reserve(SCOPE, "v1:a").outcome is Outcome.IN_PROGRESS
     clock.now = start + LEASE_SECONDS
-    assert store.reserve(SCOPE, "v1:a").outcome is Outcome.TAKEN_OVER
+    taken = store.reserve(SCOPE, "v1:a")
+    assert (taken.outcome, taken.lease) == (Outcome.TAKEN_OVER, clock.now)
     assert _rows(tmp_path / "control.db")[0][5:8] == ("pending", None, clock.now)
     clock.now += 1
     assert store.reserve(SCOPE, "v1:a").outcome is Outcome.IN_PROGRESS
-    assert store.complete(SCOPE, "v1:a", "run-1") is True
+    assert store.complete(SCOPE, "v1:a", "run-1", lease=taken.lease) is Completion.COMPLETED
 
 
 def test_release_deletes_only_this_requests_pending_row(store: Any, tmp_path: Path) -> None:
     other = KeyScope("t1", "p1", "s1", "k2")
-    store.reserve(SCOPE, "v1:a")
-    store.reserve(other, "v1:a")
-    store.complete(other, "v1:a", "run-1")
-    store.release(SCOPE, "v1:a")
-    store.release(other, "v1:a")  # complete rows are never released
+    lease = store.reserve(SCOPE, "v1:a").lease
+    other_lease = store.reserve(other, "v1:a").lease
+    store.complete(other, "v1:a", "run-1", lease=other_lease)
+    store.release(SCOPE, "v1:a", lease=lease)
+    store.release(other, "v1:a", lease=other_lease)  # complete rows are never released
     assert [row[3:7] for row in _rows(tmp_path / "control.db")] == [("k2", "v1:a", "complete", "run-1")]
-    assert store.complete(SCOPE, "v1:a", "run-1") is False
+    assert store.complete(SCOPE, "v1:a", "run-1", lease=lease) is Completion.LOST
 
 
 @pytest.mark.parametrize(
@@ -204,8 +212,8 @@ def test_scopes_that_join_to_the_same_string_do_not_collide(store: Any, scopes: 
 def test_an_expired_row_is_not_honoured_even_when_the_sweep_skips_it(
     store: Any, clock: _Clock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store.reserve(SCOPE, "v1:a")
-    store.complete(SCOPE, "v1:a", "run-1")
+    lease = store.reserve(SCOPE, "v1:a").lease
+    store.complete(SCOPE, "v1:a", "run-1", lease=lease)
     monkeypatch.setattr(idempotency, "SWEEP_LIMIT", 0)
     clock.now += store.ttl_seconds - 1
     assert store.reserve(SCOPE, "v1:b").outcome is Outcome.MISMATCH
@@ -224,10 +232,10 @@ def test_a_write_sweeps_at_most_500_expired_rows(store: Any, tmp_path: Path, clo
         conn.commit()
     finally:
         conn.close()
-    store.reserve(KeyScope("t1", "p1", "s1", "fresh"), "v1:a")
+    fresh = store.reserve(KeyScope("t1", "p1", "s1", "fresh"), "v1:a")
     left = [row for row in _rows(tmp_path / "control.db") if row[0] == "t9"]
     assert len(left) == 2
-    store.release(KeyScope("t1", "p1", "s1", "fresh"), "v1:a")  # a release does not sweep
+    store.release(KeyScope("t1", "p1", "s1", "fresh"), "v1:a", lease=fresh.lease)  # a release does not sweep
     assert len([row for row in _rows(tmp_path / "control.db") if row[0] == "t9"]) == 2
     store.reserve(KeyScope("t1", "p1", "s1", "next"), "v1:a")
     assert [row for row in _rows(tmp_path / "control.db") if row[0] == "t9"] == []
@@ -260,13 +268,13 @@ def test_a_sqlite_error_in_reserve_propagates_and_writes_nothing(
 def test_a_sqlite_error_in_complete_or_release_propagates(
     store: Any, failing: _FailingConn, tmp_path: Path, call: str
 ) -> None:
-    store.reserve(SCOPE, "v1:a")
+    lease = store.reserve(SCOPE, "v1:a").lease
     failing.prefix = "UPDATE" if call == "complete" else "DELETE"
     with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
         if call == "complete":
-            store.complete(SCOPE, "v1:a", "run-1")
+            store.complete(SCOPE, "v1:a", "run-1", lease=lease)
         else:
-            store.release(SCOPE, "v1:a")
+            store.release(SCOPE, "v1:a", lease=lease)
     assert [row[5] for row in _rows(tmp_path / "control.db") if row[3] == "k1"] == ["pending"]
 
 
@@ -279,11 +287,64 @@ def test_every_write_is_one_begin_immediate_transaction(store: Any) -> None:
     store.reserve(KeyScope("t0", "p0", "s0", "warm"), "v1:warm")
     statements: list[str] = []
     store._conn.set_trace_callback(statements.append)
-    store.reserve(SCOPE, "v1:a")
+    lease = store.reserve(SCOPE, "v1:a").lease
     store.reserve(SCOPE, "v1:b")
-    store.complete(SCOPE, "v1:a", "run-1")
-    store.release(SCOPE, "v1:a")
+    store.complete(SCOPE, "v1:a", "run-1", lease=lease)
+    store.release(SCOPE, "v1:a", lease=lease)
     begins = [s.strip().upper() for s in statements if s.strip().upper().startswith("BEGIN")]
     ends = [s.strip().upper() for s in statements if s.strip().upper() in {"COMMIT", "ROLLBACK"}]
     assert begins == ["BEGIN IMMEDIATE"] * 4
     assert ends == ["COMMIT"] * 4
+
+
+# --- fencing (review S1, N3) and COMMIT failure (N2) --------------------------------------
+
+
+def test_a_stale_holder_can_neither_release_nor_complete_a_taken_over_row(
+    store: Any, tmp_path: Path, clock: _Clock
+) -> None:
+    slow = store.reserve(SCOPE, "v1:a")
+    clock.now += LEASE_SECONDS
+    taker = store.reserve(SCOPE, "v1:a")
+    assert taker.outcome is Outcome.TAKEN_OVER and taker.lease != slow.lease
+    taken = _rows(tmp_path / "control.db")
+
+    store.release(SCOPE, "v1:a", lease=slow.lease)
+    assert _rows(tmp_path / "control.db") == taken
+    assert store.reserve(SCOPE, "v1:b").outcome is Outcome.MISMATCH
+    assert store.complete(SCOPE, "v1:a", "run-1", lease=slow.lease) is Completion.SUPERSEDED
+    assert _rows(tmp_path / "control.db") == taken
+
+    assert store.complete(SCOPE, "v1:a", "run-1", lease=taker.lease) is Completion.COMPLETED
+
+
+def test_completing_a_row_that_already_records_this_run_id_succeeds(store: Any, clock: _Clock) -> None:
+    slow = store.reserve(SCOPE, "v1:a")
+    clock.now += LEASE_SECONDS
+    taker = store.reserve(SCOPE, "v1:a")
+    assert store.complete(SCOPE, "v1:a", "run-1", lease=taker.lease) is Completion.COMPLETED
+
+    assert store.complete(SCOPE, "v1:a", "run-1", lease=slow.lease) is Completion.COMPLETED
+    assert store.complete(SCOPE, "v1:a", "run-2", lease=slow.lease) is Completion.LOST
+    assert store.complete(SCOPE, "v1:b", "run-1", lease=slow.lease) is Completion.LOST
+
+
+def test_complete_matches_the_request_hash(store: Any, tmp_path: Path) -> None:
+    held = store.reserve(SCOPE, "v1:a")
+    before = _rows(tmp_path / "control.db")
+    assert store.complete(SCOPE, "v1:b", "run-1", lease=held.lease) is Completion.LOST
+    assert _rows(tmp_path / "control.db") == before
+    assert store.complete(SCOPE, "v1:a", "run-1", lease=held.lease) is Completion.COMPLETED
+
+
+def test_a_failed_commit_rolls_back_and_the_writer_recovers(
+    store: Any, failing: _FailingConn, tmp_path: Path
+) -> None:
+    before = _rows(tmp_path / "control.db")
+    failing.prefix = "COMMIT"
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+        store.reserve(SCOPE, "v1:a")
+    assert not store._conn.in_transaction
+    assert _rows(tmp_path / "control.db") == before
+    failing.prefix = None
+    assert store.reserve(SCOPE, "v1:a").outcome is Outcome.RESERVED

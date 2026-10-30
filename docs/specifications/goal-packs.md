@@ -161,6 +161,14 @@ write is one `BEGIN IMMEDIATE` transaction. If (2) fails, the pending row is del
 the error is returned. No response is stored: a replay answers from the program as it is
 now.
 
+The row's `created_at` is its holder's lease. A takeover sets a new `created_at` (and
+`expires_at`), and (3) and the delete after a failed (2) only match the lease they were
+given, so a request that was slow rather than dead cannot complete or delete the row a
+retry took over. Such a request gets 409 `idempotency_in_progress` once its bind lands,
+and a retry then gets the replay; if the row already records the same `run_id`, (3)
+succeeds. A row that is gone, or records another `run_id`, when (3) runs is 503
+`state_corrupt`.
+
 | Stored row for the same tenant, program, step and key | Result |
 | --- | --- |
 | none, or expired | the bind runs; 200 with `idempotent: false` (or `true` if the step already has that run) |
