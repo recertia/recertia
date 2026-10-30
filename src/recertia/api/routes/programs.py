@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 
 from recertia.api.deps import RouteState
 from recertia.api.schemas import (
@@ -21,24 +21,35 @@ from recertia.api.schemas import (
 )
 from recertia.errors import ConfigError, RecertiaError
 from recertia.persistence.root_lock import RootBusy
-from recertia.runtime.errors import PreconditionRequired, ProgramConflict
+from recertia.runtime.errors import PreconditionFailed, PreconditionRequired
 
-# A program version as a bare or quoted integer: 3 or "3". Weak tags, lists and * are refused.
+# A program version as a bare or quoted integer: 3 or "3". Weak tags, lists and * are refused;
+# see _parse_if_match for how this departs from RFC 9110 on purpose.
 _IF_MATCH_RE = re.compile(r'(?:"([0-9]{1,18})"|([0-9]{1,18}))')
 
 
 def _map_program_error(exc: RecertiaError) -> HTTPException:
-    if isinstance(exc, (RootBusy, ProgramConflict, PreconditionRequired)):
+    if isinstance(exc, (RootBusy, PreconditionFailed, PreconditionRequired)):
         # Re-raise for the app-level RecertiaError handler, which sends the error's own code
-        # (root_busy, program_conflict, precondition_required). A plain HTTPException would
-        # say unavailable, conflict or http_error.
+        # (root_busy, precondition_failed, precondition_required) and its details. A plain
+        # HTTPException would say unavailable for root_busy and drop details.stored_version.
         raise exc
     detail: Any = exc.details.get("http_detail", exc.message) if exc.details else exc.message
     return HTTPException(status_code=exc.http_status, detail=detail)
 
 
 def _parse_if_match(raw: str | None) -> int | None:
-    """``If-Match`` as a program version; ``None`` when the header is absent or blank."""
+    """``If-Match`` as a program version; ``None`` when the header is absent or blank.
+
+    Deliberately stricter than RFC 9110 section 13.1.1, because the header only guards
+    against lost updates on one program:
+
+    - a bare ``3`` is accepted as well as the entity-tag ``"3"``;
+    - ``*`` is refused (400), since it would match any version and guard nothing;
+    - a list such as ``"1", "2"`` is refused (400); send the one version last read;
+    - a weak tag such as ``W/"1"`` is refused (400) rather than failing strong comparison
+      with 412, since this API never sends weak tags.
+    """
 
     if raw is None or not raw.strip():
         return None
@@ -46,6 +57,12 @@ def _parse_if_match(raw: str | None) -> int | None:
     if m is None:
         raise ConfigError('If-Match must be a program version, for example "3"')
     return int(m.group(1) or m.group(2))
+
+
+def _etag(result: dict[str, Any]) -> str:
+    """The strong entity-tag for a program response: its version, quoted."""
+
+    return f'"{int(result["program"]["version"])}"'
 
 
 def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
@@ -105,21 +122,25 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
     def get_program(
         program_id: str,
         request: Request,
+        response: Response,
         principal=Depends(require_runs),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         try:
-            return ctx.program_service.get(
+            result = ctx.program_service.get(
                 principal, tenant=tenant_id, runtime=ctx, program_id=program_id
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
+        response.headers["ETag"] = _etag(result)
+        return result
     @app.put("/v1/programs/{program_id}")
     def replace_program(
         program_id: str,
         body: ProgramCreate,
         request: Request,
+        response: Response,
         principal=Depends(require_runs),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
         if_match: str | None = Header(default=None, alias="If-Match"),
@@ -128,7 +149,7 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
 
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         try:
-            return ctx.program_service.replace(
+            result = ctx.program_service.replace(
                 principal,
                 tenant=tenant_id,
                 runtime=ctx,
@@ -138,6 +159,8 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
+        response.headers["ETag"] = _etag(result)
+        return result
     @app.post("/v1/programs/{program_id}/accept")
     def accept_program(
         program_id: str,

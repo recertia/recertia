@@ -4101,7 +4101,9 @@ See `contracts/program.py`. Summary:
 
 `version` is an integer the store assigns: 1 on the first save, plus 1 on every later
 save. `GET` saves only when the step-status refresh changed something, so reading a
-program does not move its version.
+program does not move its version; a step preview saves only when its
+`criteria_preview_hash` changes. `GET` and a successful `PUT` on `/v1/programs/{id}`
+send the version as a strong `ETag`, for example `ETag: "3"`.
 
 ### `MigrationStep`
 
@@ -4195,20 +4197,32 @@ materialize. Pack-level remaining budget fails closed on step run (**shipped** G
 Bind body: `{ plan_only, workdir, budget, bind_run_id, idempotency_key }`.
 
 **`PUT` and `If-Match`.** The body has the `POST /v1/programs` fields; status, owner,
-timestamps, `repo_binding` and `budget` stay as stored. Only `draft` programs can be
-replaced (else 409 `conflict`). `If-Match` carries the `version` the client last read, as
-`3` or `"3"`:
+timestamps, `repo_binding` and `budget` stay as stored. `If-Match` carries the `version`
+the client last read (the `ETag` of its last `GET` or `PUT`), as `"3"` or `3`. An unknown
+program is 404 before a missing `If-Match` is checked; a malformed `If-Match` is 400
+regardless. The version is checked before the status, and only `draft` programs can be
+replaced:
 
 | `If-Match` | Result |
 | --- | --- |
 | absent or blank | 428 `precondition_required` |
 | not a version (`*`, a weak tag, a list) | 400 `bad_request` |
-| not the stored version | 409 `program_conflict` (`details.stored_version`) |
-| the stored version | 200; the saved program with `version` + 1 |
+| not the stored version | 412 `precondition_failed` (`details.stored_version`) |
+| the stored version, program not `draft` | 409 `conflict` |
+| the stored version, program `draft` | 200; the saved program with `version` + 1 and its `ETag` |
 
-The store compares the version and writes in one transaction, so of two writers that read
-the same version exactly one saves. A rejected `PUT` writes nothing. The other program
-routes still save without a version check; they bump `version` too.
+The parser is deliberately stricter than RFC 9110 §13.1.1: it accepts a bare `3` as well
+as the entity-tag `"3"`; it refuses `*` (which would match any version) and lists of tags
+with 400; and it answers a weak tag such as `W/"1"` with 400 rather than 412, since the
+API never sends weak tags.
+
+The service checks `If-Match` against the version it read, and the store compares that
+same version and writes in one transaction. So of two `PUT` requests that read the same
+version exactly one saves, and a write that lands between a `PUT`'s read and its save
+makes the `PUT` fail with 412. A rejected `PUT` writes nothing. The other program write
+routes (accept, abandon, step patch, preview, bind, skip, repo binding, record tip, seed
+workdir) still save without a version check; they bump `version` too, so concurrent
+writes through them can still overwrite each other.
 
 ---
 

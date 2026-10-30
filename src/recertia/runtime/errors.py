@@ -11,8 +11,8 @@ __all__ = [
     "InvalidCursor",
     "LedgerLockTimeout",
     "LedgerUnavailable",
+    "PreconditionFailed",
     "PreconditionRequired",
-    "ProgramConflict",
     "QuotaExceeded",
     "RunIdExists",
     "StateCorrupt",
@@ -51,11 +51,11 @@ class RunIdExists(RecertiaError):
     exit_code = 5
 
 
-class ProgramConflict(RecertiaError):
-    """A program write named a version that is not the stored one."""
+class PreconditionFailed(RecertiaError):
+    """A program write named a version that is not the stored one (``If-Match`` failed)."""
 
-    code = "program_conflict"
-    http_status = 409
+    code = "precondition_failed"
+    http_status = 412
     retryable = False
     exit_code = 5
 

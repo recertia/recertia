@@ -2,8 +2,8 @@
 
 from recertia.runtime.errors import (
     LeaseLost,
+    PreconditionFailed,
     PreconditionRequired,
-    ProgramConflict,
     RunIdExists,
     WorkspaceBusy,
 )
@@ -16,8 +16,8 @@ __all__ = [
     "LeaseLost",
     "LeaseToken",
     "OutboxRow",
+    "PreconditionFailed",
     "PreconditionRequired",
-    "ProgramConflict",
     "ReserveResult",
     "RunIdExists",
     "RunRegistry",

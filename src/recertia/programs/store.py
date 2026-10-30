@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from contracts.program import MigrationProgram
 from recertia.persistence.db import open_db
-from recertia.runtime.errors import ProgramConflict
+from recertia.runtime.errors import PreconditionFailed
 
 
 class ProgramStore:
@@ -49,7 +49,7 @@ class ProgramStore:
 
         The store owns ``version``: a new program is saved as 1 and every later save adds 1,
         whatever ``program.version`` says. With ``expected_version`` the save happens only
-        if the stored version still equals it; otherwise ``ProgramConflict`` is raised and
+        if the stored version still equals it; otherwise ``PreconditionFailed`` is raised and
         nothing is written. The read of the stored version, the compare and the write run
         in one ``BEGIN IMMEDIATE`` transaction, so two writers that read the same version
         cannot both save, even through separate connections.
@@ -69,7 +69,7 @@ class ProgramStore:
                 ).fetchone()
                 stored = None if row is None else _stored_version(row["payload"])
                 if expected_version is not None and stored != expected_version:
-                    raise ProgramConflict(
+                    raise PreconditionFailed(
                         f"program version {expected_version} is not the stored version",
                         details={"stored_version": stored},
                     )

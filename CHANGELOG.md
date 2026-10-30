@@ -13,16 +13,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and adds 1 on every later save, and it refuses a save that names a version other than the
   stored one.
 - `PUT /v1/programs/{program_id}` replaces a draft program's editable fields. `If-Match` must
-  carry the version last read; a stale version returns 409 `program_conflict` and nothing is
-  saved. The compare and the write happen together in the store, so two writers that read
-  the same version cannot both save.
+  carry the version last read; a stale version returns 412 `precondition_failed` and nothing
+  is saved. The compare and the write happen together in the store, so two `PUT` requests
+  that read the same version cannot both save.
+- `GET` and `PUT` on `/v1/programs/{program_id}` send the program version as an `ETag`
+  header, for example `ETag: "3"`, to send back as `If-Match`.
+- Only `PUT` checks `If-Match`. The other program write routes, including step preview,
+  save unconditionally (they do bump `version`), so concurrent writes through them can
+  still overwrite each other.
 - **Behaviour change:** for API clients, `PUT /v1/programs/{program_id}` on an existing
   program without `If-Match` returns 428 `precondition_required`.
 
 ### Changed
 
 - `GET /v1/programs/{program_id}` saves the program only when refreshing step statuses
-  changed something, so a read no longer moves `updated_at` or `version`.
+  changed something, so a read no longer moves `updated_at` or `version`. That save is
+  skipped if another write landed since the read.
+- A step preview saves the program only when the step's criteria preview hash changes, so
+  repeating a preview no longer moves `updated_at` or `version`.
 
 ## [0.4.0] - 2026-10-29
 
