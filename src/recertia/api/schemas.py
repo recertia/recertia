@@ -161,7 +161,8 @@ class StepRunBody(BaseModel):
     workspace_id: str | None = None
     budget: dict[str, Any] | None = None
     bind_run_id: str | None = None
-    idempotency_key: str | None = None
+    # 1-255 printable ASCII characters (space to tilde); anything else is a 422.
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=255, pattern=r"^[ -~]+$")
 
 
 class WorkspaceCreate(BaseModel):

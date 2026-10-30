@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from contracts.program import MigrationProgram, MigrationStep
 from recertia.programs.store import ProgramStore
 from recertia.runtime.errors import PreconditionFailed
+from tests.support.idempotency import check_restart_survives
 from tests.unit.test_migration_programs import _client, _issue, _step
 
 
@@ -529,3 +530,16 @@ def test_a_412_http_exception_under_v1_is_precondition_failed() -> None:
     resp = envelope_http_exception(request, StarletteHTTPException(412, "stale version"))
     assert resp.status_code == 412
     assert json.loads(bytes(resp.body))["error"]["code"] == "precondition_failed"
+
+
+# --- Idempotency-Key across a restart (REC-056e, #135) ----------------------------------
+
+
+def test_idempotency_survives_restart(tmp_path: Path) -> None:
+    """A step run recorded under an Idempotency-Key replays its run_id after a restart.
+
+    The second app is built from the same root, so only what was written to disk is left:
+    a key kept in process memory is forgotten and the replay is not answered as idempotent.
+    """
+
+    check_restart_survives(tmp_path)

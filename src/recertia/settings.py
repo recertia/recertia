@@ -224,6 +224,28 @@ def affordance_sample_cap(env: Mapping[str, str] | None = None) -> int:
     return cap
 
 
+# How long a program step-run Idempotency-Key is honoured, in seconds (REC-056e).
+IDEMPOTENCY_TTL_SECONDS = 86400
+IDEMPOTENCY_TTL_MIN_SECONDS = 60
+IDEMPOTENCY_TTL_MAX_SECONDS = 2592000
+
+
+def idempotency_ttl_seconds(env: Mapping[str, str] | None = None) -> int:
+    """``RECERTIA_IDEMPOTENCY_TTL_SECONDS``, checked when an idempotency store is built.
+
+    An integer from 60 (one minute) to 2592000 (30 days); 86400 (24 hours) when unset.
+    Not part of ``load_settings``, so a bad value fails only the store that reads it.
+    """
+
+    key = "RECERTIA_IDEMPOTENCY_TTL_SECONDS"
+    ttl = _int(os.environ if env is None else env, key, IDEMPOTENCY_TTL_SECONDS)
+    if not IDEMPOTENCY_TTL_MIN_SECONDS <= ttl <= IDEMPOTENCY_TTL_MAX_SECONDS:
+        raise ConfigError(
+            f"{key} must be from {IDEMPOTENCY_TTL_MIN_SECONDS} to {IDEMPOTENCY_TTL_MAX_SECONDS}, got {ttl}"
+        )
+    return ttl
+
+
 def _float(env: Mapping[str, str], key: str, default: float) -> float:
     raw = env.get(key, "").strip()
     if not raw:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -13,6 +15,7 @@ from contracts.goal import Constraint, DesiredState, Goal, compile_goal
 from contracts.program import ExternalHandoff, MigrationProgram, MigrationStep, RepoBinding
 from recertia.app.authz import Resource
 from recertia.errors import ConfigError, Conflict, NotFound, QuotaExceeded
+from recertia.persistence.idempotency import IdempotencyStore, KeyScope, Outcome
 from recertia.ports.identity import Principal
 from recertia.programs.materialize import (
     MaterializeError,
@@ -24,7 +27,25 @@ from recertia.programs.materialize import (
     step_is_ready,
 )
 from recertia.programs.stress import stress_program, stress_step
-from recertia.runtime.errors import PreconditionFailed, PreconditionRequired
+from recertia.runtime.errors import (
+    IdempotencyInProgress,
+    IdempotencyMismatch,
+    PreconditionFailed,
+    PreconditionRequired,
+    StateCorrupt,
+)
+
+
+def step_run_request_hash(body: Any) -> str:
+    """``v1:`` + sha256 of the step-run body without its key, as canonical JSON.
+
+    Every field is dumped with its default filled in, so an omitted field and the same
+    field sent with its default value hash alike.
+    """
+
+    fields = body.model_dump(mode="json", exclude={"idempotency_key"})
+    canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "v1:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class ProgramService:
@@ -329,22 +350,90 @@ class ProgramService:
         body: Any,
     ) -> dict[str, Any]:
         self._require(principal, "programs.write")
-        prog = self._refresh_step_statuses(
-            self._get_program(runtime, program_id, tenant), runtime
-        )
-        step = self._find_step(prog, step_id)
+        prog, step = self._load_step(runtime, program_id, tenant, step_id)
+        # The key only guards a bind: plan_only and an unbound call write no step state.
+        if body.idempotency_key is None or body.plan_only or body.bind_run_id is None:
+            return self._apply_run_step(
+                tenant=tenant,
+                runtime=runtime,
+                program_id=program_id,
+                step_id=step_id,
+                body=body,
+                prog=prog,
+                step=step,
+            )
 
-        if body.idempotency_key:
-            idem_key = f"{tenant}:{program_id}:{step_id}:{body.idempotency_key}"
-            prior = runtime._program_idempotency.get(idem_key)
-            if prior and step.current_run_id == prior:
-                return {
+        store: IdempotencyStore = runtime.idempotency
+        scope = KeyScope(tenant, program_id, step_id, body.idempotency_key)
+        request_hash = step_run_request_hash(body)
+        # Write order (REC-056e): 1. a pending row in control.db; 2. the bind in
+        # programs.sqlite; 3. the row marked complete. See persistence/idempotency.py.
+        reservation = store.reserve(scope, request_hash)
+        if reservation.outcome is Outcome.MISMATCH:
+            raise IdempotencyMismatch("idempotency_key was already used with a different request body")
+        if reservation.outcome is Outcome.IN_PROGRESS:
+            raise IdempotencyInProgress(
+                "a request with this idempotency_key is still in progress", retry_after_s=1
+            )
+        if reservation.outcome is Outcome.REPLAY:
+            # Read again: the program read above may predate the bind this key recorded.
+            prog, step = self._load_step(runtime, program_id, tenant, step_id)
+            if step.current_run_id != reservation.run_id:
+                raise Conflict("idempotency key already applied; step has moved on")
+            return {
+                "program": prog.model_dump(mode="json"),
+                "step_id": step_id,
+                "run_id": reservation.run_id,
+                "idempotent": True,
+            }
+        try:
+            # Read again under the reservation, so the bind sees any write that landed first.
+            prog, step = self._load_step(runtime, program_id, tenant, step_id)
+            if reservation.outcome is Outcome.TAKEN_OVER and step.current_run_id == body.bind_run_id:
+                # The request that died held this key and its bind landed: finish its row.
+                result = {
                     "program": prog.model_dump(mode="json"),
                     "step_id": step_id,
-                    "run_id": prior,
+                    "run_id": body.bind_run_id,
                     "idempotent": True,
                 }
+            else:
+                result = self._apply_run_step(
+                    tenant=tenant,
+                    runtime=runtime,
+                    program_id=program_id,
+                    step_id=step_id,
+                    body=body,
+                    prog=prog,
+                    step=step,
+                )
+        except BaseException:
+            store.release(scope, request_hash)
+            raise
+        if not store.complete(scope, request_hash, str(result["run_id"])):
+            raise StateCorrupt(
+                "idempotency key row was not pending when its bind completed",
+                details={"program_id": program_id, "step_id": step_id},
+            )
+        return result
 
+    def _load_step(
+        self, runtime: Any, program_id: str, tenant: str, step_id: str
+    ) -> tuple[MigrationProgram, MigrationStep]:
+        prog = self._refresh_step_statuses(self._get_program(runtime, program_id, tenant), runtime)
+        return prog, self._find_step(prog, step_id)
+
+    def _apply_run_step(
+        self,
+        *,
+        tenant: str,
+        runtime: Any,
+        program_id: str,
+        step_id: str,
+        body: Any,
+        prog: MigrationProgram,
+        step: MigrationStep,
+    ) -> dict[str, Any]:
         try:
             goal = materialize_step_goal(prog, step)
             assert_gp0_execution_prereqs(
@@ -480,10 +569,6 @@ class ProgramService:
             prog = self._refresh_step_statuses(prog, runtime)
 
         saved = runtime.programs.put(prog)
-        if body.idempotency_key:
-            runtime._program_idempotency[
-                f"{tenant}:{program_id}:{step_id}:{body.idempotency_key}"
-            ] = run_id
         return {
             "program": saved.model_dump(mode="json"),
             "step_id": step_id,

@@ -147,6 +147,34 @@ materialize. Pack-level remaining budget fails closed on step run (**shipped** G
 
 Bind body: `{ plan_only, workdir, budget, bind_run_id, idempotency_key }`.
 
+**`idempotency_key` on bind.** The key is kept in `control.db` (table `idempotency_keys`,
+control migration `003_idempotency`), so a retry after a restart, or from another process
+on the same root, gets the first answer back. It applies only to a bind
+(`bind_run_id` set, `plan_only` false); a plan-only or unbound call ignores it. A key is 1
+to 255 printable ASCII characters (`0x20`-`0x7E`); anything else is 422. A key belongs to
+one tenant, program and step, each kept in its own column. The request hash covers the
+whole body except the key, with defaults filled in.
+
+A keyed bind writes in this order: (1) a `pending` row in `control.db`, (2) the bind in
+`programs.sqlite`, (3) the row marked `complete` with the bound `run_id`. Each control.db
+write is one `BEGIN IMMEDIATE` transaction. If (2) fails, the pending row is deleted and
+the error is returned. No response is stored: a replay answers from the program as it is
+now.
+
+| Stored row for the same tenant, program, step and key | Result |
+| --- | --- |
+| none, or expired | the bind runs; 200 with `idempotent: false` (or `true` if the step already has that run) |
+| other request hash | 409 `idempotency_mismatch`; nothing written |
+| same hash, `pending`, younger than 30 s | 409 `idempotency_in_progress`, `retryable: true`, `Retry-After: 1` |
+| same hash, `pending`, 30 s or older | taken over: the request that held it died between (2) and (3); the bind runs again, or the row is completed if the step already has that run |
+| same hash, `complete`, step's `current_run_id` is the stored `run_id` | 200 with `idempotent: true` |
+| same hash, `complete`, the step has moved on | 409 `conflict` (`idempotency key already applied; step has moved on`) |
+
+Rows expire `RECERTIA_IDEMPOTENCY_TTL_SECONDS` after they are written (default 86400; 60
+to 2592000; any other value is a `ConfigError` when the API starts). An expired row is
+never honoured. Expired rows are deleted only by a keyed bind, at most 500 per bind,
+inside its step (1) transaction; nothing sweeps at startup and reads write nothing.
+
 **`PUT` and `If-Match`.** The body has the `POST /v1/programs` fields; status, owner,
 timestamps, `repo_binding` and `budget` stay as stored. `If-Match` carries the `version`
 the client last read (the `ETag` of its last `GET` or `PUT`), as `"3"` or `3`. An unknown

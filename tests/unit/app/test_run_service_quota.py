@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from recertia.app.runs import RunService
 
 API = Path(__file__).resolve().parents[3] / "src" / "recertia" / "api"
+RUN_SERVICE = API.parent / "app" / "runs.py"
 
 
 def test_routes_do_not_call_quota_admit() -> None:
@@ -48,3 +50,28 @@ def test_service_admit_is_the_quota_call() -> None:
     service.release("t1")
     assert seen == ["t1", "complete:t1:1.5", "release:t1"]
     assert service.get("t1", "missing") is None
+
+
+def test_service_does_not_drive_orchestrator() -> None:
+    """RunService admits and records runs; a worker or the CLI drives the orchestrator.
+
+    Checked on the syntax tree, so an aliased receiver or a call split over lines is
+    still caught.
+    """
+
+    tree = ast.parse(RUN_SERVICE.read_text(encoding="utf-8"), filename=str(RUN_SERVICE))
+    drives: list[str] = []
+    imports: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            receiver = ast.unparse(node.func.value).lower()
+            if node.func.attr in {"start", "resume"} and "orchestrat" in receiver:
+                drives.append(f"{ast.unparse(node.func)} (line {node.lineno})")
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            names = [alias.name for alias in node.names]
+            if node.module.startswith("recertia.graph.engine") or any("Orchestrator" in n for n in names):
+                imports.append(f"{node.module}: {names} (line {node.lineno})")
+        elif isinstance(node, ast.Import):
+            imports.extend(a.name for a in node.names if a.name.startswith("recertia.graph.engine"))
+    assert drives == []
+    assert imports == []

@@ -58,8 +58,15 @@ class AppState:
     resolve_task_class: Callable[..., Any]
     settings: Any = None
     principal_resolver: Any = None
-    _program_idempotency: dict[str, str] = field(default_factory=dict)
+    # IdempotencyStore on control.db for program step-run keys (REC-056e). Closed by close().
+    idempotency: Any = None
     _cancel_flags: set[str] = field(default_factory=set)
+
+    def close(self) -> None:
+        """Release what this state owns. Safe to call more than once."""
+
+        if self.idempotency is not None:
+            self.idempotency.close()
 
     @property
     def jobs(self) -> Any:

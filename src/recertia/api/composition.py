@@ -20,6 +20,8 @@ from recertia.app.programs import ProgramService
 from recertia.app.promotion import PromotionService
 from recertia.app.state import AppState
 from recertia.app.workspaces import WorkspaceService
+from recertia.persistence.idempotency import IdempotencyStore
+from recertia.persistence.layout import RuntimeLayout
 from recertia.programs.store import ProgramStore
 from recertia.proposals.store import ProposalStore
 from recertia.workers.embedded import EmbeddedQueueWorker
@@ -57,6 +59,9 @@ def assemble_app_state(
     sessions = SessionStore(path=root / "console_sessions.sqlite")
     queue = open_run_queue(root)
     queue.reconcile_orphans()
+    # Built once here and owned by AppState (closed by AppState.close). It opens control.db
+    # only on its first keyed bind; open_run_queue above has already created the file.
+    idempotency = IdempotencyStore(RuntimeLayout(root).control_db)
 
     def orchestrator_factory() -> Any:
         import recertia.api as api_mod
@@ -133,6 +138,7 @@ def assemble_app_state(
         resolve_task_class=resolve_task_class,
         settings=settings,
         principal_resolver=IdentityResolver(keys=key_store, sessions=sessions, settings=settings),
+        idempotency=idempotency,
     )
     worker = AsyncRunWorker(
         events=state.events,

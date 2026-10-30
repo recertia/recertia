@@ -23,6 +23,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still overwrite each other.
 - **Behaviour change:** for API clients, `PUT /v1/programs/{program_id}` on an existing
   program without `If-Match` returns 428 `precondition_required`.
+- `idempotency_key` on `POST /v1/programs/{program_id}/steps/{step_id}/run` is durable: keys
+  are kept in `control.db` (control migration `003_idempotency`), so a retried bind gets its
+  first `run_id` back after an API restart or from another process on the same root. Before,
+  keys were kept in process memory and lost on restart.
+- Write order for a keyed bind: a `pending` key row in `control.db`, then the bind in
+  `programs.sqlite`, then the row marked `complete` with the bound `run_id`. Each
+  `control.db` write is one `BEGIN IMMEDIATE` transaction. A failed bind deletes its pending
+  row. A pending row older than 30 seconds belongs to a request that died before marking it
+  complete, and the next retry with the same body takes it over.
+- `RECERTIA_IDEMPOTENCY_TTL_SECONDS` (default 86400, from 60 to 2592000) sets how long a key
+  is kept. Zero, a negative number, a non-integer or a value out of range is a configuration
+  error when the API starts. An expired key is never honoured.
+- Expired keys are swept only by a keyed bind, at most 500 rows per bind, inside the
+  transaction that writes the pending row. There is no startup sweep, and reads write
+  nothing.
+- New 409 error codes: `idempotency_mismatch` (the key was used with a different body;
+  nothing is written) and `idempotency_in_progress` (the first request with this key is
+  still running; `retryable: true`, `Retry-After: 1`). CLI exit codes 5 and 6.
+- **Behaviour change:** a replayed key whose step has since moved to another run returns
+  409 `conflict` ("idempotency key already applied; step has moved on") instead of the old
+  `run_id`.
+- **Behaviour change:** `idempotency_key` must be 1 to 255 printable ASCII characters; an
+  empty string or any other character returns 422.
 
 ### Changed
 

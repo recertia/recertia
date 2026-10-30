@@ -21,7 +21,20 @@ from recertia.api.schemas import (
 )
 from recertia.errors import ConfigError, RecertiaError
 from recertia.persistence.root_lock import RootBusy
-from recertia.runtime.errors import PreconditionFailed, PreconditionRequired
+from recertia.runtime.errors import (
+    IdempotencyInProgress,
+    IdempotencyMismatch,
+    PreconditionFailed,
+    PreconditionRequired,
+)
+
+_OWN_CODE_ERRORS = (
+    RootBusy,
+    PreconditionFailed,
+    PreconditionRequired,
+    IdempotencyMismatch,
+    IdempotencyInProgress,
+)
 
 # A program version as a bare or quoted integer: 3 or "3". Weak tags, lists and * are refused;
 # see _parse_if_match for how this departs from RFC 9110 on purpose.
@@ -29,10 +42,12 @@ _IF_MATCH_RE = re.compile(r'(?:"([0-9]{1,18})"|([0-9]{1,18}))')
 
 
 def _map_program_error(exc: RecertiaError) -> HTTPException:
-    if isinstance(exc, (RootBusy, PreconditionFailed, PreconditionRequired)):
+    if isinstance(exc, _OWN_CODE_ERRORS):
         # Re-raise for the app-level RecertiaError handler, which sends the error's own code
-        # (root_busy, precondition_failed, precondition_required) and its details. A plain
-        # HTTPException would say unavailable for root_busy and drop details.stored_version.
+        # (root_busy, precondition_failed, precondition_required, idempotency_mismatch,
+        # idempotency_in_progress), its details and Retry-After. A plain HTTPException would
+        # say unavailable for root_busy or conflict for the idempotency errors, and drop
+        # details.stored_version.
         raise exc
     detail: Any = exc.details.get("http_detail", exc.message) if exc.details else exc.message
     return HTTPException(status_code=exc.http_status, detail=detail)

@@ -14,6 +14,8 @@ import os
 import shutil
 import threading
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -390,12 +392,24 @@ def create_app(
     )
     run_slots = threading.Semaphore(_max_in_flight_runs())
     expose_docs = loaded.env != "prod"
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Shutdown closes what AppState owns, such as the idempotency store's control.db writer.
+        try:
+            yield
+        finally:
+            owned = getattr(app.state, "recertia", None)
+            if owned is not None:
+                owned.close()
+
     app = FastAPI(
         title="Recertia",
         version="0.4.0",
         docs_url="/docs" if expose_docs else None,
         redoc_url="/redoc" if expose_docs else None,
         openapi_url="/openapi.json" if expose_docs else None,
+        lifespan=_lifespan,
     )
 
     @app.middleware("http")

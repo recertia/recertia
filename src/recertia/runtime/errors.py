@@ -8,6 +8,8 @@ __all__ = [
     "Busy",
     "ConfigError",
     "ExecutionUnavailable",
+    "IdempotencyInProgress",
+    "IdempotencyMismatch",
     "InvalidCursor",
     "LedgerLockTimeout",
     "LedgerUnavailable",
@@ -49,6 +51,24 @@ class RunIdExists(RecertiaError):
     http_status = 409
     retryable = False
     exit_code = 5
+
+
+class IdempotencyMismatch(RecertiaError):
+    """An ``idempotency_key`` already used with a different request body. Nothing was written."""
+
+    code = "idempotency_mismatch"
+    http_status = 409
+    retryable = False
+    exit_code = 5
+
+
+class IdempotencyInProgress(RecertiaError):
+    """Another request with the same ``idempotency_key`` and body has not finished yet."""
+
+    code = "idempotency_in_progress"
+    http_status = 409
+    retryable = True
+    exit_code = 6
 
 
 class PreconditionFailed(RecertiaError):
