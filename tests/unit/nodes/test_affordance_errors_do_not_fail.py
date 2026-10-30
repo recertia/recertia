@@ -1,7 +1,8 @@
 """REC-056-nits C3: a SQLite error from the affordance store is logged, not raised.
 
 Affordances are advisory history. ``record_new_affordances`` (run at the end of every
-attempt) and ``classify_failure``'s tool lookup catch ``sqlite3.Error`` only.
+attempt) and ``classify_failure``'s tool lookup catch ``sqlite3.Error`` only; any other
+error propagates (REC-056-nits-fu N1 pins the classify side).
 """
 
 from __future__ import annotations
@@ -112,3 +113,14 @@ def test_locked_affordance_lookup_does_not_fail_classify_failure(
     assert outcome.state.failure is not None
     assert outcome.state.failure.failure_class == "tool"
     assert "database is locked" in caplog.text
+
+
+class _BrokenAffordances:
+    @property
+    def tools(self) -> dict[str, Any]:
+        raise RuntimeError("not a database error")
+
+
+def test_classify_failure_does_not_swallow_other_errors(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="^not a database error$"):
+        classify_failure(_failed_state("tool=net: connection reset"), _ctx(tmp_path, _BrokenAffordances()))

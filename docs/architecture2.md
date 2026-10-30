@@ -4105,6 +4105,12 @@ program does not move its version; a step preview saves only when its
 `criteria_preview_hash` changes. `GET` and a successful `PUT` on `/v1/programs/{id}`
 send the version as a strong `ETag`, for example `ETag: "3"`.
 
+Note (2026-10-30): every other program route whose 2xx response has a top-level `program`
+also sends that program's version as `ETag`: create, `from-pack`, `accept`, `abandon`,
+step `PATCH`, `skip`, `record-tip`, `repo-binding`, and a step `run` that binds or
+replays. A plan-only `run`, the step preview and error responses send none. Only `PUT`
+checks `If-Match`.
+
 ### `MigrationStep`
 
 `step_id`, `ordinal` (unique, linear), `title`, `role`
@@ -4217,6 +4223,11 @@ retry took over. Such a request gets 409 `idempotency_in_progress` once its bind
 and a retry then gets the replay; if the row already records the same `run_id`, (3)
 succeeds. A row that is gone, or records another `run_id`, when (3) runs is 503
 `state_corrupt`.
+
+Note (2026-10-30): a keyed bind also gets 503, binding nothing, when the runtime has no
+idempotency store open (`unavailable`), when its reservation carries no lease
+(`state_corrupt`), or when opening the store finds a changed control migration
+(`state_corrupt`).
 
 | Stored row for the same tenant, program, step and key | Result |
 | --- | --- |
