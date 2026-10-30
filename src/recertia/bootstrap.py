@@ -7,6 +7,7 @@ library apply paths — not a bare checkpoint engine.
 from __future__ import annotations
 
 import subprocess
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -155,103 +156,110 @@ def build_default_orchestrator(
         # Stub → None (fail-loud scratch). Non-stub misconfig raises ModelConfigError.
         model, verifier_model = build_solver_and_verifier(cfg)
 
-    lineage = LineageServices.open(runs_root / "lineage")
-    store = SkillStore(
-        skills_root,
-        lineage_index=lineage.index,
-        revoke_queue=lineage.queue,
-    )
-    policy = load_policy()
-    index = SkillIndex(index_path)
-    # Full rebuilds cost one JSON parse + embed per skill version. When the persisted
-    # index already matches the on-disk library (the common case: startup, per-request
-    # API wiring), skip straight to serving; a stat-only fingerprint decides.
-    fingerprint = store.library_fingerprint()
-    if not index.is_fresh(fingerprint):
-        index.rebuild(store.iter_loaded(), library_fingerprint=fingerprint)
-    retriever = Retriever(index)
-    sm = policy.state_management
-    retriever.result_cache.enabled = sm.retrieval_cache_enabled
-    retriever.result_cache.ttl_s = sm.retrieval_cache_ttl_s
-
-    registry = default_registry()
-    settings = load_settings()
-    pdp = PolicyDecisionPoint.open(settings, policy, surface=surface)
-    # CLI with no explicit principal is the local operator (D5). The flag no
-    # longer approves every registry name: local runs stay on the PDP grant
-    # list, and container runs auto-approve only the sandboxed tools.
-    grant_as = principal
-    if grant_as is None and surface == "cli" and approve_default_tools:
-        grant_as = Principal.local_operator()
-    if not approve_default_tools:
-        grant_as = None
-    pdp.approve_tools(grant_as, origin="tool")
-    from recertia.solver.result_cache import ToolResultCache
-
-    tool_cache = ToolResultCache(
-        ttl_s=sm.tool_result_cache_ttl_s,
-        enabled=sm.tool_result_cache_enabled,
-    )
-    tools = ToolRuntime(
-        registry,
-        ClaimScheduler(),
-        require_approval_for_non_read=policy.require_tool_approval_for_non_read,
-        approval_gate=pdp,
-        model=model,
-        result_cache=tool_cache,
-    )
-    persistence = open_run_persistence(runs_root, runtime_root=runtime_root)
-    try:
-        workspaces = persistence.workspaces
-        transcripts = TranscriptStore(runs_root / "transcripts")
-        applicator = SkillApplicator(tools, workspaces)
-
-        reviewer = None
-        if golden_root is not None:
-            reviewer = ReviewService(
-                runs_root / "review",
-                golden_root=Path(golden_root),
-                runs_root=runs_root / "review-runs",
-            )
-
-        def _record_eval(state) -> None:
-            if state.terminal is None:
-                return
-            try:
-                from recertia.evals.outbox import drain_eval_outbox
-                from recertia.evals.store import EvalStore
-
-                eval_store = EvalStore(runs_root / "evals.db")
-                try:
-                    drain_eval_outbox(persistence.checkpoints, eval_store)
-                finally:
-                    eval_store.close()
-            except Exception:  # noqa: BLE001 — eval recording must not fail runs
-                return
-
-        orch = GraphOrchestrator(
-            runs_root,
-            persistence=persistence,
-            store=store,
-            retriever=retriever,
-            tools=tools,
-            model=model,
-            verifier_model=verifier_model,
-            transcripts=transcripts,
-            applicator=applicator,
-            episodic=EpisodicStore(runs_root / "episodic"),
-            affordances=AffordanceStore(runs_root / "affordances.json"),
-            facts=FactStore(facts_root),
-            reviewer=reviewer,
-            # Empty fingerprint: only mismatch when both sides declare a tool.
-            env_fingerprint=env_fingerprint if env_fingerprint is not None else {},
-            policy=policy,
-            on_finalize=_record_eval,
+    # Close what this function opened if wiring fails before the bundle exists; on
+    # success, pop_all() hands every resource to the bundle. LineageServices and the
+    # PolicyDecisionPoint hold no handle to close. The run persistence handle keeps its
+    # own BaseException cleanup below, so the stack never closes it.
+    with ExitStack() as cleanup:
+        lineage = LineageServices.open(runs_root / "lineage")
+        store = SkillStore(
+            skills_root,
+            lineage_index=lineage.index,
+            revoke_queue=lineage.queue,
         )
-    except BaseException:
-        # The handle holds the shared root lock; do not leak it on a wiring failure.
-        persistence.close()
-        raise
+        policy = load_policy()
+        index = SkillIndex(index_path)
+        cleanup.callback(index.close)
+        # Full rebuilds cost one JSON parse + embed per skill version. When the persisted
+        # index already matches the on-disk library (the common case: startup, per-request
+        # API wiring), skip straight to serving; a stat-only fingerprint decides.
+        fingerprint = store.library_fingerprint()
+        if not index.is_fresh(fingerprint):
+            index.rebuild(store.iter_loaded(), library_fingerprint=fingerprint)
+        retriever = Retriever(index)
+        sm = policy.state_management
+        retriever.result_cache.enabled = sm.retrieval_cache_enabled
+        retriever.result_cache.ttl_s = sm.retrieval_cache_ttl_s
+
+        registry = default_registry()
+        settings = load_settings()
+        pdp = PolicyDecisionPoint.open(settings, policy, surface=surface)
+        # CLI with no explicit principal is the local operator (D5). The flag no
+        # longer approves every registry name: local runs stay on the PDP grant
+        # list, and container runs auto-approve only the sandboxed tools.
+        grant_as = principal
+        if grant_as is None and surface == "cli" and approve_default_tools:
+            grant_as = Principal.local_operator()
+        if not approve_default_tools:
+            grant_as = None
+        pdp.approve_tools(grant_as, origin="tool")
+        from recertia.solver.result_cache import ToolResultCache
+
+        tool_cache = ToolResultCache(
+            ttl_s=sm.tool_result_cache_ttl_s,
+            enabled=sm.tool_result_cache_enabled,
+        )
+        tools = ToolRuntime(
+            registry,
+            ClaimScheduler(),
+            require_approval_for_non_read=policy.require_tool_approval_for_non_read,
+            approval_gate=pdp,
+            model=model,
+            result_cache=tool_cache,
+        )
+        persistence = open_run_persistence(runs_root, runtime_root=runtime_root)
+        try:
+            workspaces = persistence.workspaces
+            transcripts = TranscriptStore(runs_root / "transcripts")
+            applicator = SkillApplicator(tools, workspaces)
+
+            reviewer = None
+            if golden_root is not None:
+                reviewer = ReviewService(
+                    runs_root / "review",
+                    golden_root=Path(golden_root),
+                    runs_root=runs_root / "review-runs",
+                )
+
+            def _record_eval(state) -> None:
+                if state.terminal is None:
+                    return
+                try:
+                    from recertia.evals.outbox import drain_eval_outbox
+                    from recertia.evals.store import EvalStore
+
+                    eval_store = EvalStore(runs_root / "evals.db")
+                    try:
+                        drain_eval_outbox(persistence.checkpoints, eval_store)
+                    finally:
+                        eval_store.close()
+                except Exception:  # noqa: BLE001 — eval recording must not fail runs
+                    return
+
+            orch = GraphOrchestrator(
+                runs_root,
+                persistence=persistence,
+                store=store,
+                retriever=retriever,
+                tools=tools,
+                model=model,
+                verifier_model=verifier_model,
+                transcripts=transcripts,
+                applicator=applicator,
+                episodic=EpisodicStore(runs_root / "episodic"),
+                affordances=AffordanceStore(runs_root / "affordances.json"),
+                facts=FactStore(facts_root),
+                reviewer=reviewer,
+                # Empty fingerprint: only mismatch when both sides declare a tool.
+                env_fingerprint=env_fingerprint if env_fingerprint is not None else {},
+                policy=policy,
+                on_finalize=_record_eval,
+            )
+        except BaseException:
+            # The handle holds the shared root lock; do not leak it on a wiring failure.
+            persistence.close()
+            raise
+        cleanup.pop_all()
     return OrchestratorBundle(orchestrator=orch, index=index, model_config=cfg)
 
 

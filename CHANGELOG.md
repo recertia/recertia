@@ -150,7 +150,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `terminal: "error"`, and the run record set to `error`. Only `sqlite3.Error` is added;
   other exceptions from that open still escape. When the embedded queue worker marks a run
   failed because the run worker raised (for example, writing the terminal events failed),
-  it now logs the exception.
+  it now logs the exception. A failed run open also no longer leaves the skill index's
+  database connection open: when wiring the run fails (the persistence open, an index
+  rebuild, or a later step), that connection is closed.
 
 ### Corrections
 
