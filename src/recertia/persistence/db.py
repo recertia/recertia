@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -20,6 +21,10 @@ class MigrationChecksumError(RecertiaError):
     http_status = 503
     retryable = False
     exit_code = 7
+
+
+class MigrationError(RecertiaError):
+    """A migration file the runner refuses to apply, for example one with its own ``COMMIT``."""
 
 
 def open_db(
@@ -50,8 +55,10 @@ def open_db(
 
 
 def _is_busy(exc: sqlite3.OperationalError) -> bool:
-    message = str(exc).lower()
-    return "database is locked" in message or "database is busy" in message
+    """SQLITE_BUSY, including its extended codes. Python 3.11+ sets ``sqlite_errorcode``."""
+
+    code = getattr(exc, "sqlite_errorcode", None)
+    return isinstance(code, int) and code & 0xFF == sqlite3.SQLITE_BUSY
 
 
 def _set_journal_mode(conn: sqlite3.Connection, mode: str, timeout: float) -> None:
@@ -101,6 +108,42 @@ def _statements(script: str) -> list[str]:
     if tail:
         statements.append(tail)
     return statements
+
+
+_LEADING_TRIVIA = re.compile(r"(?:\s+|--[^\n]*(?:\n|$)|/\*.*?(?:\*/|$))*", re.DOTALL)
+_FIRST_WORD = re.compile(r"[A-Za-z_]+")
+_PRAGMA_JOURNAL_MODE = re.compile(r"PRAGMA\s+(?:[\w\"`\[\]]+\s*\.\s*)?journal_mode\b", re.IGNORECASE)
+_TRANSACTION_KEYWORDS = frozenset(
+    {"BEGIN", "COMMIT", "END", "ROLLBACK", "SAVEPOINT", "RELEASE", "VACUUM"}
+)
+
+
+def _forbidden_keyword(statement: str) -> str | None:
+    """The transaction-control keyword a statement starts with, if any.
+
+    The runner owns the transaction, so a migration's own ``COMMIT`` would split
+    it and ``VACUUM`` or a journal-mode switch cannot run inside it.
+    """
+
+    match = _LEADING_TRIVIA.match(statement)
+    body = statement[match.end() if match else 0 :]
+    if _PRAGMA_JOURNAL_MODE.match(body):
+        return "PRAGMA journal_mode"
+    word = _FIRST_WORD.match(body)
+    if word and word.group(0).upper() in _TRANSACTION_KEYWORDS:
+        return word.group(0).upper()
+    return None
+
+
+def _check_statements(files: list[tuple[Path, str, str]]) -> None:
+    for path, version, _digest in files:
+        for statement in _statements(path.read_text(encoding="utf-8")):
+            keyword = _forbidden_keyword(statement)
+            if keyword is not None:
+                raise MigrationError(
+                    f"migration {version} contains {keyword}; the runner manages the transaction",
+                    details={"version": version, "keyword": keyword},
+                )
 
 
 def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
@@ -158,6 +201,16 @@ def _needs_write(conn: sqlite3.Connection, files: list[tuple[Path, str, str]]) -
     return False
 
 
+def _rollback_quietly(conn: sqlite3.Connection) -> None:
+    """Roll back after a failure without letting a failed ROLLBACK replace the original error."""
+
+    if conn.in_transaction:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass  # closing the connection rolls the transaction back
+
+
 def apply_migrations(conn: sqlite3.Connection, directory: Path) -> list[str]:
     """Apply ``*.sqlite.sql`` files. Unchanged re-runs are no-ops.
 
@@ -169,10 +222,25 @@ def apply_migrations(conn: sqlite3.Connection, directory: Path) -> list[str]:
     ``schema_migrations`` row commit together, so concurrent openers of the same
     file apply each migration once. A changed checksum raises
     :class:`MigrationChecksumError`; files before it stay applied, nothing at or
-    after it is.
+    after it is. A migration whose statement fails rolls back the whole run: no
+    table or row from it, or from any file applied earlier in the same run, is
+    kept, and the error is raised.
+
+    A file whose statements include ``BEGIN``, ``COMMIT``, ``END``, ``ROLLBACK``,
+    ``SAVEPOINT``, ``RELEASE``, ``VACUUM`` or ``PRAGMA journal_mode`` raises
+    :class:`MigrationError` before anything is applied.
+
+    ``conn`` must use legacy transaction control (the default) or
+    ``isolation_level=None``; a Python 3.12 ``autocommit=False`` connection
+    raises :class:`TypeError`.
     """
 
+    if getattr(conn, "autocommit", None) is False:
+        raise TypeError(
+            "apply_migrations needs a legacy or isolation_level=None connection, not autocommit=False"
+        )
     files = _migration_files(directory)
+    _check_statements(files)
     if conn.in_transaction:
         # Same as the old runner, whose ``executescript`` committed a pending transaction.
         conn.commit()
@@ -209,8 +277,7 @@ def apply_migrations(conn: sqlite3.Connection, directory: Path) -> list[str]:
                 break
         conn.execute("COMMIT")
     except BaseException:
-        if conn.in_transaction:
-            conn.execute("ROLLBACK")
+        _rollback_quietly(conn)
         raise
     if mismatch is not None:
         raise mismatch

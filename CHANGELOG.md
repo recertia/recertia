@@ -41,11 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `UNIQUE constraint failed: schema_migrations.version`, `duplicate column name: checksum`
   or `database is locked`. The runner now takes the write lock with `BEGIN IMMEDIATE`,
   decides again what to apply, and runs each statement and its `schema_migrations` row in
-  that one transaction. A migration whose statement fails leaves no table and no row behind.
-  An unchanged re-run still writes nothing and no longer waits for another writer. Checksum
-  backfill and the `state_corrupt` error on a changed migration are unchanged; files sorted
-  before the changed one are now kept with their rows. Switching a new file to WAL waits up
-  to the open timeout when another process is switching it at the same time.
+  that one transaction. A migration whose statement fails rolls back the whole run: no table
+  or row from it, or from any file applied earlier in the same run, is kept. An unchanged
+  re-run still writes nothing and no longer waits for another writer. Checksum backfill and
+  the `state_corrupt` error on a changed migration are unchanged; unlike a failing
+  statement, a changed checksum keeps the files sorted before it, with their rows. A
+  migration file that contains its own `BEGIN`, `COMMIT`, `END`, `ROLLBACK`, `SAVEPOINT`,
+  `RELEASE`, `VACUUM` or `PRAGMA journal_mode` is refused before anything is applied. The
+  runner needs a connection with legacy transaction control (the default) or
+  `isolation_level=None`; a Python 3.12 `autocommit=False` connection raises `TypeError`.
+  Switching a new file to WAL waits up to the open timeout when another process is
+  switching it at the same time.
 
 ## [0.4.0] - 2026-10-29
 

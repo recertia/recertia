@@ -16,7 +16,7 @@ _RUNTIME_MIGRATIONS: Final = (
 _PROCS: Final = 4
 _ROUNDS: Final = 8
 _BARRIER_TIMEOUT_S: Final = 30.0
-_DEADLINE_S: Final = 60.0
+_DEADLINE_S: Final = 40.0  # under pytest-timeout's 60 s, so the kill/join cleanup runs
 
 
 def _open_and_migrate(root: str, migrations: str, rounds: int, barrier: object, out: object) -> None:
