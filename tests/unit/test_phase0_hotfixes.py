@@ -697,17 +697,45 @@ def test_quota_sidecar_corrupt_fails_closed_and_keeps_computer_use(tmp_path: Pat
 
 
 def test_affordance_store_quarantines_corrupt_json(tmp_path: Path) -> None:
-    """0.11: a torn affordances file is renamed aside and bootstrap starts empty."""
+    """0.11: a torn affordances file is renamed aside and the store starts empty.
+
+    REC-056d: reads leave the file alone; the first write imports it once into
+    runtime.db, and a torn file is quarantined there instead of imported. After
+    save() the JSON is gone and the data survives in runtime.db.
+    """
+
+    import sqlite3
+
+    from recertia.solver.tools import ToolResult
 
     path = tmp_path / "affordances.json"
     path.write_text("{not-json", encoding="utf-8")
     store = AffordanceStore(path)
-    assert store.tools == {}
+    try:
+        assert store.tools == {}
+        assert path.exists()
+        assert not (tmp_path / "runtime.db").exists()
+        store.record_tool(ToolResult(tool="t", ok=True, duration_s=0.5))
+        store.save()
+    finally:
+        store.close()
     assert not path.exists()
-    quarantined = list(tmp_path.glob("affordances.json.corrupt-*"))
-    assert len(quarantined) == 1
-    store.save()
-    assert json.loads(path.read_text(encoding="utf-8"))["tools"] == {}
+    assert len(list(tmp_path.glob("affordances.json.corrupt-*"))) == 1
+    conn = sqlite3.connect(tmp_path / "runtime.db")
+    try:
+        rows = conn.execute("SELECT tool, invocations FROM affordance_tools").fetchall()
+    finally:
+        conn.close()
+    assert rows == [("t", 1)]
+    reopened = AffordanceStore(path)
+    try:
+        agg = reopened.tool("t")
+        assert agg is not None and agg.invocations == 1
+        reopened.record_tool(ToolResult(tool="t", ok=False))
+        assert reopened.tools["t"].invocations == 2
+    finally:
+        reopened.close()
+    assert len(list(tmp_path.glob("affordances.json.corrupt-*"))) == 1
 
 
 def _state(run_id: str) -> RunState:

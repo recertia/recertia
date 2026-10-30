@@ -31,6 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skipped if another write landed since the read.
 - A step preview saves the program only when the step's criteria preview hash changes, so
   repeating a preview no longer moves `updated_at` or `version`.
+- **Affordance samples are capped in storage, not only on save.** Before, durations, costs
+  and resource waits grew without limit in memory and only the newest 200 of each were
+  written by `save()`, and error signatures were never capped. Now each tool keeps its newest 200
+  durations and costs, each resource its newest 200 waits, and each tool at most 200
+  distinct error signatures, evicting the least recently seen. Invocation, failure,
+  conflict and timeout counts are not capped. `RECERTIA_AFFORDANCE_SAMPLE_CAP` sets the
+  200; zero, a negative number or a non-integer is a configuration error when an affordance
+  store is opened (other settings loads ignore it). A legacy file over the cap is trimmed
+  on import (newest samples; most frequent signatures).
+- Under `runs/<tenant>/`, an `affordances.json` whose directory is not a valid tenant id
+  is a configuration error; outside `runs/` the tenant is `local`.
 
 ### Fixed
 
@@ -46,6 +57,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backfill and the `state_corrupt` error on a changed migration are unchanged; files sorted
   before the changed one are now kept with their rows. Switching a new file to WAL waits up
   to the open timeout when another process is switching it at the same time.
+- **Attempts in separate processes no longer lose affordance counts** (#134) — each process
+  loaded `affordances.json`, counted in memory and rewrote the whole file, so the last
+  writer won. Tool and resource counters now live in the runs root's `runtime.db` (runtime
+  migration `004_affordance`, keyed by tenant), and each record is one `BEGIN IMMEDIATE`
+  transaction of SQL increments. The first write imports an existing `affordances.json`
+  once and renames it to `affordances.json.imported`; a torn file is renamed to
+  `affordances.json.corrupt-<ns>` at that first write instead of when the store opens,
+  and neither rename overwrites an existing file.
+- **Reading affordances creates nothing** — `GET /v1/affordances` and the memory query
+  read `runtime.db` read-only when it holds imported data, and otherwise read
+  `affordances.json` (or nothing) without creating, migrating or importing.
 
 ## [0.4.0] - 2026-10-29
 
