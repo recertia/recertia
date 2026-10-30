@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that read the same version cannot both save.
 - `GET` and `PUT` on `/v1/programs/{program_id}` send the program version as an `ETag`
   header, for example `ETag: "3"`, to send back as `If-Match`.
+- Every other program route whose response has a top-level `program` sends the same `ETag`:
+  create, `from-pack`, `accept`, `abandon`, step `PATCH`, `skip`, `record-tip`,
+  `repo-binding`, and a step `run` that binds or replays. Error responses send none.
 - Only `PUT` checks `If-Match`. The other program write routes, including step preview,
   save unconditionally (they do bump `version`), so concurrent writes through them can
   still overwrite each other.
@@ -74,6 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on import (newest samples; most frequent signatures).
 - Under `runs/<tenant>/`, an `affordances.json` whose directory is not a valid tenant id
   is a configuration error; outside `runs/` the tenant is `local`.
+- A keyed step-run bind on a runtime with no idempotency store open returns 503
+  `unavailable` and binds nothing; before, it failed with an `AttributeError`.
 
 ### Fixed
 
@@ -126,6 +131,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Reading an existing WAL `runtime.db` can leave `-shm` and `-wal` sidecar files beside it.
   **Behaviour change:** in a read-only directory with no `-shm` file the read now raises
   `OperationalError: attempt to write a readonly database` where it used to read as empty.
+- A legacy `affordances.json` import pairs durations and costs from the newest end when the
+  two lists differ in length; before, it paired the oldest entries.
+- A SQLite error while recording an attempt's affordances, or while `classify_failure` reads
+  them, is logged as a warning instead of failing the attempt. Other errors still raise.
+- The idempotency store reads the clock for a reservation after it takes the write lock, so
+  a request that waited for the lock does not stamp an older lease.
+- A keyed step-run bind whose reservation carries no lease returns 503 `state_corrupt` and
+  binds nothing; before, it relied on an `assert`, which `python -O` drops.
+- A changed control migration found when the idempotency store opens returns 503
+  `state_corrupt` on the `/v1/programs` routes instead of `unavailable`.
+- `open_db` closes the connection it opened when setting the journal mode or a `PRAGMA`
+  fails, instead of leaking the handle.
 
 ## [0.4.0] - 2026-10-29
 

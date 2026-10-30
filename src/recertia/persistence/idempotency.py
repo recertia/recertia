@@ -164,9 +164,11 @@ class IdempotencyStore:
     def reserve(self, scope: KeyScope, request_hash: str) -> Reservation:
         """Step 1: claim ``scope`` for this request, or say why it cannot be claimed."""
 
-        now = self._clock()
         where, args = self._where(scope)
         with self._txn() as conn:
+            # Read the clock under the write lock, so a reservation's lease is never older than
+            # a lease another writer stamped while this one waited for BEGIN IMMEDIATE.
+            now = self._clock()
             conn.execute(
                 "DELETE FROM idempotency_keys WHERE rowid IN "
                 "(SELECT rowid FROM idempotency_keys WHERE expires_at <= ? LIMIT ?)",

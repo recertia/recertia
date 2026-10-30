@@ -6,6 +6,7 @@ import hashlib
 import re
 import sqlite3
 import time
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -40,17 +41,22 @@ def open_db(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=timeout, check_same_thread=check_same_thread)
-    if profile == "ephemeral":
-        _set_journal_mode(conn, "MEMORY", timeout)
-        conn.execute("PRAGMA synchronous=OFF")
-    elif profile == "bulk":
-        _set_journal_mode(conn, "WAL", timeout)
-        conn.execute("PRAGMA synchronous=OFF")
-    else:
-        _set_journal_mode(conn, "WAL", timeout)
-        sync = {"strict": "FULL", "normal": "NORMAL", "fast": "OFF"}[durability]
-        conn.execute(f"PRAGMA synchronous={sync}")
-    conn.execute("PRAGMA busy_timeout=5000")
+    try:
+        if profile == "ephemeral":
+            _set_journal_mode(conn, "MEMORY", timeout)
+            conn.execute("PRAGMA synchronous=OFF")
+        elif profile == "bulk":
+            _set_journal_mode(conn, "WAL", timeout)
+            conn.execute("PRAGMA synchronous=OFF")
+        else:
+            _set_journal_mode(conn, "WAL", timeout)
+            sync = {"strict": "FULL", "normal": "NORMAL", "fast": "OFF"}[durability]
+            conn.execute(f"PRAGMA synchronous={sync}")
+        conn.execute("PRAGMA busy_timeout=5000")
+    except BaseException:
+        # Nothing else holds the connection yet; leaving it open leaks the file handle.
+        conn.close()
+        raise
     return conn
 
 
@@ -205,10 +211,8 @@ def _rollback_quietly(conn: sqlite3.Connection) -> None:
     """Roll back after a failure without letting a failed ROLLBACK replace the original error."""
 
     if conn.in_transaction:
-        try:
+        with suppress(sqlite3.Error):  # closing the connection rolls the transaction back
             conn.execute("ROLLBACK")
-        except sqlite3.Error:
-            pass  # closing the connection rolls the transaction back
 
 
 def apply_migrations(conn: sqlite3.Connection, directory: Path) -> list[str]:

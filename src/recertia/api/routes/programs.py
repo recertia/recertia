@@ -20,6 +20,7 @@ from recertia.api.schemas import (
     StepSkipBody,
 )
 from recertia.errors import ConfigError, RecertiaError
+from recertia.persistence.db import MigrationChecksumError
 from recertia.persistence.root_lock import RootBusy
 from recertia.runtime.errors import (
     IdempotencyInProgress,
@@ -36,6 +37,7 @@ _OWN_CODE_ERRORS = (
     IdempotencyMismatch,
     IdempotencyInProgress,
     StateCorrupt,
+    MigrationChecksumError,
 )
 
 # A program version as a bare or quoted integer: 3 or "3". Weak tags, lists and * are refused;
@@ -82,6 +84,17 @@ def _etag(result: dict[str, Any]) -> str:
     return f'"{int(result["program"]["version"])}"'
 
 
+def _with_etag(response: Response, result: dict[str, Any]) -> dict[str, Any]:
+    """Send the program version as ``ETag`` when a 2xx body carries a top-level ``program``.
+
+    Called only after the service returned, so an error response never gets one.
+    """
+
+    if isinstance(result.get("program"), dict):
+        response.headers["ETag"] = _etag(result)
+    return result
+
+
 def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
     ctx = rs.ctx
     require_runs = rs.require_runs
@@ -94,6 +107,7 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
     def program_from_pack(
         body: ProgramFromPack,
         request: Request,
+        response: Response,
         principal=Depends(require_runs),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
@@ -101,25 +115,28 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
 
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         try:
-            return ctx.program_service.create_from_pack(
+            result = ctx.program_service.create_from_pack(
                 principal, tenant=tenant_id, runtime=ctx, body=body
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
+        return _with_etag(response, result)
     @app.post("/v1/programs")
     def create_program(
         request: Request,
+        response: Response,
         body: ProgramCreate,
         principal=Depends(require_runs),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         try:
-            return ctx.program_service.create(
+            result = ctx.program_service.create(
                 principal, tenant=tenant_id, runtime=ctx, body=body
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
+        return _with_etag(response, result)
     @app.get("/v1/programs")
     def list_programs(
         request: Request,
@@ -183,42 +200,47 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
         program_id: str,
         body: ProgramAccept,
         request: Request,
+        response: Response,
         principal=Depends(require_runs),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         try:
-            return ctx.program_service.accept(
+            result = ctx.program_service.accept(
                 principal, tenant=tenant_id, runtime=ctx, program_id=program_id, body=body
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
+        return _with_etag(response, result)
     @app.post("/v1/programs/{program_id}/abandon")
     def abandon_program(
         program_id: str,
         request: Request,
+        response: Response,
         principal=Depends(require_runs),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         try:
-            return ctx.program_service.abandon(
+            result = ctx.program_service.abandon(
                 principal, tenant=tenant_id, runtime=ctx, program_id=program_id
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
+        return _with_etag(response, result)
     @app.patch("/v1/programs/{program_id}/steps/{step_id}")
     def patch_step(
         program_id: str,
         step_id: str,
         body: StepPatch,
         request: Request,
+        response: Response,
         principal=Depends(require_runs),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         try:
-            return ctx.program_service.patch_step(
+            result = ctx.program_service.patch_step(
                 principal,
                 tenant=tenant_id,
                 runtime=ctx,
@@ -228,6 +250,7 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
+        return _with_etag(response, result)
     @app.post("/v1/programs/{program_id}/steps/{step_id}/preview")
     def preview_step(
         program_id: str,
@@ -253,6 +276,7 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
         step_id: str,
         body: StepRunBody,
         request: Request,
+        response: Response,
         principal=Depends(require_runs),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
@@ -260,7 +284,7 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
 
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         try:
-            return ctx.program_service.run_step(
+            result = ctx.program_service.run_step(
                 principal,
                 tenant=tenant_id,
                 runtime=ctx,
@@ -270,18 +294,20 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
+        return _with_etag(response, result)
     @app.post("/v1/programs/{program_id}/steps/{step_id}/skip")
     def skip_step(
         program_id: str,
         step_id: str,
         body: StepSkipBody,
         request: Request,
+        response: Response,
         principal=Depends(require_runs),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         try:
-            return ctx.program_service.skip_step(
+            result = ctx.program_service.skip_step(
                 principal,
                 tenant=tenant_id,
                 runtime=ctx,
@@ -291,33 +317,37 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
+        return _with_etag(response, result)
     @app.post("/v1/programs/{program_id}/repo-binding")
     def set_repo_binding(
         program_id: str,
         body: RepoBindingBody,
         request: Request,
+        response: Response,
         principal=Depends(require_runs),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         try:
-            return ctx.program_service.bind_repo(
+            result = ctx.program_service.bind_repo(
                 principal, tenant=tenant_id, runtime=ctx, program_id=program_id, body=body
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
+        return _with_etag(response, result)
     @app.post("/v1/programs/{program_id}/steps/{step_id}/record-tip")
     def record_step_tip(
         program_id: str,
         step_id: str,
         body: RecordTipBody,
         request: Request,
+        response: Response,
         principal=Depends(require_runs),
         x_recertia_tenant: str | None = Header(default=None, alias="X-Recertia-Tenant"),
     ) -> dict[str, Any]:
         tenant_id = _resolve_tenant(principal, request, x_recertia_tenant)
         try:
-            return ctx.program_service.record_tip(
+            result = ctx.program_service.record_tip(
                 principal,
                 tenant=tenant_id,
                 runtime=ctx,
@@ -327,6 +357,7 @@ def register_programs_routes(app: FastAPI, rs: RouteState) -> None:
             )
         except RecertiaError as exc:
             raise _map_program_error(exc) from exc
+        return _with_etag(response, result)
     @app.post("/v1/programs/{program_id}/steps/{step_id}/seed-workdir")
     def seed_step_workdir(
         program_id: str,

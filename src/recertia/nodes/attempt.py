@@ -19,6 +19,8 @@ under-reports what it actually spent.
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
@@ -31,6 +33,8 @@ from recertia.nodes.context import NodeContext, NodeOutcome
 if TYPE_CHECKING:
     from contracts.resources import ResourceConflict
     from recertia.solver.registry import ToolResult
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -231,11 +235,16 @@ def record_new_affordances(ctx: NodeContext, window: RuntimeWindow) -> None:
     conflicts = window.new_conflicts()
     if not invocations and not conflicts:
         return
-    for result in invocations:
-        ctx.affordances.record_tool(result)
-    for conflict in conflicts:
-        ctx.affordances.record_conflict(conflict)
-    ctx.affordances.save()
+    try:
+        for result in invocations:
+            ctx.affordances.record_tool(result)
+        for conflict in conflicts:
+            ctx.affordances.record_conflict(conflict)
+        ctx.affordances.save()
+    except sqlite3.Error as exc:
+        # Affordances are advisory history; a locked or failing runtime.db must not fail
+        # the attempt that produced them.
+        _log.warning("affordance record skipped: %s: %s", type(exc).__name__, exc)
 
 
 def failed(

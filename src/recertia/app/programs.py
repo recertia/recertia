@@ -14,8 +14,8 @@ from pydantic import ValidationError
 from contracts.goal import Constraint, DesiredState, Goal, compile_goal
 from contracts.program import ExternalHandoff, MigrationProgram, MigrationStep, RepoBinding
 from recertia.app.authz import Resource
-from recertia.errors import ConfigError, Conflict, NotFound, QuotaExceeded
-from recertia.persistence.idempotency import Completion, IdempotencyStore, KeyScope, Outcome
+from recertia.errors import ConfigError, Conflict, ExecutionUnavailable, NotFound, QuotaExceeded
+from recertia.persistence.idempotency import Completion, IdempotencyStore, KeyScope, Outcome, Reservation
 from recertia.ports.identity import Principal
 from recertia.programs.materialize import (
     MaterializeError,
@@ -46,6 +46,29 @@ def step_run_request_hash(body: Any) -> str:
     fields = body.model_dump(mode="json", exclude={"idempotency_key"})
     canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return "v1:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _idempotency_store(runtime: Any) -> IdempotencyStore:
+    """The runtime's idempotency store, needed for a keyed bind."""
+
+    store: IdempotencyStore | None = runtime.idempotency
+    if store is None:
+        # create_app opens the store (api/composition.py). A runtime without one cannot
+        # honour the key, so refuse before any write instead of binding unguarded.
+        raise ExecutionUnavailable("idempotency_key needs the idempotency store, which is not open")
+    return store
+
+
+def _held_lease(reservation: Reservation, program_id: str, step_id: str) -> int:
+    """The lease of a RESERVED or TAKEN_OVER reservation, which always carries one."""
+
+    if reservation.lease is None:
+        # Without the lease the row can be neither completed nor released, so nothing is bound.
+        raise StateCorrupt(
+            "idempotency reservation carries no lease",
+            details={"program_id": program_id, "step_id": step_id},
+        )
+    return reservation.lease
 
 
 class ProgramService:
@@ -363,7 +386,7 @@ class ProgramService:
                 step=step,
             )
 
-        store: IdempotencyStore = runtime.idempotency
+        store = _idempotency_store(runtime)
         scope = KeyScope(tenant, program_id, step_id, body.idempotency_key)
         request_hash = step_run_request_hash(body)
         # Write order (REC-056e): 1. a pending row in control.db; 2. the bind in
@@ -386,8 +409,7 @@ class ProgramService:
                 "run_id": reservation.run_id,
                 "idempotent": True,
             }
-        lease = reservation.lease
-        assert lease is not None  # RESERVED and TAKEN_OVER always carry the row's lease
+        lease = _held_lease(reservation, program_id, step_id)
         try:
             # Read again under the reservation, so the bind sees any write that landed first.
             prog, step = self._load_step(runtime, program_id, tenant, step_id)

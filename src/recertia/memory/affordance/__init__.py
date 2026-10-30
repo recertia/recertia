@@ -287,7 +287,12 @@ class AffordanceStore:
                 " VALUES (?, ?, ?, ?, 0)",
                 (self.tenant, name, agg.invocations, agg.failures),
             )
-            pairs = list(zip(agg.durations_s, agg.costs_usd, strict=False))[-cap:]
+            # Align from the newest end: the lists can differ in length, and their newest
+            # entries are the ones recorded together.
+            n = min(len(agg.durations_s), len(agg.costs_usd))
+            durations = agg.durations_s[len(agg.durations_s) - n :]
+            costs = agg.costs_usd[len(agg.costs_usd) - n :]
+            pairs = list(zip(durations, costs, strict=True))[-cap:]
             conn.executemany(
                 "INSERT INTO affordance_tool_samples(tenant_id, tool, duration_s, cost_usd)"
                 " VALUES (?, ?, ?, ?)",

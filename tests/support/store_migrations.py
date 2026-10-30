@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 PROCS = 4
 ROUNDS = 64
 BARRIER_S = 30.0
@@ -138,7 +140,7 @@ def check_concurrent_existing_store_dbs_apply_an_added_migration_once(
     _assert_each_applied_once(dbs, results, ["999_added"], [*first, "999_added"])
 
 
-def check_apply_closes_its_connection(tmp_path: Path, monkeypatch: Any) -> None:
+def check_apply_closes_its_connection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``apply_sqlite_migrations`` closes the connection it opened, on success and on error."""
 
     import recertia.store as store
@@ -168,12 +170,8 @@ def check_apply_closes_its_connection(tmp_path: Path, monkeypatch: Any) -> None:
             raise sqlite3.OperationalError("injected apply failure")
 
         monkeypatch.setattr(store, "apply_migrations", failing_apply)
-        try:
+        with pytest.raises(sqlite3.OperationalError, match="^injected apply failure$"):
             store.apply_sqlite_migrations(tmp_path / "err" / "store.sqlite")
-        except sqlite3.OperationalError as exc:
-            assert str(exc) == "injected apply failure"
-        else:
-            raise AssertionError("apply_sqlite_migrations swallowed the apply error")
         assert len(opened) == 2
         assert is_closed(opened[1]), "connection left open after apply_migrations raised"
     finally:

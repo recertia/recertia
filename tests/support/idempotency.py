@@ -222,6 +222,8 @@ def _race(
     for proc in stragglers:
         proc.kill()
         proc.join(timeout=5)
+    out.close()
+    out.join_thread()
     assert not stragglers, "a worker hung"
     assert [proc.exitcode for proc in procs] == [0] * len(procs)
     assert len(results) == len(procs), results
@@ -330,6 +332,8 @@ def check_migration_applies_once(tmp_path: Path, procs: int = 3) -> None:
         proc.join(timeout=5)
     assert not stragglers, "a worker hung"
     results = sorted(out.get(timeout=5) for _ in workers)
+    out.close()
+    out.join_thread()
     assert [r[1] for r in results] == ["ok"] * procs, results
     applied = [version for r in results for version in r[2]]
     assert sorted(applied) == ["001_baseline", "002_queue", "003_idempotency"], results

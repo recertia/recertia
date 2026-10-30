@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+import sqlite3
+from typing import TYPE_CHECKING
+
 from contracts.failure import FailureVerdict
 from contracts.graph import legal_routes
 from contracts.run import RunState
 from recertia.nodes.context import NodeContext, NodeOutcome
+
+if TYPE_CHECKING:
+    from recertia.memory.affordance import AffordanceStore
+
+_log = logging.getLogger(__name__)
 
 
 def classify_failure(state: RunState, ctx: NodeContext) -> NodeOutcome:
@@ -118,13 +127,24 @@ def _is_tool_failure(state: RunState, ctx: NodeContext, detail: str) -> bool:
             sig = ctx.tools.match_error_signature(name, detail)
             if sig:
                 return True
-    if ctx.affordances is not None:
-        for name in list(ctx.affordances.tools):
-            if ctx.affordances.is_known_flaky(name) and name in detail:
-                return True
-            if ctx.affordances.matches_error_signature(name, detail):
-                return True
+    if ctx.affordances is not None and _affordances_name_a_tool(ctx.affordances, detail):
+        return True
     return "tool=" in detail or "flaky" in detail.lower()
+
+
+def _affordances_name_a_tool(affordances: AffordanceStore, detail: str) -> bool:
+    """True when a known-flaky tool or a recorded error signature matches ``detail``."""
+
+    try:
+        for name in list(affordances.tools):
+            if affordances.is_known_flaky(name) and name in detail:
+                return True
+            if affordances.matches_error_signature(name, detail):
+                return True
+    except sqlite3.Error as exc:
+        # Affordance history only sharpens the verdict; without it the detail decides.
+        _log.warning("affordance lookup skipped: %s: %s", type(exc).__name__, exc)
+    return False
 
 
 def _is_environment_failure(detail: str) -> bool:

@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from recertia.persistence.idempotency import IdempotencyStore
 
 
 @dataclass
@@ -59,7 +62,7 @@ class AppState:
     settings: Any = None
     principal_resolver: Any = None
     # IdempotencyStore on control.db for program step-run keys (REC-056e). Closed by close().
-    idempotency: Any = None
+    idempotency: IdempotencyStore | None = None
     _cancel_flags: set[str] = field(default_factory=set)
 
     def close(self) -> None:
