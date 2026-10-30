@@ -1,8 +1,10 @@
 """Store migrations are idempotent and survive a crash between DDL and the version row.
 
-apply_sqlite_migrations (src/recertia/store/__init__.py) runs executescript() -- which commits
-on its own -- before INSERT INTO schema_migrations, so a crash in between leaves tables with no
-version row. A rerun must then succeed, not fail with 'table already exists'.
+apply_sqlite_migrations (src/recertia/store/__init__.py) runs persistence.db.apply_migrations,
+which commits each migration's statements and its schema_migrations row together. The earlier
+store runner ran executescript() -- which commits on its own -- before the INSERT, so a crash in
+between left tables with no version row. A rerun must then succeed, not fail with 'table
+already exists'.
 """
 
 from __future__ import annotations

@@ -95,6 +95,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `isolation_level=None`; a Python 3.12 `autocommit=False` connection raises `TypeError`.
   Switching a new file to WAL waits up to the open timeout when another process is
   switching it at the same time.
+- **Two processes opening the same new store db both succeed and apply each store migration
+  once** — `recertia.store.apply_sqlite_migrations` (behind `SqliteBackend.apply_migrations`)
+  kept its own runner with the same read-then-`executescript` race, so one of them failed
+  with `UNIQUE constraint failed: schema_migrations.version`. It now runs
+  `recertia.persistence.db.apply_migrations`. A store `schema_migrations` table written
+  before this change gains a `checksum` column, filled from the current file bytes; version
+  ids are unchanged. **Behaviour change:** an applied store migration whose file has changed
+  now raises `MigrationChecksumError` (`state_corrupt`) instead of being skipped, and a store
+  migration file with its own transaction control raises
+  `recertia.persistence.db.MigrationError`.
 - **Attempts in separate processes no longer lose affordance counts** (#134) — each process
   loaded `affordances.json`, counted in memory and rewrote the whole file, so the last
   writer won. Tool and resource counters now live in the runs root's `runtime.db` (runtime
