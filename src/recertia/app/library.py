@@ -281,6 +281,8 @@ class LibraryService:
                 actor=actor,
                 note=note,
             )
+        except KeyError as exc:  # the row vanished after the read above
+            raise NotFound("proposal not found") from exc
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
         if ledger is not None:
@@ -348,6 +350,8 @@ class LibraryService:
                 actor=actor,
                 note=note,
             )
+        except KeyError as exc:  # the row vanished after the read above
+            raise NotFound("proposal not found") from exc
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
         if ledger is not None:

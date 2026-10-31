@@ -8,8 +8,10 @@ on one proposal at the same time could both succeed.
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 from collections import Counter
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -262,5 +264,55 @@ def test_concurrent_approve_and_reject_through_the_api_one_wins_and_one_ledger_e
         ledger = HashChainLedger(tmp_path / "api-root" / "runs" / "t1" / "ledger.jsonl")
         decisions = [e for e in ledger.entries() if e.evidence.get("kind") == "proposal_decision"]
         assert len(decisions) == trials
+    finally:
+        close_app(app)
+
+
+def _delete_proposal(path: Path, proposal_id: str) -> None:
+    # As another process would: through its own connection on the same file.
+    with closing(sqlite3.connect(path)) as conn, conn:
+        conn.execute("DELETE FROM proposals WHERE proposal_id = ?", (proposal_id,))
+
+
+@pytest.mark.parametrize(
+    ("route", "not_found"),
+    [("/v1/proposals/{}/decision", "proposal not found"), ("/v1/reviews/{}", "review not found")],
+    ids=["proposal-decision", "review"],
+)
+@pytest.mark.parametrize(
+    "vanish_after_read", [1, 2], ids=["after-the-library-read", "between-decide-read-and-update"]
+)
+def test_a_proposal_that_vanishes_during_a_decision_answers_404_and_no_ledger_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: str, not_found: str, vanish_after_read: int
+) -> None:
+    # Read 1 is the library's own lookup and read 2 is decide's "pending" read. Deleting the row
+    # right after read 1 makes decide's read find no row; right after read 2, its UPDATE changes
+    # no row and its re-read finds none. Either way the proposal is gone: 404, not 500.
+    app = make_app(tmp_path)
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        headers = headers_for(app)
+        proposals = app.state.recertia.proposals
+        proposals.add(_proposal("gone"))
+        reads: list[str] = []
+
+        def get_then_vanish(
+            proposal_id: str, *, tenant_id: str, read: Any = proposals.get
+        ) -> ProposalRecord | None:
+            rec: ProposalRecord | None = read(proposal_id, tenant_id=tenant_id)
+            reads.append("found" if rec is not None else "missing")
+            if len(reads) == vanish_after_read:
+                _delete_proposal(proposals.path, proposal_id)
+            return rec
+
+        monkeypatch.setattr(proposals, "get", get_then_vanish)
+        resp = client.post(route.format("gone"), headers=headers, json={"decision": "approve"})
+
+        assert resp.status_code == 404, resp.text
+        assert not_found in resp.text, resp.text
+        assert reads == ["found"] * vanish_after_read + ["missing"], reads
+        ledger = HashChainLedger(tmp_path / "api-root" / "runs" / "t1" / "ledger.jsonl")
+        decisions = {"proposal_decision", "review_decision"}
+        assert [e for e in ledger.entries() if e.evidence.get("kind") in decisions] == []
     finally:
         close_app(app)

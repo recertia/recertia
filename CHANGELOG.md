@@ -201,6 +201,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whichever wrote last, and log two decisions to the ledger. The write now applies only
   while the proposal is still pending; the later decision gets the existing 400
   "not pending" error, and only the winner is logged.
+- **Deciding a proposal that is deleted mid-request returns 404, not 500** — if the
+  proposal's row was gone by the time the decision read or wrote it, after the route had
+  already found it, `POST /v1/proposals/{proposal_id}/decision` and
+  `POST /v1/reviews/{decision_id}` answered 500. They now answer 404 (`proposal not found`
+  and `review not found`, as for a proposal that never existed), and nothing is logged to
+  the ledger.
 
 ### Corrections
 
