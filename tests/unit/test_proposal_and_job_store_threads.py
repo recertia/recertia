@@ -127,7 +127,7 @@ def test_threads_sharing_one_job_run_store_always_read_a_run_that_exists(tmp_pat
                     out.note(f"get {type(exc).__name__}")
 
         def list_only() -> None:
-            for _ in range(200):
+            for _ in range(400):
                 try:
                     listed = [r.job_run_id for r in store.list(tenant_id="t1")]
                     out.note("listed" if listed == [rec.job_run_id] else f"list {len(listed)}")
@@ -141,7 +141,7 @@ def test_threads_sharing_one_job_run_store_always_read_a_run_that_exists(tmp_pat
             + [list_only for _ in range(2)]
         )
 
-        assert out.seen == {"saved": 100, "found": 1600, "listed": 800}, out.seen
+        assert out.seen == {"saved": 100, "found": 1600, "listed": 1200}, out.seen
     finally:
         store.close()
 
@@ -207,8 +207,10 @@ def test_two_decisions_that_both_read_pending_first_exactly_one_wins(
 ) -> None:
     # Hold each decision after its "pending" read until the other one has read too, so both
     # always reach the write having seen "pending": only the guarded write can refuse one.
+    # The hold works only while decide reads through ``self.get``; ``waited`` proves it did.
     stores = [ProposalStore(tmp_path / "proposals.sqlite") for _ in range(2)]
     both_read = threading.Barrier(2, timeout=10)
+    waited = _Outcomes()
     for s in stores:
 
         def get_then_wait(proposal_id: str, *, tenant_id: str, read: Any = s.get) -> ProposalRecord | None:
@@ -219,12 +221,14 @@ def test_two_decisions_that_both_read_pending_first_exactly_one_wins(
                 and threading.current_thread() is not threading.main_thread()
             ):
                 both_read.wait()
+                waited.note("both read pending")
             return rec
 
         monkeypatch.setattr(s, "get", get_then_wait)
     try:
         bad = _exactly_one_wins(_decide_race(stores, trials=20))
         assert bad == [], f"{len(bad)}/20 trials: {bad[:3]}"
+        assert waited.seen == {"both read pending": 2 * 20}, waited.seen
     finally:
         for s in stores:
             s.close()
