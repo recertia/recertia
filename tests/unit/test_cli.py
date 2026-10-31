@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,16 @@ from recertia.cli.main import app
 runner = CliRunner()
 
 
+def _python(code: str) -> str:
+    """A shell command that runs ``code`` with this test's interpreter.
+
+    The executable is quoted and ``code`` uses only single quotes, so the same string works
+    under ``sh`` and ``cmd.exe`` and does not depend on which interpreter ``PATH`` finds.
+    """
+
+    return f'"{sys.executable}" -c "{code}"'
+
+
 def _spec(workdir: Path) -> dict:
     return {
         "task": {"request": "write output.txt"},
@@ -18,7 +29,7 @@ def _spec(workdir: Path) -> dict:
             {
                 "id": "output-exists",
                 "kind": "command",
-                "run": "test -f output.txt",
+                "run": _python("import os, sys; sys.exit(0 if os.path.isfile('output.txt') else 1)"),
                 "source": "caller",
                 "weight": 1.0,
                 "sensitivity_proof": {
@@ -29,7 +40,7 @@ def _spec(workdir: Path) -> dict:
                 },
             }
         ],
-        "script": ["python3 -c \"open('output.txt','w').write('done')\""],
+        "script": [_python("open('output.txt','w').write('done')")],
         "workdir": str(workdir),
     }
 
@@ -46,6 +57,7 @@ def test_run_and_show_and_ledger_verify(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "terminal=solved" in result.output
+    assert (workdir / "output.txt").read_text() == "done"
 
     show_result = runner.invoke(
         app, ["runs", "show", "cli-run-1", "--runs-root", str(runs_root), "--route-log"]
@@ -53,6 +65,7 @@ def test_run_and_show_and_ledger_verify(tmp_path: Path) -> None:
     assert show_result.exit_code == 0, show_result.output
     assert "terminal=solved" in show_result.output
     assert "distill" in show_result.output
+    assert "advisory (actual=pass)" in show_result.output
 
     verify_result = runner.invoke(app, ["ledger", "verify", "--runs-root", str(runs_root)])
     assert verify_result.exit_code == 0, verify_result.output
