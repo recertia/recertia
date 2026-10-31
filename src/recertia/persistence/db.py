@@ -6,6 +6,7 @@ import hashlib
 import re
 import sqlite3
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,6 +56,37 @@ def open_db(
         conn.execute("PRAGMA busy_timeout=5000")
     except BaseException:
         # Nothing else holds the connection yet; leaving it open leaks the file handle.
+        conn.close()
+        raise
+    return conn
+
+
+def open_db_with_init(
+    path: Path | str,
+    init: Callable[[sqlite3.Connection], None],
+    *,
+    profile: DbProfile = "durable",
+    durability: DurabilityName = "normal",
+    timeout: float = 5.0,
+    check_same_thread: bool = False,
+) -> sqlite3.Connection:
+    """``open_db``, then ``init(conn)``; if ``init`` raises anything, close the connection.
+
+    For an owner that keeps the connection (a constructor): until ``init`` returns, nothing
+    else holds the connection, so on any ``BaseException`` it is closed and the original
+    exception re-raised. On success the open connection is returned.
+    """
+
+    conn = open_db(
+        path,
+        profile=profile,
+        durability=durability,
+        timeout=timeout,
+        check_same_thread=check_same_thread,
+    )
+    try:
+        init(conn)
+    except BaseException:
         conn.close()
         raise
     return conn
