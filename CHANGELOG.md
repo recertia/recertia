@@ -211,6 +211,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /v1/reviews/{decision_id}` answered 500. They now answer 404 (`proposal not found`
   and `review not found`, as for a proposal that never existed), and nothing is logged to
   the ledger.
+- **`recertia review approve` on a proposal deleted mid-command says `review not found`** —
+  the same vanished row made the CLI command end with an uncaught `KeyError` traceback. It
+  now prints `review not found` and exits 1, as for a proposal that never existed, and
+  nothing is logged to the ledger.
 
 ### Corrections
 
