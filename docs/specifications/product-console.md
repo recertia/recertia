@@ -243,24 +243,33 @@ proxies (such as nginx) pass each frame on at once. Error responses (for example
 sent. This works for a run that is not held in memory, such as after a restart. An `error`
 event never ends the stream by itself; a failed run ends with `run.finished`
 (`terminal: "error"`). Some runs end in the queue with no terminal event in their log: a run
-whose worker process died on its last attempt is marked `dead` (`lease_expired`), and a run
-the worker could not start is marked `failed` (`run_busy`, `workspace_busy`, or `run_failed`
-for a start-up failure other than an `OSError` opening the run's persistence; for that one
-the worker writes an `error` event and a terminal `run.finished`, so the stream ends on that
-event). Once the stream has sent the whole log of such a run, it reads the
-log once more: if the worker appended its own `run.finished` first, that event is sent and
-the stream ends. Otherwise the stream sends `run.finished` with payload
-`{"terminal": "error", "error_code": ...}` (the queue's error code) and ends. That frame has
-no `id:` because it is not a line of the log, so a client that reconnects with its last
-`Last-Event-ID` gets the same frame again and the stream ends. A log that ends with a real
-terminal event and then a partly written line ends after the real event, with no extra
-frame. The re-read also stops at `RECERTIA_SSE_MAX_S`, without the frame. The queue is read
-only once the stream has caught up with the log, and its answer can go stale: a run
-resumed between the queue read and the re-read can have its first new events sent before
-the frame. A resume also appends `run.queued` to the log before it flips the queue row
-from `failed` to `queued`, so a stream that reads the queue between the two can send that
-`run.queued` event and still end on the stale `failed` row. The client's last `id:` is a
-real offset, so a reconnect delivers the new events.
+whose worker process died on its last attempt is marked `dead` (`lease_expired`); a run the
+worker could not start is marked `failed` (`run_busy`, `workspace_busy`, or `run_failed` for
+a start-up failure other than an `OSError` opening the run's persistence; for that one the
+worker writes an `error` event and a terminal `run.finished`, so the stream ends on that
+event); and a run on the standalone worker (`recertia worker`), which writes no run events,
+is marked `cancelled` or `succeeded`. Once the stream has sent the whole log of such a run,
+it reads the log once more: if the worker appended its own terminal event first, that event
+is sent and the stream ends. Otherwise the stream sends `run.finished` with payload
+`{"terminal": ..., "error_code": ...}` and ends. The payload is the queue's outcome:
+`terminal` is `"error"` for a `dead` or `failed` row and the row's own status (`"cancelled"`
+or `"succeeded"`) for the others, and `error_code` is the row's error code (`null` when it
+has none). For a `failed` row with `run_busy`, the frame ends the follow, not necessarily
+the run: another process held the run's lease, and a later resume can start the run again. A
+real operator cancel logs `run.cancelled`, and the stream ends on that logged event; for a
+`cancelled` row whose log has no terminal event, the frame is `run.finished` with
+`terminal: "cancelled"`. Clients treat both `run.cancelled` and `run.finished` as terminal.
+The frame has no `id:` because it is not a line of the log, so a client that reconnects with
+its last `Last-Event-ID` gets the same frame again and the stream ends. A log that ends with
+a real terminal event and then a partly written line ends after the real event, with no
+extra frame. The re-read also stops at `RECERTIA_SSE_MAX_S`, without the frame. The queue is
+read only once the stream has caught up with the log, and its answer can go stale: a run
+resumed between the queue read and the re-read can have its first new events sent before the
+frame. A resume also appends `run.queued` to the log before it flips the queue row back to
+`queued`, so a stream that reads the queue between the two can send that `run.queued` event
+and still end on the stale row, which can be any terminal row (`failed`, `dead`, `cancelled`
+or `succeeded`). The client's last `id:` is a real offset, so a reconnect delivers the new
+events.
 Otherwise the stream ends after
 `RECERTIA_SSE_MAX_S` seconds; the client reconnects with `Last-Event-ID`. If the log shrinks
 below the cursor, the stream ends.

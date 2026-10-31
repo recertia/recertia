@@ -4,11 +4,12 @@ A follow waits with ``asyncio.sleep`` and reads the log in short thread-pool cal
 open stream does not pin a worker thread. The concurrency slot is released when the
 response ends for any reason, including a client that disconnects.
 
-Some runs end without a ``run.finished`` line in their log: the queue marks them ``dead``
-(the worker died on its last attempt) or ``failed`` (``run_busy``, ``workspace_busy`` or a
-start-up failure other than an ``OSError`` opening the run's persistence, which writes its
-own terminal event). Once a follow has read everything in the log it asks ``ending``
-whether the run ended that way. If so it reads the log once more, because the worker may
+Some runs end without a terminal event in their log: the queue marks them ``dead`` (the
+worker died on its last attempt), ``failed`` (``run_busy``, ``workspace_busy`` or a start-up
+failure other than an ``OSError`` opening the run's persistence, which writes its own
+terminal event), or ``cancelled`` or ``succeeded`` (the standalone worker writes no run
+events). Once a follow has read everything in the log it asks ``ending`` whether the run
+ended that way. If so it reads the log once more, because the worker may
 have appended its own terminal event first: a real terminal event is sent instead of the
 given frame, and otherwise the given frame is sent. Then it stops. The re-read also stops at
 the max duration, without the given frame, so the client reconnects as usual.
@@ -33,18 +34,27 @@ from recertia.api.event_follow import KEEPALIVE_FRAME, EventFollower, FollowSett
 SSE_HEADERS: Mapping[str, str] = MappingProxyType({"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-def ended_run_frame(tenant_id: str, run_id: str, error_code: str | None) -> str:
-    """``run.finished`` (``terminal: "error"``) for a run the queue ended with no terminal event.
+#: The ``terminal`` of the frame sent for each queue status that ends a run.
+QUEUE_END_TERMINALS: Mapping[str, str] = MappingProxyType(
+    {"dead": "error", "failed": "error", "cancelled": "cancelled", "succeeded": "succeeded"}
+)
 
-    The event is not a line of the log, so the frame has no ``id:``: a client keeps the offset
-    of the last logged event, and a reconnect from it ends with this frame again.
+
+def ended_run_frame(tenant_id: str, run_id: str, status: str, error_code: str | None) -> str:
+    """``run.finished`` for a run the queue ended (``status``) with no terminal event in its log.
+
+    The payload is the queue's outcome: ``terminal`` is ``error`` for a ``dead`` or ``failed``
+    row and the row's own status for a ``cancelled`` or ``succeeded`` row, and ``error_code``
+    is the row's (JSON ``null`` when it has none). The event is not a line of the log, so the
+    frame has no ``id:``: a client keeps the offset of the last logged event, and a reconnect
+    from it ends with this frame again.
     """
 
     event = {
         "run_id": run_id,
         "tenant_id": tenant_id,
         "type": "run.finished",
-        "payload": {"terminal": "error", "error_code": error_code},
+        "payload": {"terminal": QUEUE_END_TERMINALS[status], "error_code": error_code},
     }
     return f"event: run.finished\ndata: {json.dumps(event)}\n\n"
 

@@ -469,6 +469,39 @@ def _write_before_save(
         del store.put
 
 
+@contextmanager
+def _write_after_first_read(
+    app: Any, change: Callable[[MigrationProgram], MigrationProgram]
+) -> Iterator[_Race]:
+    """Commit ``change(stored)`` to the store right after the route's first ``get`` returns.
+
+    Unlike ``_write_before_save``, the competing write lands before anything else the route
+    does, so a route that read the version again just before saving would see the new
+    version and save over the write. ``route_puts`` counts the route's own ``put`` calls.
+    """
+
+    store: ProgramStore = app.state.recertia.programs
+    real_get, real_put = store.get, store.put
+    race = _Race()
+
+    def get_then_competing(program_id: str, **kwargs: Any) -> MigrationProgram | None:
+        read = real_get(program_id, **kwargs)
+        if race.competing is None and read is not None:
+            race.competing = real_put(change(read))
+        return read
+
+    def counting_put(program: MigrationProgram, **kwargs: Any) -> MigrationProgram:
+        race.route_puts += 1
+        return real_put(program, **kwargs)
+
+    store.get = get_then_competing  # type: ignore[method-assign]
+    store.put = counting_put  # type: ignore[method-assign]
+    try:
+        yield race
+    finally:
+        del store.get, store.put
+
+
 def _retitle(stored: MigrationProgram) -> MigrationProgram:
     return stored.model_copy(update={"title": "concurrent"})
 
@@ -574,6 +607,32 @@ def test_intent_route_after_a_concurrent_write_does_not_overwrite_it(race_api: _
         assert key_rows(race_api.root) == []
 
 
+# The keyed bind reads the program once before reserving its key and again under the
+# reservation (so a replay sees the bind it recorded); its save pins to that second read.
+FIRST_READ_ROUTES = [route for route in INTENT_ROUTES if route != "run_step_bind_keyed"]
+
+
+@pytest.mark.parametrize("route", FIRST_READ_ROUTES)
+def test_intent_route_saves_the_version_it_first_read_not_a_later_one(
+    race_api: _RaceApi, route: str
+) -> None:
+    """A write that lands right after the route's first read still wins; the route gets 409.
+
+    So the route pins its save to the version from that first read, not to one read later.
+    """
+
+    pid, method, url, body = _setup_route(race_api, route)
+    with _write_after_first_read(race_api.app, _retitle) as race:
+        resp = race_api.client.request(method, url, headers=race_api.headers, json=body)
+
+    assert race.competing is not None
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"]["code"] == "conflict"
+    assert resp.json()["error"]["details"] == {"stored_version": race.competing.version}
+    assert race.route_puts == 1
+    assert race_api.stored(pid) == race.competing
+
+
 def test_keyed_bind_that_loses_the_race_leaves_no_pending_key_row(race_api: _RaceApi) -> None:
     """The 409 deletes the bind's pending row, so a retry with the same key binds."""
 
@@ -638,7 +697,7 @@ _BAD_TIP = {"run_id": "r1", "tip_sha": "deadbeef" * 5}
 
 
 def _assert_original_seed_error(resp: Any) -> str:
-    """The checkout's ``ConfigError`` (``invalid_config``), which program routes send as 400."""
+    """The checkout's ``ConfigError``, which program routes send as 400 ``bad_request``."""
 
     assert resp.status_code == 400, resp.text
     error = resp.json()["error"]
@@ -648,7 +707,7 @@ def _assert_original_seed_error(resp: Any) -> str:
     return str(error["message"])
 
 
-def test_seed_workdir_with_a_failing_checkout_is_still_invalid_config(race_api: _RaceApi) -> None:
+def test_seed_workdir_with_a_failing_checkout_is_still_bad_request(race_api: _RaceApi) -> None:
     pid, url = _failing_seed(race_api)
     before = race_api.stored(pid).version
     with _count_store_writes(race_api.app) as writes:
@@ -660,7 +719,7 @@ def test_seed_workdir_with_a_failing_checkout_is_still_invalid_config(race_api: 
 
 
 def test_seed_workdir_failure_mark_that_loses_the_race_keeps_the_original_error(race_api: _RaceApi) -> None:
-    """OQ-2: the original checkout error wins, the competing write stands, the mark is skipped."""
+    """The original checkout error wins, the competing write stands, the mark is skipped."""
 
     pid, url = _failing_seed(race_api)
     with _write_before_save(race_api.app, _retitle) as race:

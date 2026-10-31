@@ -812,6 +812,144 @@ def test_failed_run_whose_log_ends_with_run_finished_gets_only_that_event(
     assert elapsed < 2
 
 
+# --- a run the queue ended cancelled or succeeded with no terminal event in its log ---------
+
+
+def _standalone_run(env: Env, run: str = "r", *, cancel: str | None = None) -> Any:
+    """Create the run through the API, then run it on the standalone worker (``recertia worker``).
+
+    The standalone worker writes no run events, so the log holds only ``run.queued`` (and the
+    ``run.cancelled`` of an operator cancel when ``cancel="route"``). ``cancel="queue"`` sets
+    only the queue's cancel flag, so the log gets no terminal event at all.
+    """
+
+    from recertia.workers.serve import run_once
+
+    state = env.app.state.recertia
+    state.embedded.ensure_started = lambda: None  # only the standalone worker runs it
+    created = env.client.post(
+        "/v1/runs",
+        headers={"X-API-Key": env.key1},
+        json={"request": run, "run_id": run, "mode": "async", "budget": {"max_attempts": 1}},
+    )
+    assert created.status_code == 202, created.text
+    if cancel == "route":
+        resp = env.client.post(f"/v1/runs/{run}/cancel", headers={"X-API-Key": env.key1})
+        assert resp.status_code == 200, resp.text
+    elif cancel == "queue":
+        state.queue.request_cancel("t1", run)
+    assert run_once(env.root, worker="w-standalone") == 1
+    return state.queue.get("t1", run)
+
+
+def _queue_frame(text: str, status: str) -> dict[str, Any]:
+    """The last frame is the queue's outcome, with exactly the ruled keys and no ``id:``."""
+
+    data = _dead_frame(text)
+    assert set(data) == {"run_id", "tenant_id", "type", "payload"}
+    assert set(data["payload"]) == {"terminal", "error_code"}
+    assert data["payload"]["terminal"] == ("error" if status in ("dead", "failed") else status)
+    return data
+
+
+@pytest.mark.parametrize(("cancel", "status"), [(None, "succeeded"), ("queue", "cancelled")])
+def test_standalone_run_with_no_terminal_event_ends_with_the_queue_outcome(
+    make_env: Callable[..., Env], cancel: str | None, status: str
+) -> None:
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    row = _standalone_run(env, cancel=cancel)
+    assert (row.status, row.error_code) == (status, None)
+    log = [json.loads(line) for line in env.log_path().read_bytes().splitlines()]
+    assert [e["type"] for e in log] == ["run.queued"]  # the standalone worker wrote no event
+    elapsed, resp = _elapsed(env)
+    assert resp.status_code == 200
+    assert types(resp.text) == ["run.queued", "run.finished"]
+    assert [int(f["id"]) for f in parse(resp.text)[:-1]] == line_ends(env.log_path())
+    data = _queue_frame(resp.text, status)
+    assert (data["run_id"], data["tenant_id"], data["type"]) == ("r", "t1", "run.finished")
+    assert data["payload"] == {"terminal": status, "error_code": None}
+    assert '"error_code": null' in resp.text and "None" not in resp.text
+    assert elapsed < 2  # not held until the max follow duration
+    elapsed, resp = _elapsed(env, leid=str(env.log_path().stat().st_size))
+    assert types(resp.text) == ["run.finished"]
+    assert _queue_frame(resp.text, status)["payload"] == {"terminal": status, "error_code": None}
+    assert elapsed < 2
+
+
+def test_succeeded_run_whose_log_ends_with_run_finished_gets_only_that_event(
+    make_env: Callable[..., Env],
+) -> None:
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    row = _standalone_run(env)
+    assert row.status == "succeeded"
+    env.events.append("t1", "r", "run.finished", {"terminal": "solved"})
+    for leid in (None, str(line_ends(env.log_path())[0])):
+        elapsed, resp = _elapsed(env, leid=leid)
+        frames = parse(resp.text)
+        assert types(resp.text).count("run.finished") == 1
+        assert json.loads(frames[-1]["data"])["payload"] == {"terminal": "solved"}
+        assert int(frames[-1]["id"]) == env.log_path().stat().st_size  # the real event
+        assert elapsed < 2
+    elapsed, resp = _elapsed(env, leid=str(env.log_path().stat().st_size))
+    assert resp.text == ""
+    assert elapsed < 2
+
+
+def test_cancelled_run_with_a_logged_cancel_ends_on_that_event(make_env: Callable[..., Env]) -> None:
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    row = _standalone_run(env, cancel="route")
+    assert row.status == "cancelled"
+    elapsed, resp = _elapsed(env)
+    frames = parse(resp.text)
+    assert types(resp.text) == ["run.queued", "run.cancelled"]
+    assert ids(resp.text) == line_ends(env.log_path())  # the last frame is the real, logged event
+    assert "run.finished" not in resp.text
+    assert elapsed < 2
+    elapsed, resp = _elapsed(env, leid=frames[0]["id"])
+    assert types(resp.text) == ["run.cancelled"]
+    assert ids(resp.text) == [env.log_path().stat().st_size]
+    assert elapsed < 2
+
+
+def _end_row(env: Env, monkeypatch: pytest.MonkeyPatch, status: str, error_code: str | None) -> None:
+    """End the queue row with ``status`` and ``error_code`` and write no terminal event."""
+
+    if status == "dead":
+        _mark_dead(env, monkeypatch)
+        return
+    queue = env.app.state.recertia.queue
+    queue.enqueue(QueueItem(tenant_id="t1", run_id="r", kind="run", payload={}, max_attempts=1))
+    queue.register_worker("w-follow", capacity=1, hostname="host", pid=os.getpid())
+    [claim] = queue.claim("w-follow")
+    queue.finish(claim, status=status, error_code=error_code)
+
+
+@pytest.mark.parametrize(
+    ("status", "error_code"),
+    [("dead", "lease_expired"), ("failed", "run_failed"), ("cancelled", None), ("succeeded", None)],
+)
+def test_the_queue_end_frame_has_only_the_ruled_keys(
+    make_env: Callable[..., Env], monkeypatch: pytest.MonkeyPatch, status: str, error_code: str | None
+) -> None:
+    # Exact key sets, so an extra key (one that could carry a path) cannot ride on the frame.
+    env = make_env(RECERTIA_SSE_MAX_S="5")
+    env.events.append("t1", "r", "run.started", {})
+    _end_row(env, monkeypatch, status, error_code)
+    row = env.app.state.recertia.queue.get("t1", "r")
+    assert (row.status, row.error_code) == (status, error_code)
+    elapsed, resp = _elapsed(env)
+    assert types(resp.text) == ["run.started", "run.finished"]
+    data = _queue_frame(resp.text, status)
+    assert data == {
+        "run_id": "r",
+        "tenant_id": "t1",
+        "type": "run.finished",
+        "payload": {"terminal": "error" if error_code else status, "error_code": error_code},
+    }
+    assert "None" not in resp.text  # a NULL error_code is JSON null, never the text None
+    assert elapsed < 2
+
+
 # --- max duration and keep-alive -----------------------------------------------------------
 
 

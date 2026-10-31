@@ -329,9 +329,14 @@ def test_event_write_failure_after_an_open_failure_is_logged_by_the_queue_worker
     assert isinstance(written, OSError) and written.errno == errno.ENOSPC, record.exc_info
     log = events.list_after("tenant-b", "b-new")
     assert [e["type"] for e in log] == ["run.started"], log
-    text = json.dumps(log)
-    for needle in (str(root), root.name, ".lock"):
-        assert needle not in text, (needle, text)
+    messages = [opened[0].getMessage(), record.getMessage()]
+    for text in (json.dumps(log), *messages):
+        for needle in (str(root), root.name, ".lock"):
+            assert needle not in text, (needle, text)
+    for message in messages:
+        # The run is named as tenant/run; no other separator, so no path, Posix or Windows.
+        rest = message.replace("tenant-b/b-new", "")
+        assert "/" not in rest and "\\" not in rest, message
 
 
 def test_open_failure_over_the_api_moves_the_run_record_from_queued_to_error(tmp_path: Path) -> None:

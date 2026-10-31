@@ -18,7 +18,13 @@ from recertia.api.event_follow import (
     parse_offset,
 )
 from recertia.api.quotas import QuotaExceeded
-from recertia.api.routes.follow_stream import SSE_HEADERS, FollowResponse, aiter_follow, ended_run_frame
+from recertia.api.routes.follow_stream import (
+    QUEUE_END_TERMINALS,
+    SSE_HEADERS,
+    FollowResponse,
+    aiter_follow,
+    ended_run_frame,
+)
 from recertia.api.schemas import RunCreate, RunRecord
 from recertia.app.runs import AcceptedRun
 from recertia.errors import ConfigError, Forbidden, NotFound, RateLimited, RecertiaError
@@ -225,9 +231,9 @@ def register_runs_routes(app: FastAPI, rs: RouteState) -> None:
 
         def queue_end() -> str | None:
             row = ctx.queue.get(tenant_id, run_id) if ctx.queue is not None else None
-            if row is None or row.status not in ("dead", "failed"):
+            if row is None or row.status not in QUEUE_END_TERMINALS:
                 return None
-            return ended_run_frame(tenant_id, run_id, row.error_code)
+            return ended_run_frame(tenant_id, run_id, row.status, row.error_code)
 
         return FollowResponse(aiter_follow(follower, follow_settings, ending=queue_end), release)
 

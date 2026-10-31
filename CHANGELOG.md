@@ -91,6 +91,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-reads the program and returns 200 from the stored state. A failed tip checkout in
   `seed_workdir` still returns its original error. 412 `precondition_failed` stays for
   `If-Match` on `PUT` only.
+- **A `follow=1` stream ends for a run the queue marks `cancelled` or `succeeded` with no
+  terminal event** — `GET /v1/runs/{run_id}/events?follow=1` ended early only for `dead` and
+  `failed` queue rows. The standalone worker (`recertia worker`) writes no run events, so
+  every follow of a succeeded or cancelled standalone run held until `RECERTIA_SSE_MAX_S`,
+  and every reconnect held again. The stream now ends on every terminal queue status with
+  one `run.finished` frame that carries the queue's outcome: the payload is exactly
+  `terminal` (`"error"` for `dead` and `failed`, the row's status for `cancelled` and
+  `succeeded`) and `error_code` (the row's, `null` when it has none). The frame has no `id:`
+  because it is not a line of the log. A real terminal event in the log still wins,
+  including the `run.cancelled` an operator cancel logs.
 - **Two processes opening the same new SQLite file both succeed and apply each migration
   once** — the migration runner read `schema_migrations`, ran each file with
   `executescript` (which commits on its own) and then recorded it, so two processes opening

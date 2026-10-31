@@ -156,10 +156,12 @@ def build_default_orchestrator(
         # Stub → None (fail-loud scratch). Non-stub misconfig raises ModelConfigError.
         model, verifier_model = build_solver_and_verifier(cfg)
 
-    # Close what this function opened if wiring fails before the bundle exists; on
-    # success, pop_all() hands every resource to the bundle. LineageServices and the
-    # PolicyDecisionPoint hold no handle to close. The run persistence handle keeps its
-    # own BaseException cleanup below, so the stack never closes it.
+    # Close what this function opened if wiring fails before the bundle exists. On
+    # success, pop_all() disarms the cleanup (it moves the callbacks to a new stack that
+    # is never closed), and the bundle's own close, OrchestratorBundle.close, owns the
+    # index from then on. LineageServices and the PolicyDecisionPoint hold no handle to
+    # close. The run persistence handle keeps its own BaseException cleanup below, so the
+    # stack never closes it.
     with ExitStack() as cleanup:
         lineage = LineageServices.open(runs_root / "lineage")
         store = SkillStore(
@@ -259,7 +261,7 @@ def build_default_orchestrator(
             # The handle holds the shared root lock; do not leak it on a wiring failure.
             persistence.close()
             raise
-        cleanup.pop_all()
+        cleanup.pop_all()  # disarm: from here OrchestratorBundle.close owns the index
     return OrchestratorBundle(orchestrator=orch, index=index, model_config=cfg)
 
 
