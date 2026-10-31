@@ -89,8 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `conflict` for these two cases should match the new codes (or `retryable`) and retry later.
 
   A `RunBusy` that escapes any other route now also answers 409 instead of 500: `run_busy`,
-  retryable, with the error's own message, which names no path (a program route sends it as
-  409 `conflict`, not retryable, with that message).
+  retryable, with the error's own message, which names no path. When the run's lease is held,
+  that message is the fixed `run lease busy`, naming neither a path nor the lock file. A
+  program route sends it as 409 `conflict`, not retryable, with that message.
 
 ### Fixed
 

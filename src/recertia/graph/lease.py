@@ -139,7 +139,7 @@ class RunLease:
 
     def acquire(self) -> int:
         if not self._thread.acquire(blocking=False):
-            raise RunBusy(f"run lease busy: {self.path.name}")
+            raise RunBusy("run lease busy")
         self._held = True
         fd: int | None = None
         try:

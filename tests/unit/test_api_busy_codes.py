@@ -282,7 +282,8 @@ def test_run_busy_from_the_thread_lock_names_no_path(tmp_path: Path) -> None:
 
     ``/v1`` run bodies replace ``RunBusy``'s message with a fixed one, but a ``RunBusy``
     that escapes any other route reaches the app-level ``RecertiaError`` handler, which
-    sends the message as it is. So the message itself must not carry the lock path.
+    sends the message as it is. So the message itself must not carry the lock path, nor
+    the lock file's name or stem: it is the fixed ``run lease busy``.
     """
 
     lock_path = tmp_path / "runs" / "t1" / "locks" / "path-guard.lock"
@@ -309,31 +310,37 @@ def test_run_busy_from_the_thread_lock_names_no_path(tmp_path: Path) -> None:
         assert str(tmp_path) not in text, text
         for sep in separators:
             assert sep not in text, (sep, text)
+        for needle in (lock_path.name, lock_path.stem):  # "path-guard.lock", "path-guard"
+            assert needle not in text, (needle, text)
+    assert message == "run lease busy", message
 
 
 @contextmanager
-def _lease_row_held(tmp_path: Path) -> Iterator[Callable[[], object]]:
+def _lease_row_held(tmp_path: Path) -> Iterator[tuple[Path, Callable[[], object]]]:
     """This run's ``run_leases`` row is held, with a live heartbeat, through another lock file.
 
     A new lease on its own lock file gets its thread lock and its flock, then finds the row
-    held by an owner that has not expired: the row check raises.
+    held by an owner that has not expired: the row check raises. Yields the new lease's lock
+    file and the attempt.
     """
 
     db = tmp_path / "runs" / "runtime.db"
     locks = tmp_path / "runs" / "t1" / "locks"
+    lock_path = locks / "row-guard.lock"
     holder = RunLease(locks / "row-holder.lock", db_path=db, run_id="row-guard")
     holder.acquire()
     try:
-        yield lambda: RunLease(locks / "row-guard.lock", db_path=db, run_id="row-guard").acquire()
+        yield lock_path, lambda: RunLease(lock_path, db_path=db, run_id="row-guard").acquire()
     finally:
         holder.release()
 
 
 @contextmanager
-def _lease_flock_held(tmp_path: Path) -> Iterator[Callable[[], object]]:
+def _lease_flock_held(tmp_path: Path) -> Iterator[tuple[Path, Callable[[], object]]]:
     """Another process holds the lease's lock file, as a second server or CLI run would.
 
-    A lease here gets this process's thread lock, then finds the file's flock taken.
+    A lease here gets this process's thread lock, then finds the file's flock taken. Yields
+    the lock file and the attempt.
     """
 
     lock_path = tmp_path / "runs" / "t1" / "locks" / "flock-guard.lock"
@@ -358,7 +365,7 @@ def _lease_flock_held(tmp_path: Path) -> Iterator[Callable[[], object]]:
         assert proc.stdin is not None and proc.stdout is not None
         try:
             assert proc.stdout.readline().strip() == "held"
-            yield lambda: RunLease(lock_path).acquire()
+            yield lock_path, lambda: RunLease(lock_path).acquire()
         finally:
             proc.stdin.write("\n")
             proc.stdin.flush()
@@ -379,13 +386,14 @@ def test_run_busy_from_the_lease_row_and_the_flock_names_no_path(
 
     As for the thread-lock raise above: a ``RunBusy`` that escapes a route other than run
     start and resume is sent with its own message, so neither the message nor the response
-    may carry the lock path, the database path or the test root.
+    may carry the lock path, the database path, the test root, or the lock file's name or
+    stem: the message is the fixed ``run lease busy``.
     """
 
     separators = ("/", "\\")  # either one, whatever the platform
     app = create_app(root=tmp_path / "api-root")
     try:
-        with held(tmp_path) as attempt:
+        with held(tmp_path) as (lock_path, attempt):
 
             @app.get("/escaped-run-busy")
             def _escaped_run_busy() -> None:
@@ -404,6 +412,9 @@ def test_run_busy_from_the_lease_row_and_the_flock_names_no_path(
         assert str(tmp_path) not in text, text
         for sep in separators:
             assert sep not in text, (sep, text)
+        for needle in (lock_path.name, lock_path.stem):  # "row-guard(.lock)", "flock-guard(.lock)"
+            assert needle not in text, (needle, text)
+    assert message == "run lease busy", message
 
 
 def test_busy_errors_exit_six_on_the_cli() -> None:
