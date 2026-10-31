@@ -10,6 +10,7 @@ import secrets
 import sqlite3
 import time
 from collections import defaultdict
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -128,7 +129,7 @@ class ApiKeyStore:
         self._bind_tenant = self._resolve_bind(bind_tenant)
         self._pepper = self._load_pepper(pepper)
         self._previous_pepper = self._load_previous_pepper()
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS api_keys (
@@ -287,7 +288,7 @@ class ApiKeyStore:
         token = secrets.token_urlsafe(32)
         secret = f"rec_{key_id}.{token}"
         digest = self._hmac(secret, tenant=tenant_id, pepper_id=_CURRENT_PEPPER)
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """INSERT INTO api_keys(
                        key_id, tenant_id, scopes, salt, key_hash, created_at, hash_alg, pepper_id
@@ -405,7 +406,7 @@ class ApiKeyStore:
             return None
         if not structured:
             self._limiter.record_failure(client_ip=client_ip, key_id=None)
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 self._audit(
                     conn,
                     "authentication_failed",
@@ -416,7 +417,7 @@ class ApiKeyStore:
                 )
             return None
 
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             row = conn.execute(
                 """SELECT key_id, tenant_id, scopes, salt, key_hash, hash_alg, pepper_id
                    FROM api_keys WHERE key_id=? AND revoked_at IS NULL""",
@@ -448,7 +449,7 @@ class ApiKeyStore:
         return None
 
     def revoke(self, key_id: str, *, actor: str) -> bool:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
                 "UPDATE api_keys SET revoked_at=?, revoked_by=? WHERE key_id=? AND revoked_at IS NULL",
                 (self._now(), actor, key_id),
@@ -459,7 +460,7 @@ class ApiKeyStore:
         return False
 
     def list_keys(self) -> list[dict[str, str | bool]]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             rows = conn.execute(
                 "SELECT key_id, tenant_id, scopes, created_at, revoked_at FROM api_keys ORDER BY created_at"
             ).fetchall()

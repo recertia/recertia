@@ -221,6 +221,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0, printed the proposal as `approved` and logged a decision to the ledger. It now prints
   `review not found` and exits 1 in both cases, as for a proposal that never existed, and
   nothing is logged to the ledger.
+- API key store closes its database connections.
 
 ### Corrections
 
