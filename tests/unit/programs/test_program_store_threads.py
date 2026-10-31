@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import threading
 from collections import Counter
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -19,25 +18,11 @@ import pytest
 
 from contracts.program import MigrationProgram
 from recertia.programs.store import ProgramStore
+from tests.support.threads import run_together
 
 
 def _program(title: str = "pack") -> MigrationProgram:
     return MigrationProgram(program_id="p1", tenant_id="t1", title=title)
-
-
-def _run_together(workers: list[Callable[[], None]]) -> None:
-    barrier = threading.Barrier(len(workers))
-
-    def start(work: Callable[[], None]) -> None:
-        barrier.wait()
-        work()
-
-    threads = [threading.Thread(target=start, args=(work,)) for work in workers]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=60)
-    assert not any(t.is_alive() for t in threads)
 
 
 def test_threads_sharing_one_store_always_read_a_program_that_exists(tmp_path: Path) -> None:
@@ -78,7 +63,7 @@ def test_threads_sharing_one_store_always_read_a_program_that_exists(tmp_path: P
                     note(f"list {type(exc).__name__}")
 
         writers = [lambda n=n: write(n) for n in range(2)]
-        _run_together(writers + [read for _ in range(4)] + [list_only for _ in range(2)])
+        run_together(writers + [read for _ in range(4)] + [list_only for _ in range(2)])
 
         assert seen == {"saved": 100, "found": 400, "listed": 800}, seen
         stored = store.get("p1", tenant_id="t1")
@@ -122,7 +107,7 @@ def test_concurrent_patches_and_reads_of_one_program_never_get_404(tmp_path: Pat
                 note(client.get(base, headers=headers))
                 note(client.get("/v1/programs", headers=headers))
 
-        _run_together([lambda n=n: patch(n) for n in range(4)] + [read for _ in range(2)])
+        run_together([lambda n=n: patch(n) for n in range(4)] + [read for _ in range(2)])
 
         assert not_found == []
         # A PATCH that loses the version race answers 409; every other request succeeds (no 500).

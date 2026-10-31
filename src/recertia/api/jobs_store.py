@@ -52,6 +52,10 @@ class JobRunRecord:
 class JobRunStore:
     """API-process-only store (#159): it takes no root lock and is covered by the API
     shared ``api.lock``.
+
+    Every thread shares one connection, so ``get`` and ``list`` hold ``_lock`` like the
+    writes do: concurrent ``execute`` calls of the same SQL text share one cached prepared
+    statement and reset each other's (REC-114).
     """
 
     def __init__(self, path: Path | str) -> None:
@@ -120,17 +124,19 @@ class JobRunStore:
             )
 
     def get(self, job_run_id: str, *, tenant_id: str) -> JobRunRecord | None:
-        row = self._conn.execute(
-            "SELECT payload FROM job_runs WHERE job_run_id = ? AND tenant_id = ?",
-            (job_run_id, tenant_id),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM job_runs WHERE job_run_id = ? AND tenant_id = ?",
+                (job_run_id, tenant_id),
+            ).fetchone()
         if row is None:
             return None
         return JobRunRecord(**json.loads(row["payload"]))
 
     def list(self, *, tenant_id: str, limit: int = 50) -> list[JobRunRecord]:
-        rows = self._conn.execute(
-            "SELECT payload FROM job_runs WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?",
-            (tenant_id, max(1, min(limit, 100))),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT payload FROM job_runs WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?",
+                (tenant_id, max(1, min(limit, 100))),
+            ).fetchall()
         return [JobRunRecord(**json.loads(r["payload"])) for r in rows]

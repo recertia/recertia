@@ -39,6 +39,15 @@ class ProposalRecord:
 
 
 class ProposalStore:
+    """Proposals in one SQLite file, on one connection that every thread shares.
+
+    ``get``, ``list``, ``add`` and ``decide``'s write each hold ``_lock``, reads included: the
+    connection's statement cache hands the same prepared statement to every ``execute`` of the
+    same SQL text, so two threads stepping it at once reset each other's statement (REC-114).
+    ``decide`` writes only while the row is still ``pending``, so of two decisions at once,
+    through one store or two, exactly one wins.
+    """
+
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,10 +99,11 @@ class ProposalStore:
         return record
 
     def get(self, proposal_id: str, *, tenant_id: str) -> ProposalRecord | None:
-        row = self._conn.execute(
-            "SELECT payload FROM proposals WHERE proposal_id = ? AND tenant_id = ?",
-            (proposal_id, tenant_id),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM proposals WHERE proposal_id = ? AND tenant_id = ?",
+                (proposal_id, tenant_id),
+            ).fetchone()
         if row is None:
             return None
         return ProposalRecord(**json.loads(row["payload"]))
@@ -120,7 +130,8 @@ class ProposalStore:
             + " AND ".join(clauses)
             + " ORDER BY created_at DESC LIMIT ?"
         )
-        rows = self._conn.execute(sql, params).fetchall()
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
         return [ProposalRecord(**json.loads(r["payload"])) for r in rows]
 
     def decide(
@@ -154,8 +165,15 @@ class ProposalStore:
             "at": datetime.now(timezone.utc).isoformat(),
         }
         with self._lock, self._conn:
-            self._conn.execute(
-                "UPDATE proposals SET status = ?, payload = ? WHERE proposal_id = ? AND tenant_id = ?",
+            changed = self._conn.execute(
+                "UPDATE proposals SET status = ?, payload = ?"
+                " WHERE proposal_id = ? AND tenant_id = ? AND status = 'pending'",
                 (rec.status, json.dumps(rec.to_dict()), proposal_id, tenant_id),
-            )
+            ).rowcount
+        if changed != 1:
+            # Another decision landed between the read above and this write.
+            now = self.get(proposal_id, tenant_id=tenant_id)
+            if now is None:
+                raise KeyError(proposal_id)
+            raise ValueError(f"proposal {proposal_id} is not pending ({now.status})")
         return rec

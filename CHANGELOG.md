@@ -180,6 +180,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each other's statement. A read could then find no row for a program that exists (a
   `PATCH` or `GET` answered 404) or fail on a malformed row (500), and a save's own read
   could fail the same way. Every read now holds the store's lock too.
+- **Proposal and job-run reads no longer fail under concurrent requests, and two decisions
+  on one proposal can no longer both succeed** — the proposal and job-run stores share one
+  SQLite connection across request threads the same way, and their reads (get, list) did
+  not hold the store's lock, so a read could find no row for a record that exists (a 404
+  `proposal not found`) or fail on a malformed one (500). Those reads now hold the lock.
+  Separately, deciding a proposal checked that it was pending and then wrote without
+  checking again, so an approve and a reject sent at once could both answer 200, leave
+  whichever wrote last, and log two decisions to the ledger. The write now applies only
+  while the proposal is still pending; the later decision gets the existing 400
+  "not pending" error, and only the winner is logged.
 
 ### Corrections
 
