@@ -69,7 +69,8 @@ class RunBusy(Busy, RuntimeError):
     It is a ``Busy`` error: ``code = "run_busy"``, 409, retryable, CLI exit 6.
     ``RuntimeError`` stays a base for existing callers. A ``RunBusy`` that escapes a
     route other than run start and resume is sent with its own message, so the message
-    names no path.
+    must name no path. ``tests/unit/test_api_busy_codes.py`` pins this for each raise in
+    ``RunLease.acquire``; a new raise site is held to the same rule.
     """
 
     code = "run_busy"
