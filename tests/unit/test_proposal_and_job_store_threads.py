@@ -200,6 +200,34 @@ def test_two_decisions_through_two_connections_exactly_one_wins(tmp_path: Path) 
             s.close()
 
 
+def test_two_decisions_that_both_read_pending_first_exactly_one_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Hold each decision after its "pending" read until the other one has read too, so both
+    # always reach the write having seen "pending": only the guarded write can refuse one.
+    stores = [ProposalStore(tmp_path / "proposals.sqlite") for _ in range(2)]
+    both_read = threading.Barrier(2, timeout=10)
+    for s in stores:
+
+        def get_then_wait(proposal_id: str, *, tenant_id: str, read: Any = s.get) -> ProposalRecord | None:
+            rec: ProposalRecord | None = read(proposal_id, tenant_id=tenant_id)
+            if (
+                rec is not None
+                and rec.status == "pending"
+                and threading.current_thread() is not threading.main_thread()
+            ):
+                both_read.wait()
+            return rec
+
+        monkeypatch.setattr(s, "get", get_then_wait)
+    try:
+        bad = _exactly_one_wins(_decide_race(stores, trials=20))
+        assert bad == [], f"{len(bad)}/20 trials: {bad[:3]}"
+    finally:
+        for s in stores:
+            s.close()
+
+
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
