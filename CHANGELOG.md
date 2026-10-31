@@ -90,7 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A `RunBusy` that escapes any other route now also answers 409 instead of 500: `run_busy`,
   retryable, with the error's own message, which names no path (a program route sends it as
-  409 `conflict` with that message).
+  409 `conflict`, not retryable, with that message).
 
 ### Fixed
 
@@ -205,15 +205,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whichever wrote last, and log two decisions to the ledger. The write now applies only
   while the proposal is still pending; the later decision gets the existing 400
   "not pending" error, and only the winner is logged.
-- **Deciding a proposal that is deleted mid-request returns 404, not 500** — if the
-  proposal's row was gone by the time the decision read or wrote it, after the route had
-  already found it, `POST /v1/proposals/{proposal_id}/decision` and
-  `POST /v1/reviews/{decision_id}` answered 500. They now answer 404 (`proposal not found`
-  and `review not found`, as for a proposal that never existed), and nothing is logged to
-  the ledger.
+- **Deciding a proposal that is deleted mid-request returns 404, not 500 or a false
+  success** — `POST /v1/proposals/{proposal_id}/decision` and
+  `POST /v1/reviews/{decision_id}` first find the proposal, then the decision reads it again
+  before writing. If the row was gone by that second read, they answered 500
+  `internal error` (an uncaught `KeyError`). If it went between that read and the write,
+  they answered 200 with the proposal as decided (`approved` for an approve) and logged a
+  decision to the ledger for a proposal that no longer existed. They now answer 404 in both
+  cases (`proposal not found` and `review not found`, as for a proposal that never
+  existed), and nothing is logged to the ledger.
 - **`recertia review approve` on a proposal deleted mid-command says `review not found`** —
-  the same vanished row made the CLI command end with an uncaught `KeyError` traceback. It
-  now prints `review not found` and exits 1, as for a proposal that never existed, and
+  the same vanished row made the CLI command end with an uncaught `KeyError` traceback, or
+  report success for a proposal that no longer existed: the traceback if the row was gone
+  by the time the decision read it; if it went between that read and the write, it exited
+  0, printed the proposal as `approved` and logged a decision to the ledger. It now prints
+  `review not found` and exits 1 in both cases, as for a proposal that never existed, and
   nothing is logged to the ledger.
 
 ### Corrections
