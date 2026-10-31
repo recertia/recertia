@@ -64,6 +64,14 @@ def test_threads_sharing_one_proposal_store_always_read_a_proposal_that_exists(t
                 except Exception as exc:
                     out.note(f"read {type(exc).__name__}")
 
+        def get_only() -> None:
+            for _ in range(300):
+                try:
+                    got = store.get("p0", tenant_id="t1")
+                    out.note("found" if got is not None and got.proposal_id == "p0" else "get wrong")
+                except Exception as exc:
+                    out.note(f"get {type(exc).__name__}")
+
         def list_only() -> None:
             for _ in range(200):
                 try:
@@ -73,10 +81,13 @@ def test_threads_sharing_one_proposal_store_always_read_a_proposal_that_exists(t
                     out.note(f"list {type(exc).__name__}")
 
         run_together(
-            [lambda n=n: add(n) for n in range(2)] + [read for _ in range(4)] + [list_only for _ in range(2)]
+            [lambda n=n: add(n) for n in range(2)]
+            + [read for _ in range(4)]
+            + [get_only for _ in range(4)]
+            + [list_only for _ in range(2)]
         )
 
-        assert out.seen == {"added": 100, "found": 400, "listed": 800}, out.seen
+        assert out.seen == {"added": 100, "found": 1600, "listed": 800}, out.seen
     finally:
         store.close()
 
@@ -105,9 +116,30 @@ def test_threads_sharing_one_job_run_store_always_read_a_run_that_exists(tmp_pat
                 except Exception as exc:
                     out.note(f"read {type(exc).__name__}")
 
-        run_together([lambda n=n: save(n) for n in range(2)] + [read for _ in range(4)])
+        def get_only() -> None:
+            for _ in range(300):
+                try:
+                    got = store.get(rec.job_run_id, tenant_id="t1")
+                    out.note("found" if got is not None and got.job_run_id == rec.job_run_id else "get wrong")
+                except Exception as exc:
+                    out.note(f"get {type(exc).__name__}")
 
-        assert out.seen == {"saved": 100, "found": 400, "listed": 400}, out.seen
+        def list_only() -> None:
+            for _ in range(200):
+                try:
+                    listed = [r.job_run_id for r in store.list(tenant_id="t1")]
+                    out.note("listed" if listed == [rec.job_run_id] else f"list {len(listed)}")
+                except Exception as exc:
+                    out.note(f"list {type(exc).__name__}")
+
+        run_together(
+            [lambda n=n: save(n) for n in range(2)]
+            + [read for _ in range(4)]
+            + [get_only for _ in range(4)]
+            + [list_only for _ in range(2)]
+        )
+
+        assert out.seen == {"saved": 100, "found": 1600, "listed": 800}, out.seen
     finally:
         store.close()
 
@@ -120,7 +152,9 @@ def _decide_race(stores: list[ProposalStore], trials: int) -> list[dict[str, str
         stores[0].add(_proposal(f"d{t}"))
         got: dict[str, str] = {}
 
-        def decide(decision: str, store: ProposalStore, pid: str = f"d{t}") -> None:
+        def decide(
+            decision: str, store: ProposalStore, pid: str = f"d{t}", got: dict[str, str] = got
+        ) -> None:
             try:
                 got[decision] = store.decide(pid, tenant_id="t1", decision=decision, actor=decision).status
             except ValueError as exc:
@@ -185,7 +219,7 @@ def test_concurrent_approve_and_reject_through_the_api_one_wins_and_one_ledger_e
             proposals.add(_proposal(f"api{t}"))
             got: dict[str, Any] = {}
 
-            def post(decision: str, pid: str = f"api{t}") -> None:
+            def post(decision: str, pid: str = f"api{t}", got: dict[str, Any] = got) -> None:
                 got[decision] = client.post(
                     f"/v1/proposals/{pid}/decision", headers=headers, json={"decision": decision}
                 )

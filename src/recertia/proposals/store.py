@@ -171,7 +171,7 @@ class ProposalStore:
                 (rec.status, json.dumps(rec.to_dict()), proposal_id, tenant_id),
             ).rowcount
         if changed != 1:
-            # Another decision landed between the read above and this write.
+            # Another decision landed between the read above and this write, or the row is gone.
             now = self.get(proposal_id, tenant_id=tenant_id)
             if now is None:
                 raise KeyError(proposal_id)
