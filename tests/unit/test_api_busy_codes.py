@@ -28,6 +28,7 @@ from recertia.persistence.layout import RuntimeLayout
 from recertia.runtime.errors import WorkspaceBusy
 from recertia.runtime.workspace_lock import WorkspaceLock
 from recertia.workers.queue import QueueItem
+from tests.support.idempotency import close_app
 
 _SRC = Path(__file__).resolve().parents[2] / "src"
 _ROUTE_LOGGER = "recertia.api.routes.runs"
@@ -272,6 +273,40 @@ def test_foreign_tenant_holder_never_reaches_the_body(
         run_id="run-a2",
         absent=(tenant_b, run_b, str(resume_dir), str(tmp_path), "details"),
     )
+
+
+def test_run_busy_from_the_thread_lock_names_no_path(tmp_path: Path) -> None:
+    """Another thread of this process holds the run's lease, so the per-path lock is taken.
+
+    ``/v1`` run bodies replace ``RunBusy``'s message with a fixed one, but a ``RunBusy``
+    that escapes any other route reaches the app-level ``RecertiaError`` handler, which
+    sends the message as it is. So the message itself must not carry the lock path.
+    """
+
+    lock_path = tmp_path / "runs" / "t1" / "locks" / "path-guard.lock"
+    separators = ("/", "\\")  # either one, whatever the platform
+    app = create_app(root=tmp_path / "api-root")
+
+    @app.get("/escaped-run-busy")
+    def _escaped_run_busy() -> None:
+        RunLease(lock_path).acquire()
+
+    holder = RunLease(lock_path)
+    holder.acquire()
+    try:
+        with pytest.raises(RunBusy) as raised:
+            RunLease(lock_path).acquire()
+        response = TestClient(app).get("/escaped-run-busy")
+    finally:
+        holder.release()
+        close_app(app)
+    message = raised.value.message
+    assert response.status_code == 409, response.text
+    assert response.json() == {"error": {"code": "run_busy", "message": message, "retryable": True}}
+    for text in (message, response.text):
+        assert str(tmp_path) not in text, text
+        for sep in separators:
+            assert sep not in text, (sep, text)
 
 
 def test_busy_errors_exit_six_on_the_cli() -> None:
