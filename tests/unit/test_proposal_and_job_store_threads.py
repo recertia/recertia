@@ -237,12 +237,13 @@ def test_two_decisions_that_both_read_pending_first_exactly_one_wins(
 class _OneAtATime:
     """Stands in for a store's connection and records when two threads use it at once.
 
-    An ``UPDATE`` holds the connection for up to ``hold`` seconds, or until another thread
-    gets in, so a write that runs outside the store lock is caught every time, not by chance.
+    A statement starting with ``hold_on`` holds the connection for up to ``hold`` seconds, or
+    until another thread gets in, so a statement run outside the store lock is caught every
+    time, not by chance.
     """
 
-    def __init__(self, conn: sqlite3.Connection, hold: float) -> None:
-        self._conn, self._hold = conn, hold
+    def __init__(self, conn: sqlite3.Connection, hold_on: str, hold: float = 0.05) -> None:
+        self._conn, self._hold_on, self._hold = conn, hold_on, hold
         self._guard = threading.Lock()
         self._inside = 0
         self._other_got_in = threading.Event()
@@ -256,7 +257,7 @@ class _OneAtATime:
                 self.overlaps += 1
                 self._other_got_in.set()
         try:
-            if sql.lstrip().startswith("UPDATE"):
+            if sql.startswith(self._hold_on):
                 self.held += 1
                 self._other_got_in.wait(self._hold)
             return self._conn.execute(sql, params)
@@ -278,13 +279,52 @@ def test_decide_writes_while_no_other_thread_uses_the_connection(tmp_path: Path)
     # Each decision's UPDATE waits on the shared connection for the other decision to get in.
     # The store lock keeps it out, so the wait ends by timeout and nothing overlaps.
     store = ProposalStore(tmp_path / "proposals.sqlite")
-    conn = _OneAtATime(store._conn, hold=0.05)
+    conn = _OneAtATime(store._conn, hold_on="UPDATE proposals")
     store._conn = conn  # type: ignore[assignment]
     try:
         bad = _exactly_one_wins(_decide_race([store], trials=10))
         assert bad == [], f"{len(bad)}/10 trials: {bad[:3]}"
         assert conn.held >= 10, conn.held
         assert conn.overlaps == 0, conn.overlaps
+    finally:
+        store._conn = conn._conn
+        store.close()
+
+
+def test_job_run_list_reads_while_no_other_thread_uses_the_connection(tmp_path: Path) -> None:
+    # Each list holds the shared connection until a thread that keeps reading the run gets in.
+    # The store lock keeps it out, so the hold ends by timeout and nothing overlaps.
+    store = JobRunStore(tmp_path / "jobs.sqlite")
+    rec = store.create("mine", tenant_id="t1")
+    conn = _OneAtATime(store._conn, hold_on="SELECT payload FROM job_runs WHERE tenant_id")
+    store._conn = conn  # type: ignore[assignment]
+    listing_done = threading.Event()
+    out = _Outcomes()
+
+    def list_runs() -> None:
+        try:
+            for _ in range(10):
+                out.note(
+                    "listed"
+                    if [r.job_run_id for r in store.list(tenant_id="t1")] == [rec.job_run_id]
+                    else "list wrong"
+                )
+        finally:
+            listing_done.set()
+
+    def keep_getting() -> None:
+        while not listing_done.is_set():
+            try:
+                got = store.get(rec.job_run_id, tenant_id="t1")
+                out.note("found" if got is not None else "get missing")
+            except Exception as exc:  # an overlap can break the read; the counts below report it
+                out.note(f"get {type(exc).__name__}")
+
+    try:
+        run_together([list_runs, keep_getting])
+        assert conn.held == 10, conn.held
+        assert conn.overlaps == 0, (conn.overlaps, out.seen)
+        assert out.seen["listed"] == 10 and set(out.seen) <= {"listed", "found"}, out.seen
     finally:
         store._conn = conn._conn
         store.close()
