@@ -56,13 +56,20 @@ _LEASE_COLUMNS = (
 
 
 class RunBusy(Busy, RuntimeError):
-    """Another live owner, in this process or another, holds this run's lease.
+    """This run is busy, so it can't be started or resumed now.
 
     ``RunLease.acquire`` raises it in three places: when another thread of this process
     holds the lease (the per-path thread lock), when a ``run_leases`` row is still
-    ``held`` by an owner whose heartbeat has not expired, and when another process
-    holds the lock file's ``flock``. It is a ``Busy`` error: ``code = "run_busy"``,
-    409, retryable, CLI exit 6. ``RuntimeError`` stays a base for existing callers.
+    ``held`` by an owner whose heartbeat has not expired, and, off Windows only, when
+    another process holds the lock file's ``flock`` (``_flock_exclusive`` is a no-op on
+    Windows). The run service also raises it without any lease: ``resume`` when the
+    run's queue row is still queued, claimed or running, and a create's sync wait
+    (``_enqueue_run``) when the run ended ``run_busy``.
+
+    It is a ``Busy`` error: ``code = "run_busy"``, 409, retryable, CLI exit 6.
+    ``RuntimeError`` stays a base for existing callers. A ``RunBusy`` that escapes a
+    route other than run start and resume is sent with its own message, so the message
+    names no path.
     """
 
     code = "run_busy"
