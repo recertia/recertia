@@ -12,7 +12,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -302,6 +302,101 @@ def test_run_busy_from_the_thread_lock_names_no_path(tmp_path: Path) -> None:
     finally:
         holder.release()
         close_app(app)
+    message = raised.value.message
+    assert response.status_code == 409, response.text
+    assert response.json() == {"error": {"code": "run_busy", "message": message, "retryable": True}}
+    for text in (message, response.text):
+        assert str(tmp_path) not in text, text
+        for sep in separators:
+            assert sep not in text, (sep, text)
+
+
+@contextmanager
+def _lease_row_held(tmp_path: Path) -> Iterator[Callable[[], object]]:
+    """This run's ``run_leases`` row is held, with a live heartbeat, through another lock file.
+
+    A new lease on its own lock file gets its thread lock and its flock, then finds the row
+    held by an owner that has not expired: the row check raises.
+    """
+
+    db = tmp_path / "runs" / "runtime.db"
+    locks = tmp_path / "runs" / "t1" / "locks"
+    holder = RunLease(locks / "row-holder.lock", db_path=db, run_id="row-guard")
+    holder.acquire()
+    try:
+        yield lambda: RunLease(locks / "row-guard.lock", db_path=db, run_id="row-guard").acquire()
+    finally:
+        holder.release()
+
+
+@contextmanager
+def _lease_flock_held(tmp_path: Path) -> Iterator[Callable[[], object]]:
+    """Another process holds the lease's lock file, as a second server or CLI run would.
+
+    A lease here gets this process's thread lock, then finds the file's flock taken.
+    """
+
+    lock_path = tmp_path / "runs" / "t1" / "locks" / "flock-guard.lock"
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from recertia.graph.lease import RunLease\n"
+        "lease = RunLease(Path(sys.argv[1]))\n"
+        "lease.acquire()\n"
+        "print('held', flush=True)\n"
+        "sys.stdin.readline()\n"
+        "lease.release()\n"
+    )
+    env = {**os.environ, "PYTHONPATH": str(_SRC)}
+    with subprocess.Popen(
+        [sys.executable, "-c", script, str(lock_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        env=env,
+    ) as proc:
+        assert proc.stdin is not None and proc.stdout is not None
+        try:
+            assert proc.stdout.readline().strip() == "held"
+            yield lambda: RunLease(lock_path).acquire()
+        finally:
+            proc.stdin.write("\n")
+            proc.stdin.flush()
+            proc.wait(timeout=30)
+
+
+@pytest.mark.parametrize(
+    ("held", "raised_in"),
+    [
+        pytest.param(_lease_row_held, "_record_acquire", id="run-leases-row"),
+        pytest.param(_lease_flock_held, "_flock_exclusive", id="flock", marks=posix_flock),
+    ],
+)
+def test_run_busy_from_the_lease_row_and_the_flock_names_no_path(
+    tmp_path: Path, held: Callable[[Path], Any], raised_in: str
+) -> None:
+    """The other two ``RunBusy`` raises in ``RunLease.acquire`` also name no path.
+
+    As for the thread-lock raise above: a ``RunBusy`` that escapes a route other than run
+    start and resume is sent with its own message, so neither the message nor the response
+    may carry the lock path, the database path or the test root.
+    """
+
+    separators = ("/", "\\")  # either one, whatever the platform
+    app = create_app(root=tmp_path / "api-root")
+    try:
+        with held(tmp_path) as attempt:
+
+            @app.get("/escaped-run-busy")
+            def _escaped_run_busy() -> None:
+                attempt()
+
+            with pytest.raises(RunBusy) as raised:
+                attempt()
+            response = TestClient(app).get("/escaped-run-busy")
+    finally:
+        close_app(app)
+    assert raised.traceback[-1].name == raised_in, raised.traceback[-1]
     message = raised.value.message
     assert response.status_code == 409, response.text
     assert response.json() == {"error": {"code": "run_busy", "message": message, "retryable": True}}
