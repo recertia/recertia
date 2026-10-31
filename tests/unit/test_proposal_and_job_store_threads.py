@@ -239,7 +239,8 @@ class _OneAtATime:
 
     A statement starting with ``hold_on`` holds the connection for up to ``hold`` seconds, or
     until another thread gets in, so a statement run outside the store lock is caught every
-    time, not by chance.
+    time, not by chance. Each hold waits afresh: the "got in" flag is cleared when a hold ends,
+    so an overlap seen by one hold does not cut the next one short.
     """
 
     def __init__(self, conn: sqlite3.Connection, hold_on: str, hold: float = 0.05) -> None:
@@ -260,6 +261,7 @@ class _OneAtATime:
             if sql.startswith(self._hold_on):
                 self.held += 1
                 self._other_got_in.wait(self._hold)
+                self._other_got_in.clear()
             return self._conn.execute(sql, params)
         finally:
             with self._guard:
@@ -322,6 +324,45 @@ def test_job_run_list_reads_while_no_other_thread_uses_the_connection(tmp_path: 
 
     try:
         run_together([list_runs, keep_getting])
+        assert conn.held == 10, conn.held
+        assert conn.overlaps == 0, (conn.overlaps, out.seen)
+        assert out.seen["listed"] == 10 and set(out.seen) <= {"listed", "found"}, out.seen
+    finally:
+        store._conn = conn._conn
+        store.close()
+
+
+def test_proposal_list_reads_while_no_other_thread_uses_the_connection(tmp_path: Path) -> None:
+    # Each list holds the shared connection until a thread that keeps reading the proposal gets
+    # in. The store lock keeps it out, so the hold ends by timeout and nothing overlaps.
+    store = ProposalStore(tmp_path / "proposals.sqlite")
+    rec = store.add(_proposal("p1"))
+    conn = _OneAtATime(store._conn, hold_on="SELECT payload FROM proposals WHERE tenant_id")
+    store._conn = conn  # type: ignore[assignment]
+    listing_done = threading.Event()
+    out = _Outcomes()
+
+    def list_proposals() -> None:
+        try:
+            for _ in range(10):
+                out.note(
+                    "listed"
+                    if [r.proposal_id for r in store.list(tenant_id="t1")] == [rec.proposal_id]
+                    else "list wrong"
+                )
+        finally:
+            listing_done.set()
+
+    def keep_getting() -> None:
+        while not listing_done.is_set():
+            try:
+                got = store.get(rec.proposal_id, tenant_id="t1")
+                out.note("found" if got is not None else "get missing")
+            except Exception as exc:  # an overlap can break the read; the counts below report it
+                out.note(f"get {type(exc).__name__}")
+
+    try:
+        run_together([list_proposals, keep_getting])
         assert conn.held == 10, conn.held
         assert conn.overlaps == 0, (conn.overlaps, out.seen)
         assert out.seen["listed"] == 10 and set(out.seen) <= {"listed", "found"}, out.seen
