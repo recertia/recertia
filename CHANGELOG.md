@@ -88,6 +88,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logged at WARNING on the server, and the CLI still prints it. Clients that matched
   `conflict` for these two cases should match the new codes (or `retryable`) and retry later.
 
+  A `RunBusy` that escapes any other route now also answers 409 instead of 500: `run_busy`,
+  retryable, with the error's own message, which names no path (a program route sends it as
+  409 `conflict` with that message).
+
 ### Fixed
 
 - **A program write that loses a race returns 409 `conflict` instead of overwriting the
