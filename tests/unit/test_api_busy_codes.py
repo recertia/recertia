@@ -221,9 +221,11 @@ def test_create_logs_busy_details_server_side_only(tmp_path: Path, caplog: pytes
     root = tmp_path / "api-root"
     app, headers = _app(root, "t1")
     workdir = _workdir(root, "t1", "logged-ws")
-    with _foreign_holder(root, workdir, "t1/holder-run"):
-        with caplog.at_level(logging.WARNING, logger=_ROUTE_LOGGER):
-            response = TestClient(app).post("/v1/runs", json=_create_body("logged-ws"), headers=headers["t1"])
+    with (
+        _foreign_holder(root, workdir, "t1/holder-run"),
+        caplog.at_level(logging.WARNING, logger=_ROUTE_LOGGER),
+    ):
+        response = TestClient(app).post("/v1/runs", json=_create_body("logged-ws"), headers=headers["t1"])
     _assert_busy(
         response,
         code="workspace_busy",
@@ -322,9 +324,8 @@ def test_cli_side_workspace_busy_keeps_its_details(tmp_path: Path) -> None:
     root = tmp_path / "root"
     workdir = (tmp_path / "wd").resolve()
     workdir.mkdir()
-    with _foreign_holder(root, workdir, "t1/holder-run"):
-        with pytest.raises(WorkspaceBusy) as raised:
-            _locks(root).acquire(workdir, owner_id="t1/other")
+    with _foreign_holder(root, workdir, "t1/holder-run"), pytest.raises(WorkspaceBusy) as raised:
+        _locks(root).acquire(workdir, owner_id="t1/other")
     assert raised.value.details == {"workdir": str(workdir), "holder_owner_id": "t1/holder-run"}
     assert str(workdir) in raised.value.message
     err = raised.value.error_body()["error"]
