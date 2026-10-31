@@ -940,11 +940,12 @@ def test_the_queue_end_frame_has_only_the_ruled_keys(
     elapsed, resp = _elapsed(env)
     assert types(resp.text) == ["run.started", "run.finished"]
     data = _queue_frame(resp.text, status)
+    terminal = "error" if status in ("dead", "failed") else status
     assert data == {
         "run_id": "r",
         "tenant_id": "t1",
         "type": "run.finished",
-        "payload": {"terminal": "error" if error_code else status, "error_code": error_code},
+        "payload": {"terminal": terminal, "error_code": error_code},
     }
     assert "None" not in resp.text  # a NULL error_code is JSON null, never the text None
     assert elapsed < 2

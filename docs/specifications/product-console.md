@@ -255,7 +255,8 @@ is sent and the stream ends. Otherwise the stream sends `run.finished` with payl
 `terminal` is `"error"` for a `dead` or `failed` row and the row's own status (`"cancelled"`
 or `"succeeded"`) for the others, and `error_code` is the row's error code (`null` when it
 has none). For a `failed` row with `run_busy`, the frame ends the follow, not necessarily
-the run: another process held the run's lease, and a later resume can start the run again. A
+the run: another live owner, in this process or another, held the run's lease, and a resume
+after it releases the lease can start the run again. A
 real operator cancel logs `run.cancelled`, and the stream ends on that logged event; for a
 `cancelled` row whose log has no terminal event, the frame is `run.finished` with
 `terminal: "cancelled"`. Clients treat both `run.cancelled` and `run.finished` as terminal.
