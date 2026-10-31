@@ -4269,9 +4269,10 @@ The service checks `If-Match` against the version it read, and the store compare
 same version and writes in one transaction. So of two `PUT` requests that read the same
 version exactly one saves, and a write that lands between a `PUT`'s read and its save
 makes the `PUT` fail with 412. A rejected `PUT` writes nothing. The other program write
-routes (accept, abandon, step patch, preview, bind, skip, repo binding, record tip, seed
-workdir) still save without a version check; they bump `version` too, so concurrent
-writes through them can still overwrite each other.
+routes (accept, abandon, step patch, step run, skip, repo binding, record tip) now save
+only if the stored `version` is still the one they read, so one that loses a race writes
+nothing and returns 409 `conflict` with `details.stored_version` (preview instead reads
+the program again, and seed workdir keeps its own error).
 
 ---
 
