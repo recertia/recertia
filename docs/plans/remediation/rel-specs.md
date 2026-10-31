@@ -1238,6 +1238,8 @@ On resume, `op_once` returns the stored dict and does not call `complete`. The m
 
 The body is the S4 envelope. `details` includes `holder_owner_id` for busy codes and `seq` for checkpoint conflicts. Today's `HTTPException(409, detail="run_id already exists")` (`api/__init__.py:385`) is replaced by `RunIdExists`.
 
+Note (2026-10-31): REC-108 supersedes the `holder_owner_id` clause above for `/v1`. A `/v1` `run_busy` or `workspace_busy` body has no `details` key, and its `message` is the fixed code (`"run_busy"` or `"workspace_busy"`), because the workspace lock is keyed by path, not tenant, so its holder can be another tenant's run. The full error, with its details, is logged server-side at WARNING, and the CLI keeps the details and the path.
+
 #### Single node and multi node
 
 Single node: flock plus `runtime.db`. Multi node: the same tables in Postgres, advisory locks instead of flock, RLS as in REL-10. The Python classes do not branch on deployment mode except for the lock backend, selected by `LeaseBackend` (`file` or `postgres`) from `Settings`.

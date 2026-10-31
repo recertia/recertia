@@ -76,6 +76,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is a configuration error; outside `runs/` the tenant is `local`.
 - A keyed step-run bind on a runtime with no idempotency store open returns 503
   `unavailable` and binds nothing; before, it failed with an `AttributeError`.
+- **`run_busy` and `workspace_busy` on `/v1` now carry their own retryable codes.** A run
+  start or resume that finds the run's lease or its workspace held still answers 409, but:
+  - `run_busy`: `code` `conflict` → `run_busy`, `retryable` `false` → `true`; the CLI exits
+    **6** instead of 7 (`RunBusy` is now a `Busy` error).
+  - `workspace_busy`: `code` `conflict` → `workspace_busy`, `retryable` `false` → `true`; the
+    CLI exit is unchanged at 6.
+
+  Both `/v1` busy bodies carry a fixed `message` (`"run_busy"` or `"workspace_busy"`) with no
+  path and no `details` key. The full error, including the workdir and the lock holder, is
+  logged at WARNING on the server, and the CLI still prints it. Clients that matched
+  `conflict` for these two cases should match the new codes (or `retryable`) and retry later.
 
 ### Fixed
 

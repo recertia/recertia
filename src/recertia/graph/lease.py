@@ -12,6 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from recertia.errors import Busy
 from recertia.persistence.db import open_db
 from recertia.persistence.fence import attach_lease_schema, lease_paths_equal, require_lease_token
 
@@ -54,8 +55,17 @@ _LEASE_COLUMNS = (
 )
 
 
-class RunBusy(RuntimeError):
-    """Another process holds this run's lease."""
+class RunBusy(Busy, RuntimeError):
+    """Another live owner, in this process or another, holds this run's lease.
+
+    ``RunLease.acquire`` raises it in three places: when another thread of this process
+    holds the lease (the per-path thread lock), when a ``run_leases`` row is still
+    ``held`` by an owner whose heartbeat has not expired, and when another process
+    holds the lock file's ``flock``. It is a ``Busy`` error: ``code = "run_busy"``,
+    409, retryable, CLI exit 6. ``RuntimeError`` stays a base for existing callers.
+    """
+
+    code = "run_busy"
 
 
 def _thread_lock(key: str) -> threading.Lock:

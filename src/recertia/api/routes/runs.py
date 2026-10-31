@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -27,7 +28,7 @@ from recertia.api.routes.follow_stream import (
 )
 from recertia.api.schemas import RunCreate, RunRecord
 from recertia.app.runs import AcceptedRun
-from recertia.errors import ConfigError, Forbidden, NotFound, RateLimited, RecertiaError
+from recertia.errors import Busy, ConfigError, Forbidden, NotFound, RateLimited, RecertiaError
 from recertia.graph.engine import RunIdExistsError
 from recertia.graph.lease import RunBusy
 from recertia.persistence.root_lock import RootBusy
@@ -36,6 +37,8 @@ from recertia.solver.sandbox import SandboxError
 from recertia.solver.transcript import TranscriptStore
 from recertia.trajectory.store import TrajectoryStore
 
+_log = logging.getLogger(__name__)
+
 
 def _tenant_owns_run(ctx: Any, tenant_id: str, run_id: str) -> bool:
     if (tenant_id, run_id) in ctx.runs:
@@ -43,6 +46,19 @@ def _tenant_owns_run(ctx: Any, tenant_id: str, run_id: str) -> bool:
     if ctx.events.exists(tenant_id, run_id):
         return True
     return ctx.load_from_checkpoints(ctx.root, tenant_id, run_id) is not None
+
+
+def _busy_response(exc: Busy, *, run_id: str | None) -> JSONResponse:
+    """``run_busy`` / ``workspace_busy`` on ``/v1``: own code, 409, retryable, fixed message.
+
+    The body never carries the error's message or ``details``. Both can name the run's
+    workdir, and a workspace lock is keyed by path, not by tenant, so its
+    ``holder_owner_id`` can be another tenant's run. The full error is logged here instead.
+    ``run_id`` is the caller's own, from the request.
+    """
+
+    _log.warning("/v1 run route answered %s: %s; details=%s", exc.code, exc.message, exc.details)
+    return v1_error(409, code=exc.code, message=exc.code, run_id=run_id, retryable=True)
 
 
 def _map_run_error(exc: BaseException, *, run_id: str | None = None) -> Any:
@@ -64,10 +80,8 @@ def _map_run_error(exc: BaseException, *, run_id: str | None = None) -> Any:
         raise HTTPException(status_code=404, detail=exc.message) from exc
     if isinstance(exc, (RunIdExists, RunIdExistsError)):
         raise HTTPException(status_code=409, detail="run_id already exists") from exc
-    if isinstance(exc, WorkspaceBusy):
-        raise HTTPException(status_code=409, detail="workspace_busy") from exc
-    if isinstance(exc, RunBusy):
-        raise HTTPException(status_code=409, detail="run_busy") from exc
+    if isinstance(exc, (WorkspaceBusy, RunBusy)):
+        return _busy_response(exc, run_id=run_id)
     if isinstance(exc, ConfigError):
         raise HTTPException(status_code=400, detail=exc.message) from exc
     if isinstance(exc, RootBusy):
