@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from recertia.cli.main import app
@@ -272,6 +273,62 @@ def test_review_approve_does_not_write_lifecycle_approved(tmp_path: Path) -> Non
     assert approved.exit_code == 0, approved.output
     assert json.loads(approved.output)["status"] == "approved"
     assert skills.get_status("add-gitignore-entry", 1).lifecycle == "draft"
+
+
+@pytest.mark.parametrize(
+    "vanish_after_read", [1, 2], ids=["after-the-library-read", "between-decide-read-and-update"]
+)
+def test_review_approve_on_a_proposal_that_vanishes_says_review_not_found_and_writes_no_ledger_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, vanish_after_read: int
+) -> None:
+    # Read 1 is the library's own lookup and read 2 is decide's "pending" read. Deleting the row
+    # right after read 1 makes decide's read find no row; right after read 2, its UPDATE changes
+    # no row and its re-read finds none. Either way: "review not found", exit 1, no traceback.
+    import sqlite3
+    from contextlib import closing
+
+    from recertia.ledger import HashChainLedger
+    from recertia.proposals.store import ProposalRecord, ProposalStore
+
+    runs_root = tmp_path / "root"
+    store = ProposalStore(runs_root / "proposals.sqlite")
+    store.add(
+        ProposalRecord(
+            proposal_id="gone",
+            kind="skill",
+            skill_id="add-gitignore-entry",
+            version=1,
+            rationale="review",
+            tenant_id="default",
+        )
+    )
+    store.close()
+    reads: list[str] = []
+    read = ProposalStore.get
+
+    def get_then_vanish(self: ProposalStore, proposal_id: str, *, tenant_id: str) -> ProposalRecord | None:
+        rec = read(self, proposal_id, tenant_id=tenant_id)
+        reads.append("found" if rec is not None else "missing")
+        if len(reads) == vanish_after_read:
+            # As another process would: through its own connection on the same file.
+            with closing(sqlite3.connect(runs_root / "proposals.sqlite")) as conn, conn:
+                conn.execute("DELETE FROM proposals WHERE proposal_id = ?", (proposal_id,))
+        return rec
+
+    monkeypatch.setattr(ProposalStore, "get", get_then_vanish)
+    approved = runner.invoke(
+        app,
+        ["review", "approve", "gone", "--runs-root", str(runs_root), "--tenant", "default"],
+    )
+
+    # A clean exit 1 (typer.Exit), not an exception the runner caught (that also reports exit 1).
+    assert isinstance(approved.exception, SystemExit), repr(approved.exception)
+    assert approved.exit_code == 1, (approved.exit_code, approved.output, approved.exception)
+    assert approved.stderr.strip() == "review not found", approved.stderr
+    assert approved.stdout == "", approved.stdout
+    assert reads == ["found"] * vanish_after_read + ["missing"], reads
+    ledger = runs_root / "runs" / "default" / "ledger.jsonl"
+    assert not ledger.exists() or list(HashChainLedger(ledger).entries()) == []
 
 
 def test_facts_list_cases_show_proposals_queue(tmp_path: Path) -> None:
