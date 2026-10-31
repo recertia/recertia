@@ -172,6 +172,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it now logs the exception. A failed run open also no longer leaves the skill index's
   database connection open: when wiring the run fails (the persistence open, an index
   rebuild, or a later step), that connection is closed.
+- **Concurrent requests to one program no longer get a false 404 `program not found`** —
+  the program store keeps one SQLite connection per process, and the program routes run on
+  a thread pool, but only a save held the store's lock: reads (get a program, list
+  programs) used the connection unlocked. Its statement cache hands the same prepared
+  statement to every run of the same SQL text, so two threads stepping it at once reset
+  each other's statement. A read could then find no row for a program that exists (a
+  `PATCH` or `GET` answered 404) or fail on a malformed row (500), and a save's own read
+  could fail the same way. Every read now holds the store's lock too.
 
 ### Corrections
 

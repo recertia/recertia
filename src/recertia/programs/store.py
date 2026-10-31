@@ -16,6 +16,14 @@ from recertia.runtime.errors import PreconditionFailed
 
 
 class ProgramStore:
+    """Programs in one SQLite file, on one connection that every thread shares.
+
+    ``get``, ``list`` and ``put`` each hold ``_lock``, reads included. The connection's
+    statement cache hands the same prepared statement to every ``execute`` of the same SQL
+    text, so two threads stepping it at once reset each other's statement: a read could get
+    no row for a program that exists, or a malformed one.
+    """
+
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -111,10 +119,11 @@ class ProgramStore:
         return program
 
     def get(self, program_id: str, *, tenant_id: str) -> MigrationProgram | None:
-        row = self._conn.execute(
-            "SELECT payload FROM programs WHERE program_id = ? AND tenant_id = ?",
-            (program_id, tenant_id),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM programs WHERE program_id = ? AND tenant_id = ?",
+                (program_id, tenant_id),
+            ).fetchone()
         if row is None:
             return None
         return MigrationProgram.model_validate(json.loads(row["payload"]))
@@ -137,7 +146,8 @@ class ProgramStore:
             + " AND ".join(clauses)
             + " ORDER BY updated_at DESC LIMIT ?"
         )
-        rows = self._conn.execute(sql, params).fetchall()
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
         return [MigrationProgram.model_validate(json.loads(r["payload"])) for r in rows]
 
 
