@@ -19,7 +19,7 @@ from recertia.api.schemas import (
     StepRunBody,
     StepSkipBody,
 )
-from recertia.errors import ConfigError, RecertiaError
+from recertia.errors import ConfigError, Conflict, RecertiaError
 from recertia.persistence.db import MigrationChecksumError
 from recertia.persistence.root_lock import RootBusy
 from recertia.runtime.errors import (
@@ -31,6 +31,7 @@ from recertia.runtime.errors import (
 )
 
 _OWN_CODE_ERRORS = (
+    Conflict,
     RootBusy,
     PreconditionFailed,
     PreconditionRequired,
@@ -48,10 +49,11 @@ _IF_MATCH_RE = re.compile(r'(?:"([0-9]{1,18})"|([0-9]{1,18}))')
 def _map_program_error(exc: RecertiaError) -> HTTPException:
     if isinstance(exc, _OWN_CODE_ERRORS):
         # Re-raise for the app-level RecertiaError handler, which sends the error's own code
-        # (root_busy, precondition_failed, precondition_required, idempotency_mismatch,
-        # idempotency_in_progress, state_corrupt), its details and Retry-After. A plain
-        # HTTPException would say unavailable for root_busy and state_corrupt or conflict for
-        # the idempotency errors, and drop details.stored_version.
+        # (conflict, root_busy, precondition_failed, precondition_required,
+        # idempotency_mismatch, idempotency_in_progress, state_corrupt), its details and
+        # Retry-After. A plain HTTPException would say unavailable for root_busy and
+        # state_corrupt or conflict for the idempotency errors, and drop
+        # details.stored_version (412, and the 409 of a program save that lost a race).
         raise exc
     detail: Any = exc.details.get("http_detail", exc.message) if exc.details else exc.message
     return HTTPException(status_code=exc.http_status, detail=detail)

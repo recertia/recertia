@@ -21,9 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every other program route whose response has a top-level `program` sends the same `ETag`:
   create, `from-pack`, `accept`, `abandon`, step `PATCH`, `skip`, `record-tip`,
   `repo-binding`, and a step `run` that binds or replays. Error responses send none.
-- Only `PUT` checks `If-Match`. The other program write routes, including step preview,
-  save unconditionally (they do bump `version`), so concurrent writes through them can
-  still overwrite each other.
 - **Behaviour change:** for API clients, `PUT /v1/programs/{program_id}` on an existing
   program without `If-Match` returns 428 `precondition_required`.
 - `idempotency_key` on `POST /v1/programs/{program_id}/steps/{step_id}/run` is durable: keys
@@ -82,6 +79,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A program write that loses a race returns 409 `conflict` instead of overwriting the
+  other write** — before, only `PUT` checked the version: `accept`, `abandon`, step
+  `PATCH`, step `run`, `skip`, `repo-binding`, `record-tip` and step preview read a program
+  and saved it back unconditionally, so a write that landed in between was silently lost
+  (the race this file listed as open under `[Unreleased]`). Each of these routes now saves
+  only if the stored `version` is still the one it read. A route that loses returns 409
+  `conflict`, not retryable, with `details.stored_version`, saves nothing and does not
+  retry; re-read the program and try again. A keyed step-run bind that loses leaves no
+  `pending` idempotency row, so a retry with the same key binds. Step preview that loses
+  re-reads the program and returns 200 from the stored state. A failed tip checkout in
+  `seed_workdir` still returns its original error. 412 `precondition_failed` stays for
+  `If-Match` on `PUT` only.
 - **Two processes opening the same new SQLite file both succeed and apply each migration
   once** — the migration runner read `schema_migrations`, ran each file with
   `executescript` (which commits on its own) and then recorded it, so two processes opening

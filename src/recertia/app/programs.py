@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -279,9 +280,10 @@ class ProgramService:
             if not step.goal.desired:
                 raise ConfigError(f"step {step.step_id} missing goal")
         now = datetime.now(timezone.utc).isoformat()
+        read_version = prog.version
         prog = prog.model_copy(update={"status": "active", "disclaimer_acked_at": now})
         prog = self._refresh_step_statuses(prog, runtime)
-        saved = runtime.programs.put(prog)
+        saved = self._save_pinned(runtime, prog, read_version=read_version)
         return {"program": saved.model_dump(mode="json")}
 
     def abandon(
@@ -289,7 +291,8 @@ class ProgramService:
     ) -> dict[str, Any]:
         self._require(principal, "programs.write")
         prog = self._get_program(runtime, program_id, tenant)
-        saved = runtime.programs.put(prog.model_copy(update={"status": "abandoned"}))
+        abandoned = prog.model_copy(update={"status": "abandoned"})
+        saved = self._save_pinned(runtime, abandoned, read_version=prog.version)
         return {"program": saved.model_dump(mode="json")}
 
     def patch_step(
@@ -323,8 +326,7 @@ class ProgramService:
         if body.external_handoff is not None:
             updates["external_handoff"] = body.external_handoff
         updated = step.model_copy(update=updates)
-        prog = self._replace_step(prog, updated)
-        saved = runtime.programs.put(prog)
+        saved = self._save_pinned(runtime, self._replace_step(prog, updated), read_version=prog.version)
         return {"program": saved.model_dump(mode="json")}
 
     def preview_step(
@@ -339,17 +341,23 @@ class ProgramService:
         self._require(principal, "programs.read")
         prog = self._get_program(runtime, program_id, tenant)
         step = self._find_step(prog, step_id)
-        try:
-            goal = materialize_step_goal(prog, step)
-        except MaterializeError as exc:
-            raise ConfigError(str(exc)) from exc
-        warnings = stress_step(prog, step, goal=goal)
+        goal = self._materialize(prog, step)
         ph = preview_hash(goal)
         if step.criteria_preview_hash != ph:
             # Save only a new hash: a read-scoped preview must not bump the version.
             updated = step.model_copy(update={"criteria_preview_hash": ph})
-            prog = self._replace_step(prog, updated)
-            runtime.programs.put(prog)
+            try:
+                prog = self._save_pinned(
+                    runtime, self._replace_step(prog, updated), read_version=prog.version
+                )
+            except Conflict:
+                # A write landed since the read. Like ``get``, read the program again and
+                # preview what is stored, saving nothing; the next preview saves its hash.
+                prog = self._get_program(runtime, program_id, tenant)
+                step = self._find_step(prog, step_id)
+                goal = self._materialize(prog, step)
+                ph = preview_hash(goal)
+        warnings = stress_step(prog, step, goal=goal)
         criteria = [c.model_dump(mode="json") for c in compile_goal(goal)]
         blocked = any(w.severity == "block" for w in warnings)
         return {
@@ -465,6 +473,7 @@ class ProgramService:
         prog: MigrationProgram,
         step: MigrationStep,
     ) -> dict[str, Any]:
+        read_version = prog.version
         try:
             goal = materialize_step_goal(prog, step)
             assert_gp0_execution_prereqs(
@@ -505,7 +514,7 @@ class ProgramService:
         prog = self._replace_step(prog, step)
 
         if body.plan_only or body.bind_run_id is None:
-            runtime.programs.put(prog)
+            self._save_pinned(runtime, prog, read_version=read_version)
             return {
                 "plan_only": body.plan_only or body.bind_run_id is None,
                 "run_create": {
@@ -599,7 +608,7 @@ class ProgramService:
                 prog = prog.model_copy(update={"status": "active"})
             prog = self._refresh_step_statuses(prog, runtime)
 
-        saved = runtime.programs.put(prog)
+        saved = self._save_pinned(runtime, prog, read_version=read_version)
         return {
             "program": saved.model_dump(mode="json"),
             "step_id": step_id,
@@ -622,6 +631,7 @@ class ProgramService:
         if not (body.note or "").strip():
             raise ConfigError("skip requires a non-empty note")
         prog = self._get_program(runtime, program_id, tenant)
+        read_version = prog.version
         if prog.status not in {"active", "blocked"}:
             raise Conflict("program not active")
         step = self._find_step(prog, step_id)
@@ -634,7 +644,7 @@ class ProgramService:
         else:
             prog = prog.model_copy(update={"status": "active"})
         prog = self._refresh_step_statuses(prog, runtime)
-        saved = runtime.programs.put(prog)
+        saved = self._save_pinned(runtime, prog, read_version=read_version)
         return {"program": saved.model_dump(mode="json"), "step_id": step_id, "skipped": True}
 
     def bind_repo(
@@ -654,8 +664,8 @@ class ProgramService:
             root = resolve_binding_root(runtime.root, tenant, binding)
         except GitTipError as exc:
             raise ConfigError(str(exc)) from exc
-        prog = prog.model_copy(update={"repo_binding": binding, "handoff": "git_tip"})
-        saved = runtime.programs.put(prog)
+        bound = prog.model_copy(update={"repo_binding": binding, "handoff": "git_tip"})
+        saved = self._save_pinned(runtime, bound, read_version=prog.version)
         return {"program": saved.model_dump(mode="json"), "resolved_root": str(root)}
 
     def record_tip(
@@ -695,8 +705,7 @@ class ProgramService:
         eh = step.external_handoff or ExternalHandoff()
         eh = eh.model_copy(update={"head_sha": sha})
         updated = step.model_copy(update={"external_handoff": eh})
-        prog = self._replace_step(prog, updated)
-        saved = runtime.programs.put(prog)
+        saved = self._save_pinned(runtime, self._replace_step(prog, updated), read_version=prog.version)
         return {"program": saved.model_dump(mode="json"), "head_sha": sha}
 
     def seed_workdir(
@@ -730,8 +739,11 @@ class ProgramService:
             checked = checkout_tip(binding_root=binding_root, tip_sha=tip, dest=dest)
         except GitTipError as exc:
             failed = step.model_copy(update={"status": "failed"})
-            prog = self._replace_step(prog, failed).model_copy(update={"status": "blocked"})
-            runtime.programs.put(prog)
+            blocked = self._replace_step(prog, failed).model_copy(update={"status": "blocked"})
+            # The checkout error is what the caller must see. If a write landed since the
+            # read, that write stands and this failure mark is skipped.
+            with contextlib.suppress(Conflict):
+                self._save_pinned(runtime, blocked, read_version=prog.version)
             raise ConfigError(str(exc)) from exc
         return {
             "run_id": body.run_id,
@@ -741,6 +753,33 @@ class ProgramService:
             "program_id": program_id,
             "step_id": step_id,
         }
+
+    def _save_pinned(
+        self, runtime: Any, prog: MigrationProgram, *, read_version: int
+    ) -> MigrationProgram:
+        """Save ``prog`` only if the stored version is still ``read_version``, the one read.
+
+        Every route that reads a program, changes it and saves it back saves through here, so
+        a write that landed since the read is never overwritten. The losing save writes
+        nothing and raises 409 ``conflict`` with the version now stored. There is no retry:
+        the route checked its preconditions against the program it read, and some routes have
+        side effects. 412 ``precondition_failed`` stays for a client's ``If-Match`` (``replace``).
+        """
+
+        try:
+            saved: MigrationProgram = runtime.programs.put(prog, expected_version=read_version)
+            return saved
+        except PreconditionFailed as exc:
+            raise Conflict(
+                "program changed while this request ran; re-read it and retry",
+                details={"stored_version": exc.details.get("stored_version")},
+            ) from exc
+
+    def _materialize(self, prog: MigrationProgram, step: MigrationStep) -> Goal:
+        try:
+            return materialize_step_goal(prog, step)
+        except MaterializeError as exc:
+            raise ConfigError(str(exc)) from exc
 
     def _require(self, principal: Principal, action: str) -> None:
         pdp = self._pdp

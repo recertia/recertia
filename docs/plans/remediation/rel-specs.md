@@ -1234,6 +1234,7 @@ On resume, `op_once` returns the stored dict and does not call `complete`. The m
 | Cancel observed at a hop boundary | `run_cancelled` | no | 409 |
 | Program `If-Match` failed (REL-5) | `program_conflict` | no | 409 |
 | Note (2026-10-30), replaces the row above: Superseded by REC-056c (2026-10-30): `precondition_failed` (412), `PreconditionFailed`; test renamed `test_stale_if_match_is_precondition_failed` | `precondition_failed` | no | 412 |
+| Program intent-route save lost a version race (REC-094) | `conflict` | no | 409 |
 
 The body is the S4 envelope. `details` includes `holder_owner_id` for busy codes and `seq` for checkpoint conflicts. Today's `HTTPException(409, detail="run_id already exists")` (`api/__init__.py:385`) is replaced by `RunIdExists`.
 
@@ -3206,6 +3207,7 @@ HTTP mapping is `RecertiaError.http_status`. The CLI uses `exit_code`. `recertia
 | `checkpoint_conflict` | 409 | 5 | no | REL-3 |
 | `program_conflict` | 409 | 5 | no | REL-5 |
 | `precondition_failed` | 412 | 5 | no | REL-5. Note (2026-10-30): Superseded by REC-056c (2026-10-30): `precondition_failed` (412), `PreconditionFailed`; test renamed `test_stale_if_match_is_precondition_failed`. It replaces the `program_conflict` row above. |
+| `conflict` | 409 | 5 | no | REC-094 |
 | `op_fingerprint_mismatch` | 409 | 5 | no | REL-3 |
 | `run_cancelled` | 409 | 5 | no | REL-4 |
 | `run_busy` | 409 | 6 | yes | REL-3 |

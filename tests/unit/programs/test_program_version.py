@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -19,11 +19,20 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
+from contracts.goal import Goal, compile_goal
 from contracts.program import MigrationProgram, MigrationStep
+from recertia.programs.materialize import preview_hash
 from recertia.programs.store import ProgramStore
 from recertia.runtime.errors import PreconditionFailed
-from tests.support.idempotency import check_restart_survives
-from tests.unit.test_migration_programs import _client, _issue, _step
+from tests.support.idempotency import (
+    check_restart_survives,
+    close_app,
+    headers_for,
+    key_rows,
+    make_app,
+    solved_run,
+)
+from tests.unit.test_migration_programs import _client, _init_git_repo, _issue, _step
 
 
 class _StoreWrites:
@@ -394,6 +403,278 @@ def test_preview_saves_and_bumps_the_version_only_when_its_hash_changes(
 
     put = _put(client, headers, pid, {**after_first, "title": "edited"}, "2")
     assert put.status_code == 200, put.text
+
+
+# --- REC-094: intent routes pin their save to the version they read -------------------
+
+
+class _RaceApi:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.app = make_app(root)
+        self.client = TestClient(self.app)
+        self.headers = headers_for(self.app)
+        self.store: ProgramStore = self.app.state.recertia.programs
+
+    def post(self, url: str, body: dict[str, Any] | None = None) -> Any:
+        return self.client.post(url, headers=self.headers, json=body)
+
+    def stored(self, pid: str) -> MigrationProgram:
+        prog = self.store.get(pid, tenant_id="t1")
+        assert prog is not None
+        return prog
+
+
+@pytest.fixture
+def race_api(tmp_path: Path) -> Iterator[_RaceApi]:
+    harness = _RaceApi(tmp_path)
+    try:
+        yield harness
+    finally:
+        close_app(harness.app)
+
+
+class _Race:
+    def __init__(self) -> None:
+        self.route_puts = 0
+        self.competing: MigrationProgram | None = None
+
+
+@contextmanager
+def _write_before_save(
+    app: Any, change: Callable[[MigrationProgram], MigrationProgram]
+) -> Iterator[_Race]:
+    """Commit ``change(stored)`` to the store just before the route's first save.
+
+    The route has already read the program, so this is a concurrent writer landing between
+    the route's read and its save. ``route_puts`` counts the route's own ``put`` calls.
+    """
+
+    store: ProgramStore = app.state.recertia.programs
+    real_put = store.put
+    race = _Race()
+
+    def competing_then_put(program: MigrationProgram, **kwargs: Any) -> MigrationProgram:
+        race.route_puts += 1
+        if race.competing is None:
+            stored = store.get(program.program_id, tenant_id=program.tenant_id)
+            assert stored is not None
+            race.competing = real_put(change(stored))
+        return real_put(program, **kwargs)
+
+    store.put = competing_then_put  # type: ignore[method-assign]
+    try:
+        yield race
+    finally:
+        del store.put
+
+
+def _retitle(stored: MigrationProgram) -> MigrationProgram:
+    return stored.model_copy(update={"title": "concurrent"})
+
+
+def _ok(resp: Any) -> Any:
+    assert resp.status_code == 200, resp.text
+    return resp
+
+
+def _new_program(api: _RaceApi, steps: list[dict[str, Any]] | None = None) -> str:
+    created = _ok(api.post("/v1/programs", {"title": "pack", "steps": steps or [_step("s1", 0)]}))
+    return str(created.json()["program"]["program_id"])
+
+
+def _bind_repo(api: _RaceApi, pid: str) -> None:
+    repo = api.root / "api-root" / "repo_bindings" / "t1" / "app"
+    if not repo.exists():
+        _init_git_repo(repo)
+    _ok(api.post(f"/v1/programs/{pid}/repo-binding", {"root": "app"}))
+
+
+INTENT_ROUTES = [
+    "accept",
+    "abandon",
+    "patch_step",
+    "run_step_plan_only",
+    "run_step_unbound",
+    "run_step_bind",
+    "run_step_bind_keyed",
+    "skip_step",
+    "bind_repo",
+    "record_tip",
+]
+
+
+def _setup_route(api: _RaceApi, route: str) -> tuple[str, str, str, dict[str, Any]]:
+    """Prepare a program so ``route`` reaches its save: ``(program_id, method, url, json)``."""
+
+    steps = [_step("s1", 0), _step("s2", 1)] if route == "skip_step" else None
+    pid = _new_program(api, steps)
+    base = f"/v1/programs/{pid}"
+    if route in {"bind_repo", "record_tip"}:
+        _bind_repo(api, pid)
+    if route not in {"accept", "abandon", "patch_step", "bind_repo"}:
+        _accept(api.client, api.headers, pid)
+    if route in {"run_step_bind", "run_step_bind_keyed"}:
+        ph = _ok(api.post(f"{base}/steps/s1/preview")).json()["criteria_preview_hash"]
+        api.app.state.runs[("t1", "run-1")] = solved_run("run-1", ph)
+    bind = {"bind_run_id": "run-1", "workdir": "ws"}
+    requests: dict[str, tuple[str, str, dict[str, Any]]] = {
+        "accept": ("POST", f"{base}/accept", {"ack_disclaimer": True}),
+        "abandon": ("POST", f"{base}/abandon", {}),
+        "patch_step": ("PATCH", f"{base}/steps/s1", {"title": "patched"}),
+        "run_step_plan_only": ("POST", f"{base}/steps/s1/run", {"plan_only": True}),
+        "run_step_unbound": ("POST", f"{base}/steps/s1/run", {"workdir": "ws"}),
+        "run_step_bind": ("POST", f"{base}/steps/s1/run", bind),
+        "run_step_bind_keyed": ("POST", f"{base}/steps/s1/run", {**bind, "idempotency_key": "k1"}),
+        "skip_step": ("POST", f"{base}/steps/s1/skip", {"note": "done offline"}),
+        "bind_repo": ("POST", f"{base}/repo-binding", {"root": "app"}),
+        "record_tip": ("POST", f"{base}/steps/s1/record-tip", {"use_binding_root": True}),
+    }
+    method, url, body = requests[route]
+    return pid, method, url, body
+
+
+@pytest.mark.parametrize("route", INTENT_ROUTES)
+def test_intent_route_saves_once_when_no_write_races_it(race_api: _RaceApi, route: str) -> None:
+    """Control for the race test below: with no competing write the route saves, once."""
+
+    pid, method, url, body = _setup_route(race_api, route)
+    before = race_api.stored(pid).version
+    with _count_store_writes(race_api.app) as writes:
+        resp = race_api.client.request(method, url, headers=race_api.headers, json=body)
+    assert resp.status_code == 200, resp.text
+    assert writes.calls == 1
+    assert race_api.stored(pid).version == before + 1
+
+
+@pytest.mark.parametrize("route", INTENT_ROUTES)
+def test_intent_route_after_a_concurrent_write_does_not_overwrite_it(race_api: _RaceApi, route: str) -> None:
+    """A write that lands between the route's read and its save wins; the route gets 409.
+
+    The 409 is ``conflict`` with the version now stored, the route calls ``put`` once (no
+    retry), and the stored program is exactly the competing write.
+    """
+
+    pid, method, url, body = _setup_route(race_api, route)
+    with _write_before_save(race_api.app, _retitle) as race:
+        resp = race_api.client.request(method, url, headers=race_api.headers, json=body)
+
+    assert race.competing is not None
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"] == {
+        "code": "conflict",
+        "message": "program changed while this request ran; re-read it and retry",
+        "retryable": False,
+        "details": {"stored_version": race.competing.version},
+    }
+    assert "etag" not in {k.lower() for k in resp.headers}
+    assert race.route_puts == 1
+    assert race_api.stored(pid) == race.competing
+    if route == "run_step_bind_keyed":
+        assert key_rows(race_api.root) == []
+
+
+def test_keyed_bind_that_loses_the_race_leaves_no_pending_key_row(race_api: _RaceApi) -> None:
+    """The 409 deletes the bind's pending row, so a retry with the same key binds."""
+
+    pid, _, url, body = _setup_route(race_api, "run_step_bind_keyed")
+    with _write_before_save(race_api.app, _retitle):
+        lost = race_api.post(url, body)
+    assert lost.status_code == 409, lost.text
+    assert lost.json()["error"]["code"] == "conflict"
+    assert key_rows(race_api.root) == []
+
+    retried = _ok(race_api.post(url, body)).json()
+    assert (retried["idempotent"], retried["run_id"]) == (False, "run-1")
+    assert retried["program"]["title"] == "concurrent"
+    assert [row[4:] for row in key_rows(race_api.root)] == [("complete", "run-1")]
+    assert race_api.stored(pid).steps[0].current_run_id == "run-1"
+
+
+def test_preview_after_a_concurrent_write_rereads_instead_of_overwriting(race_api: _RaceApi) -> None:
+    """The preview's hash save loses: 200, nothing saved over the write, the stored program read back."""
+
+    pid = _new_program(race_api)
+    url = f"/v1/programs/{pid}/steps/s1/preview"
+
+    def new_goal(stored: MigrationProgram) -> MigrationProgram:
+        step = stored.steps[0]
+        desired = [d.model_copy(update={"path": "OTHER.md"}) for d in step.goal.desired]
+        goal = step.goal.model_copy(update={"desired": desired})
+        changed = step.model_copy(update={"goal": goal, "goal_revision": step.goal_revision + 1})
+        return stored.model_copy(update={"steps": [changed]})
+
+    with _write_before_save(race_api.app, new_goal) as race:
+        resp = race_api.post(url)
+
+    assert resp.status_code == 200, resp.text
+    assert race.route_puts == 1
+    stored = race_api.stored(pid)
+    assert stored == race.competing
+    assert stored.steps[0].criteria_preview_hash is None
+    preview = resp.json()
+    goal = Goal.model_validate(preview["goal"])
+    assert [d.path for d in goal.desired] == ["OTHER.md"]
+    assert preview["criteria_preview_hash"] == preview_hash(goal)
+    assert preview["criteria"] == [c.model_dump(mode="json") for c in compile_goal(goal)]
+    assert preview["freeze_enforcement"] == stored.freeze_enforcement
+
+    # With no race the next preview saves the hash of the stored goal.
+    again = _ok(race_api.post(url)).json()
+    assert again["criteria_preview_hash"] == preview["criteria_preview_hash"]
+    saved = race_api.stored(pid)
+    assert saved.steps[0].criteria_preview_hash == preview["criteria_preview_hash"]
+    assert saved.version == stored.version + 1
+
+
+def _failing_seed(api: _RaceApi) -> tuple[str, str]:
+    pid = _new_program(api)
+    _bind_repo(api, pid)
+    _accept(api.client, api.headers, pid)
+    return pid, f"/v1/programs/{pid}/steps/s1/seed-workdir"
+
+
+_BAD_TIP = {"run_id": "r1", "tip_sha": "deadbeef" * 5}
+
+
+def _assert_original_seed_error(resp: Any) -> str:
+    """The checkout's ``ConfigError`` (``invalid_config``), which program routes send as 400."""
+
+    assert resp.status_code == 400, resp.text
+    error = resp.json()["error"]
+    assert (error["code"], error["retryable"]) == ("bad_request", False)
+    assert "details" not in error
+    assert "deadbeef" in error["message"]
+    return str(error["message"])
+
+
+def test_seed_workdir_with_a_failing_checkout_is_still_invalid_config(race_api: _RaceApi) -> None:
+    pid, url = _failing_seed(race_api)
+    before = race_api.stored(pid).version
+    with _count_store_writes(race_api.app) as writes:
+        resp = race_api.post(url, _BAD_TIP)
+    _assert_original_seed_error(resp)
+    assert writes.calls == 1
+    stored = race_api.stored(pid)
+    assert (stored.status, stored.steps[0].status, stored.version) == ("blocked", "failed", before + 1)
+
+
+def test_seed_workdir_failure_mark_that_loses_the_race_keeps_the_original_error(race_api: _RaceApi) -> None:
+    """OQ-2: the original checkout error wins, the competing write stands, the mark is skipped."""
+
+    pid, url = _failing_seed(race_api)
+    with _write_before_save(race_api.app, _retitle) as race:
+        lost = race_api.post(url, _BAD_TIP)
+    message = _assert_original_seed_error(lost)
+    assert race.route_puts == 1
+    stored = race_api.stored(pid)
+    assert stored == race.competing
+    assert (stored.status, stored.steps[0].status) == ("active", "ready")
+
+    # The same error as with no race.
+    other, other_url = _failing_seed(race_api)
+    assert _assert_original_seed_error(race_api.post(other_url, _BAD_TIP)) == message
+    assert race_api.stored(other).status == "blocked"
 
 
 # --- ProgramStore -----------------------------------------------------------------------
