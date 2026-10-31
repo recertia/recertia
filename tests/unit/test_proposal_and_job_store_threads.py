@@ -234,6 +234,62 @@ def test_two_decisions_that_both_read_pending_first_exactly_one_wins(
             s.close()
 
 
+class _OneAtATime:
+    """Stands in for a store's connection and records when two threads use it at once.
+
+    An ``UPDATE`` holds the connection for up to ``hold`` seconds, or until another thread
+    gets in, so a write that runs outside the store lock is caught every time, not by chance.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, hold: float) -> None:
+        self._conn, self._hold = conn, hold
+        self._guard = threading.Lock()
+        self._inside = 0
+        self._other_got_in = threading.Event()
+        self.overlaps = 0
+        self.held = 0
+
+    def execute(self, sql: str, params: Any = ()) -> sqlite3.Cursor:
+        with self._guard:
+            self._inside += 1
+            if self._inside > 1:
+                self.overlaps += 1
+                self._other_got_in.set()
+        try:
+            if sql.lstrip().startswith("UPDATE"):
+                self.held += 1
+                self._other_got_in.wait(self._hold)
+            return self._conn.execute(sql, params)
+        finally:
+            with self._guard:
+                self._inside -= 1
+
+    def __enter__(self) -> sqlite3.Connection:
+        return self._conn.__enter__()
+
+    def __exit__(self, *exc: Any) -> bool | None:
+        return self._conn.__exit__(*exc)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+
+def test_decide_writes_while_no_other_thread_uses_the_connection(tmp_path: Path) -> None:
+    # Each decision's UPDATE waits on the shared connection for the other decision to get in.
+    # The store lock keeps it out, so the wait ends by timeout and nothing overlaps.
+    store = ProposalStore(tmp_path / "proposals.sqlite")
+    conn = _OneAtATime(store._conn, hold=0.05)
+    store._conn = conn  # type: ignore[assignment]
+    try:
+        bad = _exactly_one_wins(_decide_race([store], trials=10))
+        assert bad == [], f"{len(bad)}/10 trials: {bad[:3]}"
+        assert conn.held >= 10, conn.held
+        assert conn.overlaps == 0, conn.overlaps
+    finally:
+        store._conn = conn._conn
+        store.close()
+
+
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
