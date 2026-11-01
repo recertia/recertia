@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
-from recertia.persistence.db import open_db
+from recertia.persistence.db import open_db_with_init
 from recertia.ports.identity import TenantId
 
 
@@ -30,8 +30,12 @@ class SqliteUnitOfWork:
 class SqliteSessionRepo:
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._conn = open_db(path)
-        self._conn.executescript(
+        self._conn = open_db_with_init(path, self._set_up)
+
+    def _set_up(self, conn: sqlite3.Connection) -> None:
+        """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""
+
+        conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
@@ -46,7 +50,7 @@ class SqliteSessionRepo:
             );
             """
         )
-        self._conn.commit()
+        conn.commit()
 
     def put(
         self,
@@ -109,8 +113,12 @@ class SqliteSessionRepo:
 
 class SqliteTenantRepo:
     def __init__(self, path: Path) -> None:
-        self._conn = open_db(path)
-        self._conn.executescript(
+        self._conn = open_db_with_init(path, self._set_up)
+
+    def _set_up(self, conn: sqlite3.Connection) -> None:
+        """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""
+
+        conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS tenants (
                 tenant_id TEXT PRIMARY KEY,
@@ -125,7 +133,7 @@ class SqliteTenantRepo:
             );
             """
         )
-        self._conn.commit()
+        conn.commit()
 
     def upsert(self, tenant: TenantId, *, display_name: str, status: str) -> None:
         self._conn.execute(

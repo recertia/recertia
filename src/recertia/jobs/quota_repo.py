@@ -16,7 +16,7 @@ from pathlib import Path
 
 from contracts.policy import JobQuota
 from recertia.errors import QuotaExceeded
-from recertia.persistence.db import apply_migrations, open_db
+from recertia.persistence.db import apply_migrations, open_db_with_init
 from recertia.policy_load import QuotaSidecar, iso_week_id
 from recertia.ports.identity import tenant_id
 
@@ -55,10 +55,14 @@ class JobQuotaRepository:
         self.path = Path(path)
         self.tenant = str(tenant_id(tenant))
         self._lock = threading.Lock()
-        self._conn = open_db(self.path)
-        self._conn.isolation_level = None
-        self._conn.row_factory = sqlite3.Row
-        apply_migrations(self._conn, _MIGRATIONS)
+        self._conn = open_db_with_init(self.path, self._set_up)
+
+    def _set_up(self, conn: sqlite3.Connection) -> None:
+        """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""
+
+        conn.isolation_level = None
+        conn.row_factory = sqlite3.Row
+        apply_migrations(conn, _MIGRATIONS)
 
     def close(self) -> None:
         self._conn.close()

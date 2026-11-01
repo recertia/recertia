@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from contracts.run import RouteEntry, RunState
 from contracts.trajectory import TrajectoryEvent
-from recertia.persistence.db import open_db
+from recertia.persistence.db import open_db_with_init
 from recertia.runtime.hop import OutboxRow, commit_hop, ensure_hop_tables
 
 
@@ -57,9 +57,13 @@ class CheckpointStore:
         self._tenant_id = tenant_id
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = open_db(self._db_path)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute(
+        self._conn = open_db_with_init(self._db_path, self._set_up)
+
+    def _set_up(self, conn: sqlite3.Connection) -> None:
+        """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""
+
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
             """
             CREATE TABLE IF NOT EXISTS checkpoints (
                 run_id TEXT NOT NULL,
@@ -72,9 +76,9 @@ class CheckpointStore:
             )
             """
         )
-        self._conn.commit()
-        _ensure_column(self._conn, "checkpoints", "fencing_token", "INTEGER")
-        self._conn.execute(
+        conn.commit()
+        _ensure_column(conn, "checkpoints", "fencing_token", "INTEGER")
+        conn.execute(
             """
             CREATE TABLE IF NOT EXISTS eval_outbox (
                 observation_key TEXT PRIMARY KEY,
@@ -88,7 +92,7 @@ class CheckpointStore:
             )
             """
         )
-        self._conn.execute(
+        conn.execute(
             """
             CREATE TABLE IF NOT EXISTS run_summaries (
                 run_id TEXT PRIMARY KEY,
@@ -104,11 +108,11 @@ class CheckpointStore:
             """
         )
         # Keyset order of the run list (``created_at DESC, run_id DESC``).
-        self._conn.execute(
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS run_summaries_created ON run_summaries (created_at DESC, run_id DESC)"
         )
-        self._conn.commit()
-        ensure_hop_tables(self._conn)
+        conn.commit()
+        ensure_hop_tables(conn)
 
     def close(self) -> None:
         self._conn.close()

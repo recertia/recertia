@@ -39,9 +39,14 @@ def _allocation_db(store: SkillStore) -> Path:
 
 
 def _init_db(path: Path) -> sqlite3.Connection:
-    from recertia.persistence.db import open_db
+    from recertia.persistence.db import open_db_with_init
 
-    conn = open_db(path, timeout=30.0)
+    return open_db_with_init(path, _set_up_db, timeout=30.0)
+
+
+def _set_up_db(conn: sqlite3.Connection) -> None:
+    """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""
+
     # open_db pins busy_timeout at 5s; this allocator waits longer under contention.
     conn.execute("PRAGMA busy_timeout=30000")
     # Autocommit: reservations must commit before the version is published.
@@ -55,7 +60,6 @@ def _init_db(path: Path) -> sqlite3.Connection:
         )
         """
     )
-    return conn
 
 
 @contextmanager

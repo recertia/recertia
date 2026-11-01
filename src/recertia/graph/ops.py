@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Callable, Literal, TypeVar
 
-from recertia.persistence.db import open_db
+from recertia.persistence.db import open_db_with_init
 from recertia.persistence.import_legacy import import_lock_timeout_s
 from recertia.persistence.root_lock import RootBusy, RootLock, RootLockBusy
 
@@ -71,12 +71,17 @@ class OperationLedger:
         self._pending_timeout_s = pending_timeout_s
         self._pending_poll_s = pending_poll_s
         self._live_claims: dict[OpKey, _LiveClaim] = {}
-        self._conn = open_db(self._db_path)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        if schema_lock:
-            _init_operations_table(self._conn, self._db_path)
+        self._schema_lock = schema_lock
+        self._conn = open_db_with_init(self._db_path, self._set_up)
+
+    def _set_up(self, conn: sqlite3.Connection) -> None:
+        """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""
+
+        conn.execute("PRAGMA journal_mode=WAL")
+        if self._schema_lock:
+            _init_operations_table(conn, self._db_path)
         else:
-            ensure_operations_schema(self._conn)
+            ensure_operations_schema(conn)
 
     def close(self) -> None:
         self._conn.close()

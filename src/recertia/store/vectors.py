@@ -5,10 +5,11 @@ from __future__ import annotations
 import heapq
 import json
 import math
+import sqlite3
 from pathlib import Path
 from typing import Iterable, Protocol
 
-from recertia.persistence.db import open_db
+from recertia.persistence.db import open_db_with_init
 from recertia.retrieval.index import EMBED_DIM, cosine, embed_text
 
 
@@ -32,15 +33,19 @@ class JsonBlobVectorIndex:
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = open_db(self.db_path)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute(
+        self._conn = open_db_with_init(self.db_path, self._set_up)
+        self._name = "json-blob"
+
+    def _set_up(self, conn: sqlite3.Connection) -> None:
+        """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""
+
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS vectors ("
             "plane TEXT NOT NULL, object_id TEXT NOT NULL, dims INTEGER NOT NULL, "
             "vector_json TEXT NOT NULL, PRIMARY KEY (plane, object_id))"
         )
-        self._conn.commit()
-        self._name = "json-blob"
+        conn.commit()
 
     def backend_name(self) -> str:
         return self._name

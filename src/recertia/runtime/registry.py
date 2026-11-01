@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from recertia.persistence.db import open_db
+from recertia.persistence.db import open_db_with_init
 from recertia.ports.identity import TenantId
 from recertia.runtime.errors import RunIdExists
 
@@ -49,11 +49,15 @@ class RunRegistry:
     def __init__(self, db_path: Path | str) -> None:
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = open_db(self.path)
-        self._conn.row_factory = sqlite3.Row
-        with self._conn:
-            self._conn.execute(_SCHEMA)
-            self._conn.execute(_LIST_INDEX)
+        self._conn = open_db_with_init(self.path, self._set_up)
+
+    def _set_up(self, conn: sqlite3.Connection) -> None:
+        """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""
+
+        conn.row_factory = sqlite3.Row
+        with conn:
+            conn.execute(_SCHEMA)
+            conn.execute(_LIST_INDEX)
 
     def close(self) -> None:
         self._conn.close()

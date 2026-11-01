@@ -12,7 +12,7 @@ from pathlib import Path
 from contracts.eval import BinomialSample, ControlBaseline, EvalObservation, RunResolution
 from contracts.run import RunState
 from contracts.stats import RetrievalAblationEffect
-from recertia.persistence.db import open_db
+from recertia.persistence.db import open_db_with_init
 
 _UNRESOLVED_EXITS = frozenset({124, 126})
 _UNRESOLVED_REASONS = {
@@ -92,9 +92,14 @@ class EvalStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = open_db(self.path)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn = open_db_with_init(self.path, self._set_up)
+
+    def _set_up(self, conn: sqlite3.Connection) -> None:
+        """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""
+
+        self._conn = conn  # set before __init__ assigns it, because _init reads self._conn
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
         self._init()
 
     def close(self) -> None:
