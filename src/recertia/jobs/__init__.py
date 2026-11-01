@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -111,11 +112,28 @@ class JobRunner:
         else:
             self.quota = JobQuota()
         self.quota_repo: JobQuotaRepository | None = None
+        self._closed = False
         if self.quota_path is not None:
-            self.quota_repo = JobQuotaRepository(self.quota_path.with_suffix(".sqlite"))
-            self.quota_repo.import_sidecar(self.quota_path, self.quota)
-            self.quota_repo.seed_open_week(self.quota)
-            self.quota = self.quota_repo.snapshot(self.quota)
+            repo = JobQuotaRepository(self.quota_path.with_suffix(".sqlite"))
+            try:
+                repo.import_sidecar(self.quota_path, self.quota)
+                repo.seed_open_week(self.quota)
+                self.quota = repo.snapshot(self.quota)
+            except BaseException:
+                # A failing close must not replace the setup error.
+                with suppress(Exception):
+                    repo.close()
+                raise
+            self.quota_repo = repo
+
+    def close(self) -> None:
+        """Close the quota database connection, if any. A second call does nothing."""
+
+        if self._closed:
+            return
+        self._closed = True
+        if self.quota_repo is not None:
+            self.quota_repo.close()
 
     def admit(self, job: JobPriority, *, task_class: str | None = None, tokens: int = 0) -> bool:
         return self.quota.can_admit(job, task_class=task_class, tokens=tokens)

@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Behaviour change:** a `StateCorrupt` error on the `/v1/programs` routes, such as a keyed
   bind whose key row is gone when the bind completes, now returns 503 with code
   `state_corrupt` and its details instead of `unavailable`.
+- `JobRunner.close()` closes the runner's quota database connection.
 
 ### Changed
 
@@ -227,6 +228,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The API app closes all of its stores' database connections at shutdown, not only the idempotency store's.
   If a queue item is still running at shutdown, the stores stay open and a warning is logged.
 - Stores close their database connection when their setup fails.
+- Job runs started from the API or the CLI close their quota database connection, also when the runner's setup fails.
 
 ### Corrections
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -38,7 +39,7 @@ from recertia.review.promotion_audit import OperatorAuditStore
 from recertia.solver.container import run_with_backend
 from recertia.store.backend import open_backend, postgres_dialect_mentions_pgvector
 from recertia.store.blobs import FilesystemBlobStore
-from recertia.store.vectors import open_vector_index
+from recertia.store.vectors import JsonBlobVectorIndex, open_vector_index
 from recertia.telemetry import (
     JsonlSpanExporter,
     reset_telemetry,
@@ -126,11 +127,14 @@ def test_sqlite_backend_and_pgvector_dialect(tmp_path: Path) -> None:
 
 def test_vector_index_and_blob_store(tmp_path: Path) -> None:
     idx = open_vector_index(tmp_path / "vec.sqlite")
-    idx.upsert("a", "add pytest config to the project")
-    idx.upsert("b", "draft a structured research brief")
-    hits = idx.search("pytest config")
-    assert hits and hits[0][0] == "a"
-    assert idx.backend_name() in ("json-blob", "sqlite-vec")
+    try:
+        idx.upsert("a", "add pytest config to the project")
+        idx.upsert("b", "draft a structured research brief")
+        hits = idx.search("pytest config")
+        assert hits and hits[0][0] == "a"
+        assert idx.backend_name() in ("json-blob", "sqlite-vec")
+    finally:
+        cast(JsonBlobVectorIndex, idx).close()
     blobs = FilesystemBlobStore(tmp_path / "blobs")
     digest = blobs.put(b"hello transcript")
     assert blobs.exists(digest)
