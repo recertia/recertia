@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -41,7 +42,7 @@ def test_api_keys_are_salted_scoped_durable_and_revocable(tmp_path: Path) -> Non
     assert principal.tenant_id == "tenant-a"
     assert principal.scopes == frozenset({"runs"})
 
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         stored = conn.execute(
             "SELECT key_hash, salt, hash_alg FROM api_keys"
         ).fetchone()

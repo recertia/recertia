@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -100,7 +101,7 @@ def test_heldout_output_masks_golden_path_and_run_id(tmp_path: Path) -> None:
         assert r.run_id.startswith("golden-heldout-")
         assert SKILL not in r.run_id
 
-    with sqlite3.connect(eval_db) as conn:  # the evals.db sink is not vacuous
+    with closing(sqlite3.connect(eval_db)) as conn, conn:  # the evals.db sink is not vacuous
         fixture_ids = [row[0] for row in conn.execute("SELECT fixture_id FROM observations")]
     assert len(fixture_ids) == 2
     assert all(f.startswith("golden-heldout-") for f in fixture_ids)
