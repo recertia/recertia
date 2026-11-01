@@ -56,7 +56,9 @@ def open_db(
         conn.execute("PRAGMA busy_timeout=5000")
     except BaseException:
         # Nothing else holds the connection yet; leaving it open leaks the file handle.
-        conn.close()
+        # A failing close must not replace the error being raised.
+        with suppress(Exception):
+            conn.close()
         raise
     return conn
 
@@ -87,7 +89,9 @@ def open_db_with_init(
     try:
         init(conn)
     except BaseException:
-        conn.close()
+        # A failing close must not replace the error ``init`` raised.
+        with suppress(Exception):
+            conn.close()
         raise
     return conn
 

@@ -89,6 +89,27 @@ def test_init_schema_failure_closes_and_reraises(tmp_path: Path, monkeypatch: py
     assert [c.closes for c in spy.opened] == [1]
 
 
+def test_real_sqlite_error_in_a_setup_step_closes_and_reraises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raised: list[sqlite3.OperationalError] = []
+
+    def init_schema_on_a_missing_table(self: SkillIndex) -> None:
+        try:
+            self._conn.execute("SELECT skill_id FROM missing_table")
+        except sqlite3.OperationalError as exc:
+            raised.append(exc)
+            raise
+
+    spy = _OpenSpy(None, _SetupFailed("unused"))
+    _install(monkeypatch, spy)
+    monkeypatch.setattr(SkillIndex, "_init_schema", init_schema_on_a_missing_table)
+    with pytest.raises(sqlite3.OperationalError, match="no such table") as excinfo:
+        SkillIndex(tmp_path / "index.sqlite")
+    assert len(raised) == 1 and excinfo.value is raised[0]
+    assert [c.closes for c in spy.opened] == [1]
+
+
 def test_successful_init_keeps_the_connection_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     spy = _OpenSpy(None, _SetupFailed("unused"))
     _install(monkeypatch, spy)
