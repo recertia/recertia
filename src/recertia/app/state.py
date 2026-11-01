@@ -74,10 +74,14 @@ class AppState:
         The embedded queue worker is stopped first: its thread claims from ``queue``
         and runs items that write to these stores, so nothing may be closed under it.
         If it does not stop in time (an in-flight item), every store is left open and
-        a warning is logged; a later ``close`` tries again. Then each store's sqlite
-        connection is closed. A store that raises does not keep the others open.
+        a warning is logged; a later ``close`` tries again. If ``stop`` itself raises,
+        that error propagates and every store is left open too. Then each store's sqlite
+        connection is closed. A store that raises does not keep the others open: the
+        rest are still closed and the first error is re-raised.
         """
 
+        # Keep the stop first: closing a connection under a live worker thread can crash
+        # the interpreter (a segmentation fault), not just raise.
         embedded = self.embedded
         if embedded is not None and not embedded.stop():
             _log.warning("app state left open: the embedded queue worker is still running an item")

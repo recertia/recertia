@@ -225,6 +225,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - API key store closes its database connections.
 - The skill index closes its database connection when its setup fails.
 - The API app closes all of its stores' database connections at shutdown, not only the idempotency store's.
+  If a queue item is still running then, the stores stay open and a warning is logged.
 
 ### Corrections
 
