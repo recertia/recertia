@@ -225,10 +225,14 @@ _APP_STATES_START = pytest.StashKey[int]()
 # One entry per fixture being set up: None for a function-scoped fixture, else the
 # states built while that wider-scoped fixture was being set up.
 _FIXTURE_APP_STATES: list[list[weakref.ref[Any]] | None] = []
-# How long teardown waits for an app's own queue worker. ``AppState.close`` would wait
-# up to 5 s in ``embedded.stop()``, but a worker still running here has already cost
-# ``TEARDOWN_TIMEOUT_S`` in ``stop_test_workers_report`` and been reported there. With
-# this bound a stuck app adds at most 0.5 s, not 5 s, to the 60 s per-test budget.
+# How long teardown waits for an app's own queue worker before closing the app.
+# ``AppState.close`` would wait up to 5 s in ``embedded.stop()``. A worker that was busy
+# at the pre-yield ``stop_all`` has already cost ``TEARDOWN_TIMEOUT_S`` in
+# ``stop_test_workers_report``. One that became busy after it, restarted by a fixture's
+# own teardown code for example, has not been waited for or reported. Either way, a
+# worker still running after this bound leaves its app open, and that is reported as a
+# teardown failure of the test (or scoped fixture) that owns the app. A stuck app adds at
+# most 0.5 s, not 5 s, to the 60 s per-test budget.
 APP_STOP_TIMEOUT_S = 0.5
 
 
@@ -270,7 +274,8 @@ def close_app_states_report(refs: list[weakref.ref[Any]]) -> str | None:
 
     Each state's own queue worker is stopped first, bounded by ``APP_STOP_TIMEOUT_S``.
     If it is still running an item, the state is left open, as ``AppState.close``
-    would leave it, without that method's second 5 s wait.
+    would leave it, without that method's second 5 s wait, and that is reported:
+    otherwise its stores would stay open with only a log warning to show for it.
     """
 
     problems = []
@@ -281,6 +286,7 @@ def close_app_states_report(refs: list[weakref.ref[Any]]) -> str | None:
         try:
             embedded = state.embedded
             if embedded is not None and not embedded.stop(timeout=APP_STOP_TIMEOUT_S):
+                problems.append("app state left open in teardown: its queue worker is still running an item")
                 continue
             state.close()
         except Exception as exc:  # report every state, never skip the rest
