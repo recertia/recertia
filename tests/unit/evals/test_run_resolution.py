@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -188,7 +189,7 @@ def test_resolution_recorded_for_124_126_and_error(tmp_path: Path) -> None:
 
     # Existing DB written before this change: ALTER TABLE adds NULL columns.
     pre = tmp_path / "pre.db"
-    with sqlite3.connect(pre) as conn:
+    with closing(sqlite3.connect(pre)) as conn, conn:
         conn.execute(
             """
             CREATE TABLE observations (

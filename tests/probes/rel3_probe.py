@@ -381,7 +381,8 @@ def scen_toctou(root):
         store.save("r5", 1, "n", None, state("r5"), fencing_token=ta); res = "ACCEPTED"
     except LeaseLost: res = "rejected"
     finally: lease_mod.require_lease_token = real
-    cur = sqlite3.connect(root / "runtime.db").execute("SELECT fencing_token FROM run_leases").fetchone()[0]
+    with contextlib.closing(sqlite3.connect(root / "runtime.db")) as c:
+        cur = c.execute("SELECT fencing_token FROM run_leases").fetchone()[0]
     record("E check-then-write is atomic", res == "rejected", f"write with tok {ta} after row moved to {cur}: {res}")
     a.release()
 
@@ -454,6 +455,7 @@ def scen_import_idempotent(root):
     n_ck = c.execute("SELECT COUNT(*) FROM checkpoints WHERE run_id='legacy'").fetchone()[0]
     n_op = c.execute("SELECT COUNT(*) FROM operations WHERE run_id='legacy'").fetchone()[0]
     ver = [r[0] for r in c.execute("SELECT version FROM schema_migrations")]
+    c.close()
     left = sorted(x.name for x in root.iterdir() if "db" in x.name)
     record("J import idempotent + resumable", n_ck == 5 and n_op == 1, f"checkpoints={n_ck} ops={n_op} schema_migrations={ver} files={left}")
     # rollback story: migrate=off after import

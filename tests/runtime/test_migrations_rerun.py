@@ -10,6 +10,7 @@ already exists'.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from recertia.store import (
@@ -35,7 +36,7 @@ def test_rerun_after_crash_before_version_row(tmp_path: Path) -> None:
     apply_sqlite_migrations(db)
     tables = verify_sqlite_schema(db)
     assert tables - {"schema_migrations"}, "migrations created no tables"
-    with sqlite3.connect(db) as c:  # simulate: DDL committed, version row never written
+    with closing(sqlite3.connect(db)) as c, c:  # simulate: DDL committed, version row never written
         c.execute("DELETE FROM schema_migrations")
     assert apply_sqlite_migrations(db)  # re-applies without raising
     assert verify_sqlite_schema(db) == tables
