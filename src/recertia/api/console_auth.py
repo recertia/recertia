@@ -195,11 +195,15 @@ class SessionStore:
         self._rows: dict[str, str] = {}
         self._conn = None
         if path is not None:
-            from recertia.persistence.db import open_db
+            from recertia.persistence.db import open_db_with_init
 
-            self._conn = open_db(path)
-            self._conn.executescript(
-                """
+            self._conn = open_db_with_init(path, self._set_up)
+
+    def _set_up(self, conn: sqlite3.Connection) -> None:
+        """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""
+
+        conn.executescript(
+            """
                 CREATE TABLE IF NOT EXISTS console_sessions (
                     session_id TEXT PRIMARY KEY,
                     payload TEXT NOT NULL,
@@ -209,8 +213,8 @@ class SessionStore:
                     jti TEXT PRIMARY KEY
                 );
                 """
-            )
-            self._conn.commit()
+        )
+        conn.commit()
 
     def issue(self, user: ConsoleUser, *, ttl_s: int = 86400) -> str:
         tenants, active = _checked_tenants(tuple(user.tenants), user.active_tenant)

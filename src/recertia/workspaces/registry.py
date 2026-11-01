@@ -14,7 +14,7 @@ from recertia.paths import (
     normalize_host_root,
     validate_workspace_id,
 )
-from recertia.persistence.db import open_db
+from recertia.persistence.db import open_db_with_init
 
 
 class WorkspaceRegistry:
@@ -22,10 +22,14 @@ class WorkspaceRegistry:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = open_db(self.path)
-        self._conn.row_factory = sqlite3.Row
-        with self._conn:
-            self._conn.execute(
+        self._conn = open_db_with_init(self.path, self._set_up)
+
+    def _set_up(self, conn: sqlite3.Connection) -> None:
+        """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""
+
+        conn.row_factory = sqlite3.Row
+        with conn:
+            conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS workspaces (
                     tenant_id TEXT NOT NULL,
