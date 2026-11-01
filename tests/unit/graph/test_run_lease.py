@@ -6,6 +6,7 @@ import multiprocessing as mp
 import os
 import shutil
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -98,10 +99,11 @@ def test_checkpoint_and_operation_store_fencing_token(tmp_path: Path) -> None:
             workdir=workdir,
             max_steps=1,
         )
-        row = sqlite3.connect(runs / "runtime.db").execute(
-            "SELECT fencing_token FROM checkpoints WHERE run_id=?",
-            ("run-fenced",),
-        ).fetchone()
+        with closing(sqlite3.connect(runs / "runtime.db")) as conn:
+            row = conn.execute(
+                "SELECT fencing_token FROM checkpoints WHERE run_id=?",
+                ("run-fenced",),
+            ).fetchone()
         assert row is not None
         assert row[0] == 1
     finally:
@@ -117,9 +119,8 @@ def test_checkpoint_and_operation_store_fencing_token(tmp_path: Path) -> None:
         assert ops.run_once(
             "run-fenced", 1, "solve", 0, lambda: {"ok": True}, fencing_token=token
         ) == {"ok": True}
-        stored = sqlite3.connect(ops_db).execute(
-            "SELECT fencing_token FROM operations"
-        ).fetchone()
+        with closing(sqlite3.connect(ops_db)) as conn:
+            stored = conn.execute("SELECT fencing_token FROM operations").fetchone()
         assert stored == (token,)
     finally:
         ops_lease.release()

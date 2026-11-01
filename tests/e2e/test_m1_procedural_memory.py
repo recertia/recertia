@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -17,11 +18,14 @@ PROBES_PATH = REPO / "evals" / "probes" / "repo-chore.json"
 
 
 @pytest.fixture
-def retriever(tmp_path: Path) -> Retriever:
+def retriever(tmp_path: Path) -> Iterator[Retriever]:
     store = SkillStore(SKILLS_ROOT)
     index = SkillIndex(tmp_path / "index.db")
-    index.rebuild(store.iter_loaded())
-    return Retriever(index)
+    try:
+        index.rebuild(store.iter_loaded())
+        yield Retriever(index)
+    finally:
+        index.close()
 
 
 def _materialise_workdir(tmp_path: Path, files: dict[str, str]) -> Path:

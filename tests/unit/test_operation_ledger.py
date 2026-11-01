@@ -4,6 +4,7 @@ import json
 import sqlite3
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -283,9 +284,10 @@ def test_ops_rebuild_resumable_after_operations_rel3_exists(tmp_path: Path) -> N
     applied, stored = ops.get("old", 1, "n", 0)
     assert applied is True
     assert stored == {"v": 1}
-    leftover = sqlite3.connect(db).execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='operations_rel3'"
-    ).fetchone()
+    with closing(sqlite3.connect(db)) as conn:
+        leftover = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='operations_rel3'"
+        ).fetchone()
     assert leftover is None
 
 
