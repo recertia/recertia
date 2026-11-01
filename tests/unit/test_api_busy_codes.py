@@ -307,40 +307,41 @@ def test_run_busy_from_the_thread_lock_names_no_path(tmp_path: Path) -> None:
     assert response.status_code == 409, response.text
     assert response.json() == {"error": {"code": "run_busy", "message": message, "retryable": True}}
     for text in (message, response.text):
-        assert str(tmp_path) not in text, text
         for sep in separators:
             assert sep not in text, (sep, text)
-        for needle in (lock_path.name, lock_path.stem):  # "path-guard.lock", "path-guard"
-            assert needle not in text, (needle, text)
+        for needle in (lock_path.name, lock_path.stem, str(tmp_path)):  # "path-guard.lock", "path-guard"
+            assert needle not in text, needle
     assert message == "run lease busy", message
 
 
 @contextmanager
-def _lease_row_held(tmp_path: Path) -> Iterator[tuple[Path, Callable[[], object]]]:
+def _lease_row_held(tmp_path: Path) -> Iterator[tuple[Path, str | None, Callable[[], object]]]:
     """This run's ``run_leases`` row is held, with a live heartbeat, through another lock file.
 
     A new lease on its own lock file gets its thread lock and its flock, then finds the row
     held by an owner that has not expired: the row check raises. Yields the new lease's lock
-    file and the attempt.
+    file, the run id (not the lock file's stem, so a leaked run id and a leaked stem differ)
+    and the attempt.
     """
 
     db = tmp_path / "runs" / "runtime.db"
     locks = tmp_path / "runs" / "t1" / "locks"
     lock_path = locks / "row-guard.lock"
-    holder = RunLease(locks / "row-holder.lock", db_path=db, run_id="row-guard")
+    run_id = "row-run"
+    holder = RunLease(locks / "row-holder.lock", db_path=db, run_id=run_id)
     holder.acquire()
     try:
-        yield lock_path, lambda: RunLease(lock_path, db_path=db, run_id="row-guard").acquire()
+        yield lock_path, run_id, lambda: RunLease(lock_path, db_path=db, run_id=run_id).acquire()
     finally:
         holder.release()
 
 
 @contextmanager
-def _lease_flock_held(tmp_path: Path) -> Iterator[tuple[Path, Callable[[], object]]]:
+def _lease_flock_held(tmp_path: Path) -> Iterator[tuple[Path, str | None, Callable[[], object]]]:
     """Another process holds the lease's lock file, as a second server or CLI run would.
 
     A lease here gets this process's thread lock, then finds the file's flock taken. Yields
-    the lock file and the attempt.
+    the lock file, no run id (this lease has none) and the attempt.
     """
 
     lock_path = tmp_path / "runs" / "t1" / "locks" / "flock-guard.lock"
@@ -365,7 +366,7 @@ def _lease_flock_held(tmp_path: Path) -> Iterator[tuple[Path, Callable[[], objec
         assert proc.stdin is not None and proc.stdout is not None
         try:
             assert proc.stdout.readline().strip() == "held"
-            yield lock_path, lambda: RunLease(lock_path).acquire()
+            yield lock_path, None, lambda: RunLease(lock_path).acquire()
         finally:
             proc.stdin.write("\n")
             proc.stdin.flush()
@@ -393,7 +394,7 @@ def test_run_busy_from_the_lease_row_and_the_flock_names_no_path(
     separators = ("/", "\\")  # either one, whatever the platform
     app = create_app(root=tmp_path / "api-root")
     try:
-        with held(tmp_path) as (lock_path, attempt):
+        with held(tmp_path) as (lock_path, run_id, attempt):
 
             @app.get("/escaped-run-busy")
             def _escaped_run_busy() -> None:
@@ -408,12 +409,12 @@ def test_run_busy_from_the_lease_row_and_the_flock_names_no_path(
     message = raised.value.message
     assert response.status_code == 409, response.text
     assert response.json() == {"error": {"code": "run_busy", "message": message, "retryable": True}}
+    needles = (lock_path.name, lock_path.stem, str(tmp_path), *((run_id,) if run_id else ()))
     for text in (message, response.text):
-        assert str(tmp_path) not in text, text
         for sep in separators:
             assert sep not in text, (sep, text)
-        for needle in (lock_path.name, lock_path.stem):  # "row-guard(.lock)", "flock-guard(.lock)"
-            assert needle not in text, (needle, text)
+        for needle in needles:  # "row-guard(.lock)" and run id "row-run", or "flock-guard(.lock)"
+            assert needle not in text, needle
     assert message == "run lease busy", message
 
 
