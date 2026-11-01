@@ -78,6 +78,12 @@ def test_close_with_a_never_opened_idempotency_store(tmp_path: Path) -> None:
 
 
 def test_close_stops_the_embedded_worker_before_closing_the_queue(tmp_path: Path) -> None:
+    """The order matters: closing a store under a live worker thread can crash the interpreter.
+
+    A reordered close (stores first, then the worker) ended the test process with a
+    segmentation fault, so this spy fails on the order rather than waiting for the crash.
+    """
+
     state = _state(tmp_path)
     state.embedded.ensure_started()
     assert state.embedded.is_running()
@@ -112,6 +118,36 @@ def test_close_leaves_every_store_open_while_the_embedded_worker_runs(tmp_path: 
     state.embedded.stop = real_stop
     state.close()  # once the worker stops, a later close closes them
     for holder, conn in conns.items():
+        _assert_closed(conn, holder)
+
+
+def test_close_closes_the_other_stores_and_raises_the_first_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two stores' ``close`` raise: every other store is still closed and the first error wins.
+
+    ``sessions`` is closed before ``programs``, so its error is the first one.
+    """
+
+    state = _state(tmp_path)
+    reservation = state.idempotency.reserve(KeyScope("t1", "p1", "s1", "k1"), "h1")
+    assert reservation.outcome is Outcome.RESERVED
+    raising = {"SessionStore": "first", "ProgramStore": "second"}
+    others = {holder: reach(state) for holder, reach in _HOLDERS.items() if holder not in raising}
+    others["IdempotencyStore"] = state.idempotency._conn
+
+    def raises(message: str) -> Callable[[], None]:
+        def close() -> None:
+            raise RuntimeError(message)
+
+        return close
+
+    monkeypatch.setattr(state.sessions, "close", raises("first"))
+    monkeypatch.setattr(state.programs, "close", raises("second"))
+    with pytest.raises(RuntimeError) as caught:
+        state.close()
+    assert str(caught.value) == "first", caught.value
+    for holder, conn in others.items():
         _assert_closed(conn, holder)
 
 

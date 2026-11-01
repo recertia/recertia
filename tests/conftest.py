@@ -211,10 +211,25 @@ def pytest_runtest_setup(item: Any) -> None:
 # --- App state teardown -----------------------------------------------------------------
 # ``create_app`` builds an ``AppState`` that holds sqlite connections. Only the app's
 # lifespan closes it, and a bare ``TestClient(app)`` never runs the lifespan, so every
-# state a test builds is tracked here and closed after the test's own teardown.
+# state is tracked here and closed at the end of the scope that built it:
+# - built by the test body or a function-scoped fixture: after the test's own teardown
+#   (``pytest_runtest_teardown``);
+# - built while a class, module, package or session fixture was being set up: right
+#   after that fixture's own teardown (``pytest_fixture_setup``), so the later tests in
+#   its scope still get an open app.
+# A state built at import time is not tracked. One built lazily during a test (by a
+# wider-scoped factory, say) counts as that test's state.
 
 _APP_STATES: list[weakref.ref[Any]] = []
 _APP_STATES_START = pytest.StashKey[int]()
+# One entry per fixture being set up: None for a function-scoped fixture, else the
+# states built while that wider-scoped fixture was being set up.
+_FIXTURE_APP_STATES: list[list[weakref.ref[Any]] | None] = []
+# How long teardown waits for an app's own queue worker. ``AppState.close`` would wait
+# up to 5 s in ``embedded.stop()``, but a worker still running here has already cost
+# ``TEARDOWN_TIMEOUT_S`` in ``stop_test_workers_report`` and been reported there. With
+# this bound a stuck app adds at most 0.5 s, not 5 s, to the 60 s per-test budget.
+APP_STOP_TIMEOUT_S = 0.5
 
 
 def track_app_states() -> None:
@@ -229,7 +244,8 @@ def track_app_states() -> None:
     @functools.wraps(original)
     def tracked_init(self: Any, *args: Any, **kwargs: Any) -> None:
         original(self, *args, **kwargs)
-        _APP_STATES.append(weakref.ref(self))
+        built = _FIXTURE_APP_STATES[-1] if _FIXTURE_APP_STATES else None
+        (_APP_STATES if built is None else built).append(weakref.ref(self))
 
     tracked_init._tracked_for_tests = True  # type: ignore[attr-defined]
     AppState.__init__ = tracked_init  # type: ignore[method-assign]
@@ -246,16 +262,60 @@ def close_test_app_states_report(start: int) -> str | None:
 
     refs = _APP_STATES[start:]
     del _APP_STATES[start:]
+    return close_app_states_report(refs)
+
+
+def close_app_states_report(refs: list[weakref.ref[Any]]) -> str | None:
+    """Close each live state in ``refs``. Returns a failure message, or None.
+
+    Each state's own queue worker is stopped first, bounded by ``APP_STOP_TIMEOUT_S``.
+    If it is still running an item, the state is left open, as ``AppState.close``
+    would leave it, without that method's second 5 s wait.
+    """
+
     problems = []
     for ref in refs:
         state = ref()
         if state is None:
             continue
         try:
+            embedded = state.embedded
+            if embedded is not None and not embedded.stop(timeout=APP_STOP_TIMEOUT_S):
+                continue
             state.close()
         except Exception as exc:  # report every state, never skip the rest
             problems.append(f"closing an app state raised {exc!r} in teardown")
     return "; ".join(problems) or None
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_fixture_setup(fixturedef: Any, request: Any) -> Generator[None, Any, Any]:
+    """Close the app states a wider-scoped fixture builds when that fixture is torn down.
+
+    Otherwise a class, module, package or session fixture's app would count as the
+    state of the first test that requested it, and be closed in that test's teardown
+    under every later test in its scope. The finalizer is added before the fixture
+    runs, so it runs after the fixture's own teardown code (last in, first out).
+    """
+
+    if fixturedef.scope == "function":
+        _FIXTURE_APP_STATES.append(None)
+    else:
+        built: list[weakref.ref[Any]] = []
+        _FIXTURE_APP_STATES.append(built)
+
+        def close_fixture_app_states() -> None:
+            refs = built[:]
+            built.clear()
+            failure = close_app_states_report(refs)
+            if failure is not None:
+                pytest.fail(failure, pytrace=False)
+
+        fixturedef.addfinalizer(close_fixture_app_states)
+    try:
+        return (yield)
+    finally:
+        _FIXTURE_APP_STATES.pop()
 
 
 # Teardown deadline for embedded queue workers and async pool threads. A module
