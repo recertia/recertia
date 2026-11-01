@@ -118,44 +118,32 @@ def test_failing_close_does_not_replace_the_init_error(
     assert [s.closes for s in spies] == [1]
 
 
-class _SetupFailsCloseRaises:
-    """Wraps a real connection: every statement hits a missing table, and ``close()`` raises."""
-
-    def __init__(self, conn: sqlite3.Connection) -> None:
-        self.conn = conn
-        self.closes = 0
-        self.raised: list[sqlite3.OperationalError] = []
-
-    def execute(self, sql: str, *args: Any) -> sqlite3.Cursor:
-        try:
-            return self.conn.execute("SELECT x FROM missing_table")
-        except sqlite3.OperationalError as exc:
-            self.raised.append(exc)
-            raise
-
+class _CloseInterrupted(_CloseSpy):
     def close(self) -> None:
-        self.closes += 1
-        self.conn.close()
-        raise sqlite3.ProgrammingError("close failed")
+        super().close()
+        raise KeyboardInterrupt
 
 
-def test_open_db_setup_error_survives_a_failing_close(
+def test_keyboard_interrupt_from_close_propagates_with_the_init_error_as_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    real_connect = sqlite3.connect
-    made: list[_SetupFailsCloseRaises] = []
+    spies: list[_CloseInterrupted] = []
 
-    def connect(*args: Any, **kwargs: Any) -> _SetupFailsCloseRaises:
-        conn = _SetupFailsCloseRaises(real_connect(*args, **kwargs))
-        made.append(conn)
-        return conn
+    def recording_open_db(path: Path | str, **kwargs: Any) -> _CloseInterrupted:
+        spy = _CloseInterrupted(open_db(path, **kwargs))
+        spies.append(spy)
+        return spy
 
-    monkeypatch.setattr(db_module.sqlite3, "connect", connect)
-    with pytest.raises(sqlite3.OperationalError, match="no such table") as excinfo:
-        open_db(tmp_path / "g.db")
-    assert len(made) == 1 and len(made[0].raised) == 1
-    assert excinfo.value is made[0].raised[0]
-    assert made[0].closes == 1
+    monkeypatch.setattr(db_module, "open_db", recording_open_db)
+    error = _InitFailed("init failed")
+
+    def init(conn: sqlite3.Connection) -> None:
+        raise error
+
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        open_db_with_init(tmp_path / "k.db", init)
+    assert excinfo.value.__context__ is error
+    assert [s.closes for s in spies] == [1]
 
 
 def test_success_returns_the_connection_open_and_usable(tmp_path: Path, opened: list[_CloseSpy]) -> None:

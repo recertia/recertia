@@ -1,4 +1,5 @@
-"""open_db durability pragmas, and the bounded wait for the journal-mode switch."""
+"""open_db durability pragmas, the bounded wait for the journal-mode switch, and closing the
+connection when a setup step raises."""
 
 from __future__ import annotations
 
@@ -171,3 +172,109 @@ def test_non_busy_error_comes_straight_through(
     assert excinfo.value is error
     assert flaky.calls == 1
     assert clock.sleeps == []
+
+
+# --- closing the connection when a setup step raises (the except block in open_db) ---
+
+
+class _SetupFailsCloseRaises:
+    """Wraps a real connection: every statement hits a missing table, and ``close()`` raises."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+        self.closes = 0
+        self.raised: list[sqlite3.OperationalError] = []
+
+    def execute(self, sql: str, *args: Any) -> sqlite3.Cursor:
+        try:
+            return self.conn.execute("SELECT x FROM missing_table")
+        except sqlite3.OperationalError as exc:
+            self.raised.append(exc)
+            raise
+
+    def close(self) -> None:
+        self.closes += 1
+        self.conn.close()
+        raise sqlite3.ProgrammingError("close failed")
+
+
+def test_open_db_setup_error_survives_a_failing_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_connect = sqlite3.connect
+    made: list[_SetupFailsCloseRaises] = []
+
+    def connect(*args: Any, **kwargs: Any) -> _SetupFailsCloseRaises:
+        conn = _SetupFailsCloseRaises(real_connect(*args, **kwargs))
+        made.append(conn)
+        return conn
+
+    monkeypatch.setattr(db_module.sqlite3, "connect", connect)
+    with pytest.raises(sqlite3.OperationalError, match="no such table") as excinfo:
+        open_db(tmp_path / "g.db")
+    assert len(made) == 1 and len(made[0].raised) == 1
+    assert excinfo.value is made[0].raised[0]
+    assert made[0].closes == 1
+
+
+class _SetupFailsCloseInterrupted(_SetupFailsCloseRaises):
+    def close(self) -> None:
+        self.closes += 1
+        self.conn.close()
+        raise KeyboardInterrupt
+
+
+def test_open_db_keyboard_interrupt_from_close_propagates_with_the_setup_error_as_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_connect = sqlite3.connect
+    made: list[_SetupFailsCloseInterrupted] = []
+
+    def connect(*args: Any, **kwargs: Any) -> _SetupFailsCloseInterrupted:
+        conn = _SetupFailsCloseInterrupted(real_connect(*args, **kwargs))
+        made.append(conn)
+        return conn
+
+    monkeypatch.setattr(db_module.sqlite3, "connect", connect)
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        open_db(tmp_path / "k.db")
+    assert len(made) == 1 and len(made[0].raised) == 1
+    assert excinfo.value.__context__ is made[0].raised[0]
+    assert made[0].closes == 1
+
+
+class _CloseSpy:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+        self.closes = 0
+
+    def close(self) -> None:
+        self.closes += 1
+        self.conn.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.conn, name)
+
+
+@pytest.mark.parametrize("error_type", [KeyboardInterrupt, SystemExit, GeneratorExit])
+def test_open_db_base_exception_in_setup_closes_once_and_reraises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[BaseException]
+) -> None:
+    real_connect = sqlite3.connect
+    made: list[_CloseSpy] = []
+    error = error_type()
+
+    def connect(*args: Any, **kwargs: Any) -> _CloseSpy:
+        spy = _CloseSpy(real_connect(*args, **kwargs))
+        made.append(spy)
+        return spy
+
+    def failing_journal_mode(*_args: Any, **_kwargs: Any) -> None:
+        raise error
+
+    monkeypatch.setattr(db_module.sqlite3, "connect", connect)
+    monkeypatch.setattr(db_module, "_set_journal_mode", failing_journal_mode)
+    with pytest.raises(error_type) as excinfo:
+        open_db(tmp_path / "b.db")
+    assert excinfo.value is error
+    assert [s.closes for s in made] == [1]
