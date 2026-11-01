@@ -24,11 +24,13 @@ os.environ.setdefault("RECERTIA_IMPORT_LOCK_TIMEOUT_S", "0.25")
 # RECERTIA_NO_NETWORK=1); locally, RECERTIA_NO_NETWORK=0 opts out for ad-hoc debugging.
 # Loopback and AF_UNIX stay allowed (TestClient, local servers, Docker socket).
 
+import functools  # noqa: E402
 import ipaddress  # noqa: E402
 import socket  # noqa: E402
 import sys  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
+import weakref  # noqa: E402
 from collections.abc import Generator  # noqa: E402
 from typing import Any  # noqa: E402
 
@@ -191,13 +193,69 @@ def session_exit_guard(config: Any) -> None:
     os._exit(status)
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: Any) -> None:
-    """Each test starts with a closed model circuit so failures do not leak."""
+    """Each test starts with a closed model circuit so failures do not leak.
 
-    del item
+    It also marks where this test's app states start in the tracked list (see
+    ``close_test_app_states_report``). ``tryfirst`` runs this before any fixture is set up.
+    """
+
+    track_app_states()
+    item.stash[_APP_STATES_START] = len(_APP_STATES)
     from recertia.solver.resilience import default_breaker
 
     default_breaker().reset()
+
+
+# --- App state teardown -----------------------------------------------------------------
+# ``create_app`` builds an ``AppState`` that holds sqlite connections. Only the app's
+# lifespan closes it, and a bare ``TestClient(app)`` never runs the lifespan, so every
+# state a test builds is tracked here and closed after the test's own teardown.
+
+_APP_STATES: list[weakref.ref[Any]] = []
+_APP_STATES_START = pytest.StashKey[int]()
+
+
+def track_app_states() -> None:
+    """Record every ``AppState`` built from now on (idempotent; nested sessions share it)."""
+
+    from recertia.app.state import AppState
+
+    original = AppState.__init__
+    if getattr(original, "_tracked_for_tests", False):
+        return
+
+    @functools.wraps(original)
+    def tracked_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        original(self, *args, **kwargs)
+        _APP_STATES.append(weakref.ref(self))
+
+    tracked_init._tracked_for_tests = True  # type: ignore[attr-defined]
+    AppState.__init__ = tracked_init  # type: ignore[method-assign]
+
+
+def close_test_app_states_report(start: int) -> str | None:
+    """Close the app states built since ``start`` and drop them from the list.
+
+    ``AppState.close`` is safe to call more than once, so a state a test already
+    closed (through the lifespan or ``close_app``) is closed again harmlessly. A
+    nested in-process session closes only the states its own tests built. Returns
+    a failure message, or None when every close returned.
+    """
+
+    refs = _APP_STATES[start:]
+    del _APP_STATES[start:]
+    problems = []
+    for ref in refs:
+        state = ref()
+        if state is None:
+            continue
+        try:
+            state.close()
+        except Exception as exc:  # report every state, never skip the rest
+            problems.append(f"closing an app state raised {exc!r} in teardown")
+    return "; ".join(problems) or None
 
 
 # Teardown deadline for embedded queue workers and async pool threads. A module
@@ -229,19 +287,26 @@ def pytest_runtest_teardown(item: Any, nextitem: Any) -> Generator[None, None, N
     printed while stopping lands in the test's captured teardown section.
     """
 
-    del item, nextitem
+    del nextitem
     try:
         failure = stop_test_workers_report(timeout=TEARDOWN_TIMEOUT_S)
     # pytest.fail.Exception too: pytest-timeout's signal method raises it here when the
     # 60s per-test budget runs out mid-stop, and raising before the yield cascades.
     except (Exception, pytest.fail.Exception) as exc:  # never skip pytest's own teardown
         failure = f"stopping test workers raised {exc!r} in teardown"
+    start = item.stash.get(_APP_STATES_START, len(_APP_STATES))
     try:
         result = yield
     except BaseException as exc:  # a finalizer raised: keep the leak message
-        if failure is not None:
-            exc.add_note(failure)
+        closed = close_test_app_states_report(start)
+        for note in (failure, closed):
+            if note is not None:
+                exc.add_note(note)
         raise
+    # After the fixture finalizers, so a fixture that still uses its app (or closes it
+    # itself) runs first; the workers were stopped above, before any store is closed.
+    closed = close_test_app_states_report(start)
+    failure = "; ".join(note for note in (failure, closed) if note is not None) or None
     if failure is not None:
         pytest.fail(failure, pytrace=False)
     return result

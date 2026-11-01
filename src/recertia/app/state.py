@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from recertia.persistence.idempotency import IdempotencyStore
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -66,10 +69,38 @@ class AppState:
     _cancel_flags: set[str] = field(default_factory=set)
 
     def close(self) -> None:
-        """Release what this state owns. Safe to call more than once."""
+        """Release what this state owns. Safe to call more than once.
 
-        if self.idempotency is not None:
-            self.idempotency.close()
+        The embedded queue worker is stopped first: its thread claims from ``queue``
+        and runs items that write to these stores, so nothing may be closed under it.
+        If it does not stop in time (an in-flight item), every store is left open and
+        a warning is logged; a later ``close`` tries again. Then each store's sqlite
+        connection is closed. A store that raises does not keep the others open.
+        """
+
+        embedded = self.embedded
+        if embedded is not None and not embedded.stop():
+            _log.warning("app state left open: the embedded queue worker is still running an item")
+            return
+        failure: BaseException | None = None
+        for store in (
+            self.idempotency,
+            self.queue,
+            self.sessions,
+            self.proposals,
+            self.programs,
+            self.job_runs,
+            self.workspace_registry,
+            self.quota_store,
+        ):
+            if store is None:
+                continue
+            try:
+                store.close()
+            except Exception as exc:  # noqa: BLE001 - close the rest, then raise the first
+                failure = failure or exc
+        if failure is not None:
+            raise failure
 
     @property
     def jobs(self) -> Any:

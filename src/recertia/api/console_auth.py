@@ -304,6 +304,13 @@ class SessionStore:
             return None
         return session_id
 
+    def close(self) -> None:
+        """Close the sqlite connection, if this store has one. Safe to call more than once."""
+
+        with self._oidc_lock:
+            if self._conn is not None:
+                self._conn.close()
+
     def _save(self, session_id: str, payload: dict[str, Any]) -> None:
         raw = json.dumps(payload, separators=(",", ":"), sort_keys=True)
         expires = str(payload.get("exp", ""))

@@ -307,10 +307,11 @@ def test_run_busy_from_the_thread_lock_names_no_path(tmp_path: Path) -> None:
     assert response.status_code == 409, response.text
     assert response.json() == {"error": {"code": "run_busy", "message": message, "retryable": True}}
     for text in (message, response.text):
+        # The needles first: tmp_path is absolute, so a separator check would report it first.
+        for needle in (lock_path.name, lock_path.stem, str(tmp_path)):  # "path-guard(.lock)", tmp_path
+            assert needle not in text, needle
         for sep in separators:
             assert sep not in text, (sep, text)
-        for needle in (lock_path.name, lock_path.stem, str(tmp_path)):  # "path-guard.lock", "path-guard"
-            assert needle not in text, needle
     assert message == "run lease busy", message
 
 
@@ -387,8 +388,8 @@ def test_run_busy_from_the_lease_row_and_the_flock_names_no_path(
 
     As for the thread-lock raise above: a ``RunBusy`` that escapes a route other than run
     start and resume is sent with its own message, so neither the message nor the response
-    may carry the lock path, the database path, the test root, or the lock file's name or
-    stem: the message is the fixed ``run lease busy``.
+    may carry the lock path, the database path, the test root, the lock file's name or stem,
+    or (for the lease row) the run id: the message is the fixed ``run lease busy``.
     """
 
     separators = ("/", "\\")  # either one, whatever the platform
@@ -411,10 +412,11 @@ def test_run_busy_from_the_lease_row_and_the_flock_names_no_path(
     assert response.json() == {"error": {"code": "run_busy", "message": message, "retryable": True}}
     needles = (lock_path.name, lock_path.stem, str(tmp_path), *((run_id,) if run_id else ()))
     for text in (message, response.text):
-        for sep in separators:
-            assert sep not in text, (sep, text)
+        # The needles first: tmp_path is absolute, so a separator check would report it first.
         for needle in needles:  # "row-guard(.lock)" and run id "row-run", or "flock-guard(.lock)"
             assert needle not in text, needle
+        for sep in separators:
+            assert sep not in text, (sep, text)
     assert message == "run lease busy", message
 
 
