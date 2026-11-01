@@ -215,9 +215,8 @@ def import_legacy_runtime(
 def _import_under_lock(layout: RunsRootLayout) -> bool:
     dest_path = layout.runtime_db
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    dest: sqlite3.Connection | None = open_db(dest_path)
+    dest: sqlite3.Connection = open_db(dest_path)
     try:
-        assert dest is not None
         apply_migrations(dest, _RUNTIME_MIGRATIONS)
         _ensure_live_operations(dest)
         _ensure_checkpoint_extras(dest)
@@ -243,8 +242,7 @@ def _import_under_lock(layout: RunsRootLayout) -> bool:
                 dest.execute("ROLLBACK")
                 raise
     finally:
-        if dest is not None:
-            dest.close()
+        dest.close()
     _retire_legacy_files(layout)
     return True
 

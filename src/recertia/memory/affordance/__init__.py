@@ -413,8 +413,8 @@ class AffordanceStore:
             if not self.runtime_db.exists():
                 return None
             raise
-        conn.isolation_level = None
         try:
+            conn.isolation_level = None
             marked = conn.execute(
                 "SELECT 1 FROM schema_migrations WHERE version=?", (IMPORT_MARKER,)
             ).fetchone()

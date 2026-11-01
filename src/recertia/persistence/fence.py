@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Literal, NoReturn
 
@@ -53,15 +54,8 @@ def require_lease_token(
     if fencing_token is None and missing_row != "allow":
         _reject()
     path = Path(db_path)
-    owned = False
-    if conn is None:
-        if not path.exists():
-            if missing_row == "allow":
-                return
-            _reject()
-        conn = open_db(path)
-        owned = True
-    try:
+
+    def _check(conn: sqlite3.Connection) -> None:
         schema = _leases_schema(conn)
         if schema is None:
             if missing_row == "allow":
@@ -85,22 +79,29 @@ def require_lease_token(
                 (tenant_id, run_id),
             ).fetchone()
             row = None if token_row is None else (token_row[0], "held", 1)
-    finally:
-        if owned:
-            conn.close()
-    if row is None:
+        if row is None:
+            if missing_row == "allow":
+                return
+            _reject()
+        stored_token = int(row[0])
+        status = str(row[1] or "held")
+        if status == "held":
+            if fencing_token is None or int(fencing_token) != stored_token:
+                _reject()
+            return
+        # Released: never-leased is the only token-less path. A released row is
+        # not never-leased, and the holder's last token is dead.
+        _reject()
+
+    if conn is not None:
+        _check(conn)
+        return
+    if not path.exists():
         if missing_row == "allow":
             return
         _reject()
-    stored_token = int(row[0])
-    status = str(row[1] or "held")
-    if status == "held":
-        if fencing_token is None or int(fencing_token) != stored_token:
-            _reject()
-        return
-    # Released: never-leased is the only token-less path. A released row is
-    # not never-leased, and the holder's last token is dead.
-    _reject()
+    with closing(open_db(path)) as owned:
+        _check(owned)
 
 
 def lease_paths_equal(left: Path, right: Path) -> bool:
