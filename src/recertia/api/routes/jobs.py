@@ -74,68 +74,71 @@ def register_jobs_routes(app: FastAPI, rs: RouteState) -> None:
             revoke_queue=lineage.queue,
         )
         runner = build_job_runner(store, runs_root=runs_root / "jobs", policy=policy)
-        attach_enablement(
-            runner,
-            eval_db=runs_root / "evals.db",
-            skills_root=ctx.tenant_skills_root(tenant_id),
-        )
-        budget = JobBudget(max_proposals=body.max_proposals)
-        resolved = ctx.job_service.resolve(job)
-        job_rec = ctx.job_runs.create(
-            resolved.name if resolved is not None else job,
-            tenant_id=tenant_id,
-            dry_run=body.dry_run,
-        )
-        job_rec.status = "running"
-        ctx.job_runs.save(job_rec)
         try:
-            result = ctx.job_service.run(
-                principal,
-                job,
-                dispatch=JobDispatch(
-                    store=store,
-                    runner=runner,
-                    budget=budget,
-                    policy=policy,
-                    runs_root=runs_root,
-                    lineage=lineage,
-                    dry_run=body.dry_run,
-                    one_off=list(body.one_off) if body.one_off else None,
-                    tool_upgraded=body.tool_upgraded,
-                    hint=list(body.hint) if body.hint else None,
-                    skill_id=body.skill_id,
-                    skill_version=body.skill_version,
-                    fake_edge_failures=body.fake_edge_failures,
-                    merge_conflicts=body.merge_conflicts,
-                ),
-                console_roles=frozenset(user.roles) if user is not None else None,
+            attach_enablement(
+                runner,
+                eval_db=runs_root / "evals.db",
+                skills_root=ctx.tenant_skills_root(tenant_id),
             )
-        except HTTPException:
-            raise
-        except NotFound as exc:
-            job_rec.status = "failed"
-            job_rec.error = exc.message
-            job_rec.finished_at = datetime.now(timezone.utc).isoformat()
+            budget = JobBudget(max_proposals=body.max_proposals)
+            resolved = ctx.job_service.resolve(job)
+            job_rec = ctx.job_runs.create(
+                resolved.name if resolved is not None else job,
+                tenant_id=tenant_id,
+                dry_run=body.dry_run,
+            )
+            job_rec.status = "running"
             ctx.job_runs.save(job_rec)
-            raise HTTPException(status_code=404, detail=exc.message) from exc
-        except Forbidden as exc:
-            job_rec.status = "failed"
-            job_rec.error = exc.message
-            job_rec.finished_at = datetime.now(timezone.utc).isoformat()
-            ctx.job_runs.save(job_rec)
-            raise HTTPException(status_code=403, detail=exc.message) from exc
-        except ConfigError as exc:
-            job_rec.status = "failed"
-            job_rec.error = exc.message
-            job_rec.finished_at = datetime.now(timezone.utc).isoformat()
-            ctx.job_runs.save(job_rec)
-            raise HTTPException(status_code=400, detail=exc.message) from exc
-        except Exception as exc:  # noqa: BLE001
-            job_rec.status = "failed"
-            job_rec.error = str(exc)
-            job_rec.finished_at = datetime.now(timezone.utc).isoformat()
-            ctx.job_runs.save(job_rec)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            try:
+                result = ctx.job_service.run(
+                    principal,
+                    job,
+                    dispatch=JobDispatch(
+                        store=store,
+                        runner=runner,
+                        budget=budget,
+                        policy=policy,
+                        runs_root=runs_root,
+                        lineage=lineage,
+                        dry_run=body.dry_run,
+                        one_off=list(body.one_off) if body.one_off else None,
+                        tool_upgraded=body.tool_upgraded,
+                        hint=list(body.hint) if body.hint else None,
+                        skill_id=body.skill_id,
+                        skill_version=body.skill_version,
+                        fake_edge_failures=body.fake_edge_failures,
+                        merge_conflicts=body.merge_conflicts,
+                    ),
+                    console_roles=frozenset(user.roles) if user is not None else None,
+                )
+            except HTTPException:
+                raise
+            except NotFound as exc:
+                job_rec.status = "failed"
+                job_rec.error = exc.message
+                job_rec.finished_at = datetime.now(timezone.utc).isoformat()
+                ctx.job_runs.save(job_rec)
+                raise HTTPException(status_code=404, detail=exc.message) from exc
+            except Forbidden as exc:
+                job_rec.status = "failed"
+                job_rec.error = exc.message
+                job_rec.finished_at = datetime.now(timezone.utc).isoformat()
+                ctx.job_runs.save(job_rec)
+                raise HTTPException(status_code=403, detail=exc.message) from exc
+            except ConfigError as exc:
+                job_rec.status = "failed"
+                job_rec.error = exc.message
+                job_rec.finished_at = datetime.now(timezone.utc).isoformat()
+                ctx.job_runs.save(job_rec)
+                raise HTTPException(status_code=400, detail=exc.message) from exc
+            except Exception as exc:  # noqa: BLE001
+                job_rec.status = "failed"
+                job_rec.error = str(exc)
+                job_rec.finished_at = datetime.now(timezone.utc).isoformat()
+                ctx.job_runs.save(job_rec)
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            runner.close()
 
         persisted = []
         for p in result.proposals:

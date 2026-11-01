@@ -279,48 +279,51 @@ def test_flaky_tool_classifies_as_tool_without_trust_impact(tmp_path: Path) -> N
     )
     tools = _approved_runtime(registry)
     affordances = AffordanceStore(tmp_path / "aff.json")
-    # Seed affordance history so flake_rate is observable.
-    from recertia.solver.tools import ToolResult
+    try:
+        # Seed affordance history so flake_rate is observable.
+        from recertia.solver.tools import ToolResult
 
-    for _ in range(5):
-        affordances.record_tool(
-            ToolResult(tool="flaky_net", ok=False, exit_code=1, error_signature="FLAKE_SIGNATURE")
+        for _ in range(5):
+            affordances.record_tool(
+                ToolResult(tool="flaky_net", ok=False, exit_code=1, error_signature="FLAKE_SIGNATURE")
+            )
+
+        from contracts.failure import FailureSignal
+        from contracts.run import RunState
+        from recertia.graph.ops import OperationLedger
+        from recertia.ledger import HashChainLedger
+        from recertia.nodes.classify_failure import classify_failure
+        from recertia.nodes.context import NodeContext
+        from recertia.workspace import WorkspaceManager
+
+        state = RunState(
+            run_id="r",
+            task=Task(task_id="t", request="x", submitted_at=_NOW),
+            failure_signal=FailureSignal(
+                source="solver",
+                detail="flaky tool=flaky_net: FLAKE_SIGNATURE: connection reset",
+                at=_NOW,
+            ),
+            spent=__import__("contracts.budget", fromlist=["Spend"]).Spend(attempts=1),
+            budget=Budget(max_attempts=4),
         )
-
-    from contracts.failure import FailureSignal
-    from contracts.run import RunState
-    from recertia.graph.ops import OperationLedger
-    from recertia.ledger import HashChainLedger
-    from recertia.nodes.classify_failure import classify_failure
-    from recertia.nodes.context import NodeContext
-    from recertia.workspace import WorkspaceManager
-
-    state = RunState(
-        run_id="r",
-        task=Task(task_id="t", request="x", submitted_at=_NOW),
-        failure_signal=FailureSignal(
-            source="solver",
-            detail="flaky tool=flaky_net: FLAKE_SIGNATURE: connection reset",
-            at=_NOW,
-        ),
-        spent=__import__("contracts.budget", fromlist=["Spend"]).Spend(attempts=1),
-        budget=Budget(max_attempts=4),
-    )
-    ctx = NodeContext(
-        run_id="r",
-        attempt_no=1,
-        node="classify_failure",
-        workdir=tmp_path,
-        workspaces=WorkspaceManager(tmp_path / "snaps"),
-        ledger=HashChainLedger(tmp_path / "l.jsonl"),
-        ops=OperationLedger(tmp_path / "ops.db"),
-        tools=tools,
-        affordances=affordances,
-    )
-    outcome = classify_failure(state, ctx)
-    assert outcome.state.failure is not None
-    assert outcome.state.failure.failure_class == "tool"
-    assert outcome.state.failure.counts_against_trust is False
+        ctx = NodeContext(
+            run_id="r",
+            attempt_no=1,
+            node="classify_failure",
+            workdir=tmp_path,
+            workspaces=WorkspaceManager(tmp_path / "snaps"),
+            ledger=HashChainLedger(tmp_path / "l.jsonl"),
+            ops=OperationLedger(tmp_path / "ops.db"),
+            tools=tools,
+            affordances=affordances,
+        )
+        outcome = classify_failure(state, ctx)
+        assert outcome.state.failure is not None
+        assert outcome.state.failure.failure_class == "tool"
+        assert outcome.state.failure.counts_against_trust is False
+    finally:
+        affordances.close()
 
 
 def test_independent_steps_run_concurrently_conflicting_serialise(tmp_path: Path) -> None:

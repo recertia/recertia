@@ -32,6 +32,11 @@ class SqliteSessionRepo:
         self.path = path
         self._conn = open_db_with_init(path, self._set_up)
 
+    def close(self) -> None:
+        """Close the connection to the database."""
+
+        self._conn.close()
+
     def _set_up(self, conn: sqlite3.Connection) -> None:
         """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""
 
@@ -114,6 +119,11 @@ class SqliteSessionRepo:
 class SqliteTenantRepo:
     def __init__(self, path: Path) -> None:
         self._conn = open_db_with_init(path, self._set_up)
+
+    def close(self) -> None:
+        """Close the connection to the database."""
+
+        self._conn.close()
 
     def _set_up(self, conn: sqlite3.Connection) -> None:
         """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""

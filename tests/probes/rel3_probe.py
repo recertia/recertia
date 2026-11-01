@@ -380,7 +380,9 @@ def scen_toctou(root):
     try:
         store.save("r5", 1, "n", None, state("r5"), fencing_token=ta); res = "ACCEPTED"
     except LeaseLost: res = "rejected"
-    finally: lease_mod.require_lease_token = real
+    finally:
+        lease_mod.require_lease_token = real
+        store.close()
     with contextlib.closing(sqlite3.connect(root / "runtime.db")) as c:
         cur = c.execute("SELECT fencing_token FROM run_leases").fetchone()[0]
     record("E check-then-write is atomic", res == "rejected", f"write with tok {ta} after row moved to {cur}: {res}")
@@ -402,6 +404,7 @@ def scen_fail_open(root):
     store = CheckpointStore(root / "ck.db", lease_db=root / "missing-runtime.db", tenant_id="local")
     try: store.save("r7", 1, "n", None, state("r7"), fencing_token=999); res = "ACCEPTED"
     except LeaseLost: res = "rejected"
+    finally: store.close()
     record("G no lease row/db => write rejected", res == "rejected", f"bogus token 999 with no runtime.db: {res}")
 
 # --- H: operations table rebuild crash midway -------------------------------------------
@@ -415,7 +418,7 @@ def scen_ops_rebuild_crash(root):
     from recertia.graph import ops as ops_mod
     c.execute(ops_mod._OPERATIONS_DDL.replace("operations", "operations_rel3", 1)); c.commit(); c.close()
     try:
-        led = OperationLedger(db); got = led.get("old", 1, "n", 0)
+        with contextlib.closing(OperationLedger(db)) as led: got = led.get("old", 1, "n", 0)
         record("H ops rebuild resumable after crash", got[0], f"after restart: {got}")
     except Exception as exc:
         record("H ops rebuild resumable after crash", False, f"restart raises {type(exc).__name__}: {exc}")

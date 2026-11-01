@@ -121,56 +121,59 @@ def jobs_run(
         revoke_queue=lineage.queue,
     )
     runner = build_job_runner(store, runs_root=runs_root / "jobs", policy=policy)
-    attach_enablement(
-        runner,
-        eval_db=runs_root / "evals.db",
-        skills_root=skills_root,
-    )
-    budget = JobBudget(max_proposals=max_proposals, max_tokens=max_tokens)
-    service = JobService(pdp=PolicyDecisionPoint.load(surface="cli"))
     try:
-        result = service.run(
-            principal,
-            job,
-            dispatch=JobDispatch(
-                store=store,
-                runner=runner,
-                budget=budget,
-                policy=policy,
-                runs_root=runs_root,
-                lineage=lineage,
-                dry_run=dry_run,
-                one_off=list(one_off) if one_off else None,
-                tool_upgraded=tool_upgraded,
-                hint=list(hint) if hint else None,
-                arxiv_id=list(arxiv_id) if arxiv_id else None,
-                arxiv_query=arxiv_query,
-                arxiv_max=arxiv_max,
-                with_pdf=with_pdf,
-                pdf_sandbox=pdf_sandbox,
-                distill_paper=distill_paper,
-                facts_root=facts_root,
-                submit=submit,
-                skill_id=skill_id,
-                skill_version=skill_version,
-                fake_edge_failures=fake_edge_failures,
-                merge_conflicts=merge_conflicts,
-                edits_log=edits_log,
-                task_class=task_class,
-            ),
+        attach_enablement(
+            runner,
+            eval_db=runs_root / "evals.db",
+            skills_root=skills_root,
         )
-    except RecertiaError as exc:
-        if exc.code == "not_found":
-            typer.echo(
-                "unknown job "
-                f"{job!r}; expected mine|curator|practice|recertify|shadow|"
-                "parallelise|serialise|correction|fail_cluster|hex|compress",
-                err=True,
+        budget = JobBudget(max_proposals=max_proposals, max_tokens=max_tokens)
+        service = JobService(pdp=PolicyDecisionPoint.load(surface="cli"))
+        try:
+            result = service.run(
+                principal,
+                job,
+                dispatch=JobDispatch(
+                    store=store,
+                    runner=runner,
+                    budget=budget,
+                    policy=policy,
+                    runs_root=runs_root,
+                    lineage=lineage,
+                    dry_run=dry_run,
+                    one_off=list(one_off) if one_off else None,
+                    tool_upgraded=tool_upgraded,
+                    hint=list(hint) if hint else None,
+                    arxiv_id=list(arxiv_id) if arxiv_id else None,
+                    arxiv_query=arxiv_query,
+                    arxiv_max=arxiv_max,
+                    with_pdf=with_pdf,
+                    pdf_sandbox=pdf_sandbox,
+                    distill_paper=distill_paper,
+                    facts_root=facts_root,
+                    submit=submit,
+                    skill_id=skill_id,
+                    skill_version=skill_version,
+                    fake_edge_failures=fake_edge_failures,
+                    merge_conflicts=merge_conflicts,
+                    edits_log=edits_log,
+                    task_class=task_class,
+                ),
             )
-            raise typer.Exit(code=2) from exc
-        from recertia.cli.exit import raise_exit
+        except RecertiaError as exc:
+            if exc.code == "not_found":
+                typer.echo(
+                    "unknown job "
+                    f"{job!r}; expected mine|curator|practice|recertify|shadow|"
+                    "parallelise|serialise|correction|fail_cluster|hex|compress",
+                    err=True,
+                )
+                raise typer.Exit(code=2) from exc
+            from recertia.cli.exit import raise_exit
 
-        raise_exit(exc)
+            raise_exit(exc)
+    finally:
+        runner.close()
 
     # Strip internal PDF text from JSON echo (can be large).
     safe_proposals = []
