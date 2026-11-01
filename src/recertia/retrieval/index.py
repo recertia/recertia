@@ -79,7 +79,7 @@ class SkillIndex:
     def _set_up(self, conn: sqlite3.Connection) -> None:
         """Post-connect steps; ``open_db_with_init`` closes ``conn`` if one raises."""
 
-        self._conn = conn
+        self._conn = conn  # set before __init__ assigns it, because _init_schema reads self._conn
         conn.execute("PRAGMA journal_mode=WAL")
         self._init_schema()
 
