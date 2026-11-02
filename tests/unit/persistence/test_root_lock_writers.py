@@ -508,13 +508,17 @@ def test_lock_released_when_open_raises_after_lock(tmp_path: Path, monkeypatch: 
 def test_lock_released_when_close_raises(tmp_path: Path) -> None:
     root = tmp_path / "runs"
     p = open_run_persistence(root)
+    real_checkpoints_close = p.checkpoints.close
 
     def boom() -> None:
         raise RuntimeError("injected close")
 
     p.checkpoints.close = boom  # type: ignore[method-assign]
-    with pytest.raises(RuntimeError, match="injected close"):
-        p.close()
+    try:
+        with pytest.raises(RuntimeError, match="injected close"):
+            p.close()
+    finally:
+        real_checkpoints_close()
     assert _backup_locks_free(root)
 
 

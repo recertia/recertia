@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,20 +37,22 @@ def test_policy_loads_and_merges_quota_sidecar(tmp_path: Path) -> None:
 
 def test_build_job_runner_uses_policy_cap(tmp_path: Path) -> None:
     policy = load_policy()
-    runner = build_job_runner(
-        SkillStore(tmp_path / "skills"),
-        runs_root=tmp_path / "jobs",
-        policy=policy,
-    )
-    assert runner.quota.weekly_token_cap == policy.job_quota.weekly_token_cap
-    assert runner.quota_path == tmp_path / "jobs" / "job_quota.json"
+    with closing(
+        build_job_runner(
+            SkillStore(tmp_path / "skills"),
+            runs_root=tmp_path / "jobs",
+            policy=policy,
+        )
+    ) as runner:
+        assert runner.quota.weekly_token_cap == policy.job_quota.weekly_token_cap
+        assert runner.quota_path == tmp_path / "jobs" / "job_quota.json"
 
 
 def test_runner_persists_charge(tmp_path: Path) -> None:
     path = tmp_path / "job_quota.json"
     quota = JobQuota(weekly_token_cap=1_000)
-    runner = JobRunner(SkillStore(tmp_path / "skills"), quota=quota, quota_path=path)
-    result = runner.run("recertify", list, budget=JobBudget(max_tokens=40))
+    with closing(JobRunner(SkillStore(tmp_path / "skills"), quota=quota, quota_path=path)) as runner:
+        result = runner.run("recertify", list, budget=JobBudget(max_tokens=40))
     assert result.skipped is None
     saved = QuotaSidecar(path).merge(JobQuota(weekly_token_cap=1_000))
     assert saved.tokens_spent == 40
@@ -60,9 +63,9 @@ def test_cli_and_console_construct_runner_with_quota(tmp_path: Path) -> None:
     from recertia.jobs import JobRunner as Bare
 
     bare = Bare(SkillStore(tmp_path / "skills"))
-    wired = build_job_runner(SkillStore(tmp_path / "skills"), runs_root=tmp_path / "jobs")
-    assert wired.quota.weekly_token_cap != 0
-    assert wired.quota.weekly_token_cap == load_policy().job_quota.weekly_token_cap
-    # Bare default is the model default — same cap — but has no sidecar.
-    assert bare.quota_path is None
-    assert wired.quota_path is not None
+    with closing(build_job_runner(SkillStore(tmp_path / "skills"), runs_root=tmp_path / "jobs")) as wired:
+        assert wired.quota.weekly_token_cap != 0
+        assert wired.quota.weekly_token_cap == load_policy().job_quota.weekly_token_cap
+        # Bare default is the model default — same cap — but has no sidecar.
+        assert bare.quota_path is None
+        assert wired.quota_path is not None

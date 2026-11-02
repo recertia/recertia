@@ -1,6 +1,6 @@
 """R3 adversarial probes for #89 (fail-closed fencing) and #90 (busy overlay, api.lock, copy rollback).
 Every scenario runs in its own fresh root and records independently."""
-import sys, sqlite3, traceback, typing
+import contextlib, sys, sqlite3, traceback, typing
 from pathlib import Path
 from tests.probes.rel3_probe import state, record, RESULTS, fresh_root
 from recertia.graph.persistence import open_run_persistence
@@ -27,29 +27,32 @@ def scen(fn):
 # ---------- #89: fail-closed must not wedge legitimate runs ----------
 @fresh_root
 def P_fresh_run_no_lease(root):
-    p = open_run_persistence(root); run = "fresh"
-    r = [tw(lambda: p.checkpoints.save(run, 1, "n", None, state(run))),
-         tw(lambda: p.operations.run_once(run, 1, "solve", 0, lambda: 1)),
-         tw(lambda: p.ledger.append(actor="x", action=ACT, target=run))]
-    record("P fresh never-leased run, token-less writes allowed", r == ["ACCEPTED"]*3, f"ck/op/lg={r}")
+    run = "fresh"
+    with contextlib.closing(open_run_persistence(root)) as p:
+        r = [tw(lambda: p.checkpoints.save(run, 1, "n", None, state(run))),
+             tw(lambda: p.operations.run_once(run, 1, "solve", 0, lambda: 1)),
+             tw(lambda: p.ledger.append(actor="x", action=ACT, target=run))]
+        record("P fresh never-leased run, token-less writes allowed", r == ["ACCEPTED"]*3, f"ck/op/lg={r}")
 
 @fresh_root
 def P3_after_clean_release(root):
-    p = open_run_persistence(root); run = "done"
-    a = lease(root, run); t = a.acquire(); p.checkpoints.save(run, 1, "n", None, state(run), fencing_token=t); a.release()
-    lg0 = tw(lambda: p.ledger.append(actor="reviewer", action=ACT, target=run))
-    record("P3 token-less ledger append on a RELEASED run is rejected", lg0 != "ACCEPTED", f"token-less ledger={lg0}")
-    # positive control: same append on a run that was never leased stays allowed
-    ctl = tw(lambda: p.ledger.append(actor="reviewer", action=ACT, target="never-leased-run"))
-    record("P3c control: token-less ledger append on a never-leased run allowed", ctl == "ACCEPTED", f"token-less ledger={ctl}")
+    run = "done"
+    with contextlib.closing(open_run_persistence(root)) as p:
+        a = lease(root, run); t = a.acquire(); p.checkpoints.save(run, 1, "n", None, state(run), fencing_token=t); a.release()
+        lg0 = tw(lambda: p.ledger.append(actor="reviewer", action=ACT, target=run))
+        record("P3 token-less ledger append on a RELEASED run is rejected", lg0 != "ACCEPTED", f"token-less ledger={lg0}")
+        # positive control: same append on a run that was never leased stays allowed
+        ctl = tw(lambda: p.ledger.append(actor="reviewer", action=ACT, target="never-leased-run"))
+        record("P3c control: token-less ledger append on a never-leased run allowed", ctl == "ACCEPTED", f"token-less ledger={ctl}")
 
 @fresh_root
 def P4_reacquire_after_release(root):
-    p = open_run_persistence(root); run = "again"
-    a = lease(root, run); t = a.acquire(); a.release()
-    b = lease(root, run); t2 = b.acquire()
-    r = tw(lambda: p.checkpoints.save(run, 1, "n", None, state(run), fencing_token=t2)); b.release()
-    record("P4 re-acquire after release writes with new token", r == "ACCEPTED" and t2 > t, f"t={t} t2={t2} write={r}")
+    run = "again"
+    with contextlib.closing(open_run_persistence(root)) as p:
+        a = lease(root, run); t = a.acquire(); a.release()
+        b = lease(root, run); t2 = b.acquire()
+        r = tw(lambda: p.checkpoints.save(run, 1, "n", None, state(run), fencing_token=t2)); b.release()
+        record("P4 re-acquire after release writes with new token", r == "ACCEPTED" and t2 > t, f"t={t} t2={t2} write={r}")
 
 # ---------- #90 ----------
 def _legacy(root, seqs=(1, 2, 3), run="legacy-run", op=False):

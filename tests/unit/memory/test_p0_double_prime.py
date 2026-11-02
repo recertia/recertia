@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -148,19 +149,21 @@ def test_r13_still_warning_miner_draft_clean() -> None:
 
 
 def test_orchestrator_sets_deterministic_guide_from_policy(tmp_path: Path) -> None:
-    off = GraphOrchestrator(tmp_path / "runs-off")
-    assert off.policy is None
+    with closing(GraphOrchestrator(tmp_path / "runs-off")) as off:
+        assert off.policy is None
     policy = Policy(
         version="p-test",
         authoring_prior_version="ap-test",
     )
-    on = GraphOrchestrator(
-        tmp_path / "runs-on",
-        policy=policy.model_copy(
-            update={"improvement": policy.improvement.model_copy(
-                update={"deterministic_guide": True}
-            )}
-        ),
-    )
-    assert on.policy is not None
-    assert on.policy.improvement.deterministic_guide is True
+    with closing(
+        GraphOrchestrator(
+            tmp_path / "runs-on",
+            policy=policy.model_copy(
+                update={"improvement": policy.improvement.model_copy(
+                    update={"deterministic_guide": True}
+                )}
+            ),
+        )
+    ) as on:
+        assert on.policy is not None
+        assert on.policy.improvement.deterministic_guide is True

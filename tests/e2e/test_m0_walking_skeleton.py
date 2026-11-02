@@ -128,7 +128,11 @@ def test_resume_mid_retry_loop_does_not_reexecute_prior_attempts(tmp_path: Path)
     orch1.close()
 
     assert stopped.attempt_no == 1
-    ops_attempt1 = GraphOrchestrator(runs_root).ops.count_for_node("run-mid-retry", 1, "solve")
+    orch_count = GraphOrchestrator(runs_root)
+    try:
+        ops_attempt1 = orch_count.ops.count_for_node("run-mid-retry", 1, "solve")
+    finally:
+        orch_count.close()
     assert ops_attempt1 == len(script)
 
     orch2 = GraphOrchestrator(runs_root)
