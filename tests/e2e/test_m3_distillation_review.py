@@ -77,6 +77,7 @@ def test_scratch_review_without_golden_gate_is_rejected(tmp_path: Path) -> None:
         )
     finally:
         orch.close()
+        index.close()
 
     assert state1.terminal == "rejected"
     assert state1.reusability is not None
