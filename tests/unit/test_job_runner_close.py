@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +60,7 @@ def test_close_closes_the_quota_repo_once(tmp_path: Path, monkeypatch: pytest.Mo
     runner.close()
 
     assert closes == [1]
-    with pytest.raises(Exception, match="closed"):
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
         repo.totals()
 
 
