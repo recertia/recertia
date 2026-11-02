@@ -9,7 +9,8 @@ A call passes when it has one of two shapes:
 
 Anything else needs an entry in ``ALLOWLIST``, keyed on the file and the enclosing function,
 with a reason and the tests that cover it as pytest node ids. The guard checks that each named
-test file and test function exists and that every entry still matches a call.
+test file and test function exists and that every entry still matches a call that has
+neither shape.
 """
 
 from __future__ import annotations
@@ -143,7 +144,7 @@ class Site:
     line: int
     function: str
     call: str
-    shape: str  # "closing", "try/finally", "allowlist" or "" when none applies
+    shape: str  # "closing", "try/finally" or "" when none applies
     why: str = ""
 
     def __str__(self) -> str:
@@ -274,7 +275,10 @@ def check_allowlist(entries: Iterable[Entry], sites: Iterable[Site], repo: Path)
     """Problems with the allowlist itself: no reason, no tests, a missing test, a stale entry."""
 
     problems: list[str] = []
-    keys = {(s.path, s.function, s.call) for s in sites}
+    sites = tuple(sites)
+    # Only a bare call needs an entry; a call that passes a shape no longer does.
+    bare = {(s.path, s.function, s.call) for s in sites if not s.shape}
+    shaped = {(s.path, s.function, s.call): s.shape for s in sites if s.shape}
     for entry in entries:
         label = f"{entry.path} {entry.function} {entry.call}"
         if not entry.reason.strip():
@@ -290,7 +294,12 @@ def check_allowlist(entries: Iterable[Entry], sites: Iterable[Site], repo: Path)
                 problems.append(f"{label}: test file {file} does not exist")
             elif name.split("[", 1)[0] not in _test_names(test_file):
                 problems.append(f"{label}: node id {node_id} does not exist")
-        if (entry.path, entry.function, entry.call) not in keys:
+        key = (entry.path, entry.function, entry.call)
+        if key in bare:
+            continue
+        if key in shaped:
+            problems.append(f"{label}: stale, its call already passes as {shaped[key]}")
+        else:
             problems.append(f"{label}: stale, matches no call")
     return problems
 
@@ -429,10 +438,10 @@ def test_allowlisted_site_passes() -> None:
 _FACTORY = "def f(p):\n    return open_db(p)\n"
 
 
-def _fixture_repo(tmp_path: Path, tests: Mapping[str, str]) -> tuple[Path, Path]:
+def _fixture_repo(tmp_path: Path, tests: Mapping[str, str], source: str = _FACTORY) -> tuple[Path, Path]:
     root = tmp_path / "src"
     root.mkdir()
-    (root / "m.py").write_text(_FACTORY, encoding="utf-8")
+    (root / "m.py").write_text(source, encoding="utf-8")
     for name, body in tests.items():
         (tmp_path / name).write_text(body, encoding="utf-8")
     return root, tmp_path
@@ -461,3 +470,22 @@ def test_stale_entry_fails(tmp_path: Path) -> None:
     good = Entry("m.py", "f", OPEN_DB, "factory", ("test_m.py::test_m",))
     stale = Entry("m.py", "gone", OPEN_DB, "factory", ("test_m.py::test_m",))
     assert guard(root, repo, (good, stale)) == ["m.py gone open_db: stale, matches no call"]
+
+
+_FIXED_BY_CLOSING = "def f(p):\n    with closing(open_db(p)) as c:\n        c.execute('x')\n"
+_FIXED_BY_TRY_FINALLY = (
+    "def f(p):\n    c = open_db(p)\n    try:\n        c.execute('x')\n    finally:\n        c.close()\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("source", "shape"),
+    [
+        pytest.param(_FIXED_BY_CLOSING, "closing", id="closing"),
+        pytest.param(_FIXED_BY_TRY_FINALLY, "try/finally", id="try-finally"),
+    ],
+)
+def test_entry_for_a_fixed_site_is_stale(tmp_path: Path, source: str, shape: str) -> None:
+    root, repo = _fixture_repo(tmp_path, {"test_m.py": "def test_m():\n    pass\n"}, source)
+    entry = Entry("m.py", "f", OPEN_DB, "factory", ("test_m.py::test_m",))
+    assert guard(root, repo, (entry,)) == [f"m.py f open_db: stale, its call already passes as {shape}"]
