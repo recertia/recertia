@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +28,8 @@ from recertia.trajectory.store import TrajectoryStore
 from recertia.workspace import WorkspaceManager
 
 _RUNTIME_MIGRATIONS = Path(__file__).resolve().parents[1] / "persistence" / "migrations" / "runtime"
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -195,33 +199,55 @@ def open_run_persistence(
         else:
             checkpoint_db = layout.checkpoints_db
             operations_db = layout.operations_db
-        persist = RunPersistence(
-            checkpoints=CheckpointStore(
+        # A later step that raises must not leave the stores built so far open. The
+        # stack closes them here, before the finally below releases the lock, and the
+        # caller still gets the original exception.
+        with ExitStack() as stack:
+            checkpoints = CheckpointStore(
                 checkpoint_db,
                 lease_db=layout.runtime_db,
                 tenant_id=tenant,
-            ),
-            operations=OperationLedger(
+            )
+            stack.callback(_close_after_failed_open, checkpoints)
+            operations = OperationLedger(
                 operations_db,
                 lease_db=layout.runtime_db,
                 tenant_id=tenant,
                 schema_lock=use_runtime,
-            ),
-            ledger=HashChainLedger(
+            )
+            stack.callback(_close_after_failed_open, operations)
+            ledger = HashChainLedger(
                 layout.ledger_path,
                 lease_db=layout.runtime_db,
                 tenant_id=tenant,
-            ),
-            trajectories=TrajectoryStore(layout.trajectories_dir),
-            audited_states=AuditedStateStore(layout.audited_states_dir),
-            workspaces=WorkspaceManager(layout.snapshots_dir),
-            root_lock=handle_lock,
-        )
+            )
+            trajectories = TrajectoryStore(layout.trajectories_dir)
+            audited_states = AuditedStateStore(layout.audited_states_dir)
+            workspaces = WorkspaceManager(layout.snapshots_dir)
+            persist = RunPersistence(
+                checkpoints=checkpoints,
+                operations=operations,
+                ledger=ledger,
+                trajectories=trajectories,
+                audited_states=audited_states,
+                workspaces=workspaces,
+                root_lock=handle_lock,
+            )
+            stack.pop_all()
         handle_lock = None
         return persist
     finally:
         if handle_lock is not None:
             handle_lock.release()
+
+
+def _close_after_failed_open(store: CheckpointStore | OperationLedger) -> None:
+    """Close a store left by a failed open; a close error is logged, never raised."""
+
+    try:
+        store.close()
+    except Exception:
+        _log.warning("closing %s after a failed open failed", type(store).__name__, exc_info=True)
 
 
 # The condition comes first and matters: an older release's `migrate=off` handle keeps only
