@@ -286,11 +286,11 @@ def scen_crash_resume(root):
     j = root / "journal"
     ctx = _spawn(); p = ctx.Process(target=holder_then_crash, args=(str(root), str(j), "r1"), name="rel3-holder-r1", daemon=True); p.start(); _join_or_fail("scen_crash_resume", [p])
     l = mk_lease(root); tok = l.acquire()
-    led = OperationLedger(root / "runtime.db")
-    def eff():
-        with open(j, "a") as f: f.write(f"resume tok{tok} inc{l.incarnation}\n")
-        return {"ok": True}
-    led.run_once("r1", 1, "solve", 0, eff, fencing_token=tok, incarnation=l.incarnation)
+    with contextlib.closing(OperationLedger(root / "runtime.db")) as led:
+        def eff():
+            with open(j, "a") as f: f.write(f"resume tok{tok} inc{l.incarnation}\n")
+            return {"ok": True}
+        led.run_once("r1", 1, "solve", 0, eff, fencing_token=tok, incarnation=l.incarnation)
     l.release()
     e = effects(j)
     record("A crash->resume op exactly-once", len(e) == 1, f"child exit={p.exitcode}; side effects={e}")

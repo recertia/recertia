@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -236,20 +237,21 @@ def test_dead_end_suppresses_repeated_approach(tmp_path: Path) -> None:
             )
         ],
     )
-    ctx = NodeContext(
-        run_id="r",
-        attempt_no=1,
-        node="evolve",
-        workdir=workdir,
-        workspaces=workspaces,
-        ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
-        ops=OperationLedger(tmp_path / "ops.db"),
-        episodic=episodic,
-    )
-    outcome = evolve(state, ctx)
-    assert outcome.state.strategy == "scratch"
-    assert "avoid_dead_end" in (outcome.note or "")
-    assert outcome.state.chosen is None
+    with closing(OperationLedger(tmp_path / "ops.db")) as ops:
+        ctx = NodeContext(
+            run_id="r",
+            attempt_no=1,
+            node="evolve",
+            workdir=workdir,
+            workspaces=workspaces,
+            ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
+            ops=ops,
+            episodic=episodic,
+        )
+        outcome = evolve(state, ctx)
+        assert outcome.state.strategy == "scratch"
+        assert "avoid_dead_end" in (outcome.note or "")
+        assert outcome.state.chosen is None
 
 
 def test_flaky_tool_classifies_as_tool_without_trust_impact(tmp_path: Path) -> None:
@@ -307,21 +309,22 @@ def test_flaky_tool_classifies_as_tool_without_trust_impact(tmp_path: Path) -> N
             spent=__import__("contracts.budget", fromlist=["Spend"]).Spend(attempts=1),
             budget=Budget(max_attempts=4),
         )
-        ctx = NodeContext(
-            run_id="r",
-            attempt_no=1,
-            node="classify_failure",
-            workdir=tmp_path,
-            workspaces=WorkspaceManager(tmp_path / "snaps"),
-            ledger=HashChainLedger(tmp_path / "l.jsonl"),
-            ops=OperationLedger(tmp_path / "ops.db"),
-            tools=tools,
-            affordances=affordances,
-        )
-        outcome = classify_failure(state, ctx)
-        assert outcome.state.failure is not None
-        assert outcome.state.failure.failure_class == "tool"
-        assert outcome.state.failure.counts_against_trust is False
+        with closing(OperationLedger(tmp_path / "ops.db")) as ops:
+            ctx = NodeContext(
+                run_id="r",
+                attempt_no=1,
+                node="classify_failure",
+                workdir=tmp_path,
+                workspaces=WorkspaceManager(tmp_path / "snaps"),
+                ledger=HashChainLedger(tmp_path / "l.jsonl"),
+                ops=ops,
+                tools=tools,
+                affordances=affordances,
+            )
+            outcome = classify_failure(state, ctx)
+            assert outcome.state.failure is not None
+            assert outcome.state.failure.failure_class == "tool"
+            assert outcome.state.failure.counts_against_trust is False
     finally:
         affordances.close()
 

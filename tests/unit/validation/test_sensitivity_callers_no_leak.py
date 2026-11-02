@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import tempfile
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,12 +40,26 @@ def temp_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
+_OPEN_LEDGERS: list[OperationLedger] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_operation_ledgers() -> Iterator[None]:
+    """Close every operation ledger ``_intake_ctx`` opened during the test."""
+
+    yield
+    while _OPEN_LEDGERS:
+        _OPEN_LEDGERS.pop().close()
+
+
 def _intake_ctx(tmp_path: Path) -> tuple[Path, NodeContext]:
     """A task workdir that already holds ``output.txt``, and an intake context for it."""
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
     (workdir / "output.txt").write_text("already solved")
+    ops = OperationLedger(tmp_path / "ops.db")
+    _OPEN_LEDGERS.append(ops)
     ctx = NodeContext(
         run_id="rec046",
         attempt_no=0,
@@ -52,7 +67,7 @@ def _intake_ctx(tmp_path: Path) -> tuple[Path, NodeContext]:
         workdir=workdir,
         workspaces=WorkspaceManager(tmp_path / "snapshots"),
         ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
-        ops=OperationLedger(tmp_path / "ops.db"),
+        ops=ops,
     )
     return workdir, ctx
 

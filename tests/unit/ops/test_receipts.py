@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tarfile
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -142,27 +143,28 @@ def test_store_write_does_not_emit_close_receipt(tmp_path: Path) -> None:
     workdir = tmp_path / "workdir"
     workdir.mkdir()
     ledger = HashChainLedger(tmp_path / "ledger.jsonl")
-    ctx = NodeContext(
-        run_id="unit-run",
-        attempt_no=0,
-        node="store",
-        workdir=workdir,
-        workspaces=WorkspaceManager(tmp_path / "snapshots"),
-        ledger=ledger,
-        ops=OperationLedger(tmp_path / "ops.db"),
-        script=None,
-        store=SkillStore(tmp_path / "skills"),
-    )
-    state = RunState(
-        run_id="unit-run",
-        task=Task(task_id="t", request="do a thing", submitted_at=datetime.now(timezone.utc)),
-        draft=version.model_dump(mode="json"),
-    )
-    outcome = store(state, ctx)
-    assert outcome.route == "always"
-    actions = [entry.action for entry in ledger.entries()]
-    assert "write" in actions
-    assert "close_receipt" not in actions
+    with closing(OperationLedger(tmp_path / "ops.db")) as ops:
+        ctx = NodeContext(
+            run_id="unit-run",
+            attempt_no=0,
+            node="store",
+            workdir=workdir,
+            workspaces=WorkspaceManager(tmp_path / "snapshots"),
+            ledger=ledger,
+            ops=ops,
+            script=None,
+            store=SkillStore(tmp_path / "skills"),
+        )
+        state = RunState(
+            run_id="unit-run",
+            task=Task(task_id="t", request="do a thing", submitted_at=datetime.now(timezone.utc)),
+            draft=version.model_dump(mode="json"),
+        )
+        outcome = store(state, ctx)
+        assert outcome.route == "always"
+        actions = [entry.action for entry in ledger.entries()]
+        assert "write" in actions
+        assert "close_receipt" not in actions
 
 
 def test_backup_tree_includes_receipts_jsonl(tmp_path: Path) -> None:

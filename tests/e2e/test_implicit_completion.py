@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
@@ -47,10 +48,23 @@ from recertia.telemetry import (
 )
 from recertia.workspace import WorkspaceManager
 
+_OPEN_LEDGERS: list[OperationLedger] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_operation_ledgers() -> Iterator[None]:
+    """Close every operation ledger ``_ctx`` opened during the test."""
+
+    yield
+    while _OPEN_LEDGERS:
+        _OPEN_LEDGERS.pop().close()
+
 
 def _ctx(tmp_path: Path, node: str = "join") -> NodeContext:
     work = tmp_path / "w"
     work.mkdir(exist_ok=True)
+    ops = OperationLedger(tmp_path / "o.db")
+    _OPEN_LEDGERS.append(ops)
     return NodeContext(
         run_id="r",
         attempt_no=1,
@@ -58,7 +72,7 @@ def _ctx(tmp_path: Path, node: str = "join") -> NodeContext:
         workdir=work,
         workspaces=WorkspaceManager(tmp_path / "snap"),
         ledger=HashChainLedger(tmp_path / "l.jsonl"),
-        ops=OperationLedger(tmp_path / "o.db"),
+        ops=ops,
     )
 
 

@@ -36,15 +36,18 @@ from recertia.workspace import WorkspaceManager
 
 NOW = datetime(2026, 8, 1, tzinfo=timezone.utc)
 _OPEN_AFFORDANCE_STORES: list[AffordanceStore] = []
+_OPEN_OPERATION_LEDGERS: list[OperationLedger] = []
 
 
 @pytest.fixture(autouse=True)
-def _close_affordance_stores() -> Iterator[None]:
-    """Close each harness's affordance store at test end, as ``GraphOrchestrator.close()`` does."""
+def _close_harness_stores() -> Iterator[None]:
+    """Close each harness's stores at test end, as ``GraphOrchestrator.close()`` does."""
 
     yield
     while _OPEN_AFFORDANCE_STORES:
         _OPEN_AFFORDANCE_STORES.pop().close()
+    while _OPEN_OPERATION_LEDGERS:
+        _OPEN_OPERATION_LEDGERS.pop().close()
 
 
 def _skill(*commands: str) -> SkillVersion:
@@ -112,6 +115,7 @@ class _Harness:
         self.transcripts = TranscriptStore(tmp_path / "transcripts")
         self.ledger = HashChainLedger(tmp_path / "ledger.jsonl")
         self.ops = OperationLedger(tmp_path / "ops.db")
+        _OPEN_OPERATION_LEDGERS.append(self.ops)
         self.store = _FixedSkillStore(version)
 
     def ctx(self, attempt_no: int, *, script: list[str] | None = None) -> NodeContext:

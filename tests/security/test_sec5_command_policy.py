@@ -6,6 +6,7 @@ for this slice; these tests lock the origin / argv gate that already ships.
 
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -172,19 +173,20 @@ def test_solve_script_sets_invoke_origin_script(tmp_path: Path) -> None:
         ),
         strategy="scratch",
     )
-    ctx = NodeContext(
-        run_id="script-origin",
-        attempt_no=0,
-        node="solve",
-        workdir=workdir,
-        workspaces=WorkspaceManager(tmp_path / "snapshots"),
-        ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
-        ops=OperationLedger(tmp_path / "ops.db"),
-        tools=tools,  # type: ignore[arg-type]
-    )
-    outcome = solve_script_via_tools(state, ctx, attempt_no=0, script=["echo one"])
-    assert outcome.route == "attempt_ok" or outcome.state is not None
-    assert tools.origins == ["script"]
+    with closing(OperationLedger(tmp_path / "ops.db")) as ops:
+        ctx = NodeContext(
+            run_id="script-origin",
+            attempt_no=0,
+            node="solve",
+            workdir=workdir,
+            workspaces=WorkspaceManager(tmp_path / "snapshots"),
+            ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
+            ops=ops,
+            tools=tools,  # type: ignore[arg-type]
+        )
+        outcome = solve_script_via_tools(state, ctx, attempt_no=0, script=["echo one"])
+        assert outcome.route == "attempt_ok" or outcome.state is not None
+        assert tools.origins == ["script"]
 
 
 def test_agent_subtask_stamps_origin_model_on_request(

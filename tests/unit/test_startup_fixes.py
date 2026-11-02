@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -155,19 +156,20 @@ def test_retrieve_goal_only_without_request_does_not_pass_none(tmp_path: Path) -
     goal = Goal(desired=[DesiredState(id="out", kind="file_exists", path="output.txt")])
     task = Task(task_id="t", goal=goal, submitted_at=datetime.now(timezone.utc))
     state = RunState(run_id="r", task=task, criteria=[])
-    ctx = NodeContext(
-        run_id="r",
-        attempt_no=0,
-        node="retrieve",
-        workdir=tmp_path,
-        workspaces=WorkspaceManager(tmp_path / "snaps"),
-        ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
-        ops=OperationLedger(tmp_path / "ops.db"),
-        retriever=FakeRetriever(),
-    )
-    outcome = retrieve(state, ctx)
-    assert outcome.route == "always"
-    assert outcome.state.bundle is not None
+    with closing(OperationLedger(tmp_path / "ops.db")) as ops:
+        ctx = NodeContext(
+            run_id="r",
+            attempt_no=0,
+            node="retrieve",
+            workdir=tmp_path,
+            workspaces=WorkspaceManager(tmp_path / "snaps"),
+            ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
+            ops=ops,
+            retriever=FakeRetriever(),
+        )
+        outcome = retrieve(state, ctx)
+        assert outcome.route == "always"
+        assert outcome.state.bundle is not None
 
 
 def test_retrieval_query_helpers() -> None:

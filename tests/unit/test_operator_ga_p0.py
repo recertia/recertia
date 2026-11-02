@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -157,23 +158,24 @@ def test_scratch_refuses_model_shell_on_local(
         budget=Budget(max_attempts=2),
         strategy="scratch",
     )
-    ctx = NodeContext(
-        run_id="obs1",
-        attempt_no=1,
-        node="solve",
-        workdir=workdir,
-        workspaces=WorkspaceManager(tmp_path / "snaps"),
-        ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
-        ops=OperationLedger(tmp_path / "ops.db"),
-        tools=tools,
-        transcripts=TranscriptStore(tmp_path / "transcripts"),
-        model=model,
-    )
-    outcome = solve(state, ctx)
-    assert outcome.route != "attempt_completed"
-    assert not (workdir / "MARKER").exists()
-    signal = outcome.state.failure_signal
-    assert signal is not None and "container" in signal.detail
+    with closing(OperationLedger(tmp_path / "ops.db")) as ops:
+        ctx = NodeContext(
+            run_id="obs1",
+            attempt_no=1,
+            node="solve",
+            workdir=workdir,
+            workspaces=WorkspaceManager(tmp_path / "snaps"),
+            ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
+            ops=ops,
+            tools=tools,
+            transcripts=TranscriptStore(tmp_path / "transcripts"),
+            model=model,
+        )
+        outcome = solve(state, ctx)
+        assert outcome.route != "attempt_completed"
+        assert not (workdir / "MARKER").exists()
+        signal = outcome.state.failure_signal
+        assert signal is not None and "container" in signal.detail
 
 
 def test_run_manifest_pinned_by_bootstrap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

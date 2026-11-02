@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -40,9 +41,23 @@ from recertia.workspace import WorkspaceManager
 _NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
+_OPEN_LEDGERS: list[OperationLedger] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_operation_ledgers() -> Iterator[None]:
+    """Close every operation ledger ``_ctx`` opened during the test."""
+
+    yield
+    while _OPEN_LEDGERS:
+        _OPEN_LEDGERS.pop().close()
+
+
 def _ctx(tmp_path: Path, *, node: str, episodic: EpisodicStore | None = None) -> NodeContext:
     workdir = tmp_path / "workdir"
     workdir.mkdir(exist_ok=True)
+    ops = OperationLedger(tmp_path / "ops.db")
+    _OPEN_LEDGERS.append(ops)
     return NodeContext(
         run_id="review-run",
         attempt_no=0,
@@ -50,7 +65,7 @@ def _ctx(tmp_path: Path, *, node: str, episodic: EpisodicStore | None = None) ->
         workdir=workdir,
         workspaces=WorkspaceManager(tmp_path / "snapshots"),
         ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
-        ops=OperationLedger(tmp_path / "ops.db"),
+        ops=ops,
         episodic=episodic,
     )
 

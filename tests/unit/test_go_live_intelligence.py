@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -172,22 +173,23 @@ def test_scratch_without_model_fails_loud(tmp_path: Path) -> None:
         budget=Budget(max_attempts=1),
         strategy="scratch",
     )
-    ctx = NodeContext(
-        run_id="scratch1",
-        attempt_no=1,
-        node="solve",
-        workdir=workdir,
-        workspaces=WorkspaceManager(tmp_path / "snaps"),
-        ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
-        ops=OperationLedger(tmp_path / "ops.db"),
-        tools=tools,
-        transcripts=TranscriptStore(tmp_path / "transcripts"),
-        model=None,
-    )
-    outcome = solve(state, ctx)
-    assert outcome.route == "pre_validation_failure_signal"
-    assert outcome.state.failure_signal is not None
-    assert "model client" in outcome.state.failure_signal.detail
+    with closing(OperationLedger(tmp_path / "ops.db")) as ops:
+        ctx = NodeContext(
+            run_id="scratch1",
+            attempt_no=1,
+            node="solve",
+            workdir=workdir,
+            workspaces=WorkspaceManager(tmp_path / "snaps"),
+            ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
+            ops=ops,
+            tools=tools,
+            transcripts=TranscriptStore(tmp_path / "transcripts"),
+            model=None,
+        )
+        outcome = solve(state, ctx)
+        assert outcome.route == "pre_validation_failure_signal"
+        assert outcome.state.failure_signal is not None
+        assert "model client" in outcome.state.failure_signal.detail
 
 
 def test_garbage_collect_removes_old_artifacts(tmp_path: Path) -> None:

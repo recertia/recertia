@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -121,15 +122,16 @@ def test_branch_budget_preflight_marks_timed_out(tmp_path: Path) -> None:
             )
         ],
     )
-    ctx = NodeContext(
-        run_id="budget-branch",
-        attempt_no=0,
-        node="solve",
-        workdir=work,
-        workspaces=WorkspaceManager(tmp_path / "snapshots"),
-        ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
-        ops=OperationLedger(tmp_path / "ops.db"),
-        script=["true", "true"],
-    )
-    outcome = solve(state, ctx)
-    assert outcome.state.branches[0].status == "timed_out"
+    with closing(OperationLedger(tmp_path / "ops.db")) as ops:
+        ctx = NodeContext(
+            run_id="budget-branch",
+            attempt_no=0,
+            node="solve",
+            workdir=work,
+            workspaces=WorkspaceManager(tmp_path / "snapshots"),
+            ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
+            ops=ops,
+            script=["true", "true"],
+        )
+        outcome = solve(state, ctx)
+        assert outcome.state.branches[0].status == "timed_out"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -96,29 +97,29 @@ def test_resume_replays_recorded_model_command(
     monkeypatch.setenv("RECERTIA_EXECUTION_BACKEND", "container")
     monkeypatch.setenv("RECERTIA_COMMAND_POLICY", "on")
 
-    ops = OperationLedger(tmp_path / "ops.db")
-    model = _CountingModel()
-    tools = _RecordingTools()
-    state = _state()
+    with closing(OperationLedger(tmp_path / "ops.db")) as ops:
+        model = _CountingModel()
+        tools = _RecordingTools()
+        state = _state()
 
-    first = solve_scratch_observe_act(state, _ctx(tmp_path, ops, model, tools), attempt_no=1)
-    assert first.route == "attempt_completed"
-    assert model.complete_calls == 1
-    assert tools.commands == ["echo A"]
+        first = solve_scratch_observe_act(state, _ctx(tmp_path, ops, model, tools), attempt_no=1)
+        assert first.route == "attempt_completed"
+        assert model.complete_calls == 1
+        assert tools.commands == ["echo A"]
 
-    applied, stored = ops.get("scratch-resume", 1, "solve", 0)
-    assert applied is True
-    assert isinstance(stored, dict)
-    assert stored["command"] == "echo A"
+        applied, stored = ops.get("scratch-resume", 1, "solve", 0)
+        assert applied is True
+        assert isinstance(stored, dict)
+        assert stored["command"] == "echo A"
 
-    replayed = solve_scratch_observe_act(state, _ctx(tmp_path, ops, model, tools), attempt_no=1)
-    assert replayed.route == "attempt_completed"
-    assert model.complete_calls == 1
-    assert tools.commands == ["echo A"]
-    assert model._queue == ["echo B"]
+        replayed = solve_scratch_observe_act(state, _ctx(tmp_path, ops, model, tools), attempt_no=1)
+        assert replayed.route == "attempt_completed"
+        assert model.complete_calls == 1
+        assert tools.commands == ["echo A"]
+        assert model._queue == ["echo B"]
 
-    applied, stored = ops.get("scratch-resume", 1, "solve", 0)
-    assert applied is True
-    assert isinstance(stored, dict)
-    assert stored["command"] == "echo A"
-    assert stored["returncode"] == 0
+        applied, stored = ops.get("scratch-resume", 1, "solve", 0)
+        assert applied is True
+        assert isinstance(stored, dict)
+        assert stored["command"] == "echo A"
+        assert stored["returncode"] == 0

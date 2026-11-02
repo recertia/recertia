@@ -12,6 +12,7 @@ import os
 import random
 import threading
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -695,24 +696,25 @@ def test_retrieve_does_not_read_the_whole_episodic_index(tmp_path: Path) -> None
 
     workdir = tmp_path / "work"
     workdir.mkdir()
-    ctx = NodeContext(
-        run_id="r1",
-        attempt_no=0,
-        node="retrieve",
-        workdir=workdir,
-        workspaces=WorkspaceManager(tmp_path / "snapshots"),
-        ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
-        ops=OperationLedger(tmp_path / "ops.sqlite"),
-        episodic=store,
-    )
-    state = RunState(
-        run_id="r1",
-        task=Task(
-            task_id="t1",
-            request="add an editorconfig file",
-            task_class="repo-chore",
-            submitted_at=datetime.now(timezone.utc),
-        ),
-    )
-    outcome = retrieve(state, ctx)
-    assert outcome.state.bundle is not None
+    with closing(OperationLedger(tmp_path / "ops.sqlite")) as ops:
+        ctx = NodeContext(
+            run_id="r1",
+            attempt_no=0,
+            node="retrieve",
+            workdir=workdir,
+            workspaces=WorkspaceManager(tmp_path / "snapshots"),
+            ledger=HashChainLedger(tmp_path / "ledger.jsonl"),
+            ops=ops,
+            episodic=store,
+        )
+        state = RunState(
+            run_id="r1",
+            task=Task(
+                task_id="t1",
+                request="add an editorconfig file",
+                task_class="repo-chore",
+                submitted_at=datetime.now(timezone.utc),
+            ),
+        )
+        outcome = retrieve(state, ctx)
+        assert outcome.state.bundle is not None

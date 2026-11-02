@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -133,29 +134,30 @@ def test_decomposition_refused_when_criteria_not_partitionable(tmp_path: Path) -
 
     work = tmp_path / "w"
     work.mkdir()
-    ctx = NodeContext(
-        run_id="r",
-        attempt_no=0,
-        node="plan",
-        workdir=work,
-        workspaces=WorkspaceManager(tmp_path / "snap"),
-        ledger=HashChainLedger(tmp_path / "l.jsonl"),
-        ops=OperationLedger(tmp_path / "o.db"),
-    )
-    from contracts.run import RunState
+    with closing(OperationLedger(tmp_path / "o.db")) as ops:
+        ctx = NodeContext(
+            run_id="r",
+            attempt_no=0,
+            node="plan",
+            workdir=work,
+            workspaces=WorkspaceManager(tmp_path / "snap"),
+            ledger=HashChainLedger(tmp_path / "l.jsonl"),
+            ops=ops,
+        )
+        from contracts.run import RunState
 
-    state = RunState(
-        run_id="r",
-        task=Task(
-            task_id="t",
-            request="DECOMPOSE: only one criterion",
-            submitted_at=datetime.now(timezone.utc),
-        ),
-        criteria=[_proven()],
-    )
-    outcome = plan(state, ctx)
-    assert outcome.state.strategy == "scratch"
-    assert "refused" in (outcome.state.strategy_reason or "")
+        state = RunState(
+            run_id="r",
+            task=Task(
+                task_id="t",
+                request="DECOMPOSE: only one criterion",
+                submitted_at=datetime.now(timezone.utc),
+            ),
+            criteria=[_proven()],
+        )
+        outcome = plan(state, ctx)
+        assert outcome.state.strategy == "scratch"
+        assert "refused" in (outcome.state.strategy_reason or "")
 
 
 def test_merge_gap_is_visible(tmp_path: Path) -> None:
@@ -167,41 +169,42 @@ def test_merge_gap_is_visible(tmp_path: Path) -> None:
 
     work = tmp_path / "w"
     work.mkdir()
-    ctx = NodeContext(
-        run_id="r",
-        attempt_no=1,
-        node="join",
-        workdir=work,
-        workspaces=WorkspaceManager(tmp_path / "snap"),
-        ledger=HashChainLedger(tmp_path / "l.jsonl"),
-        ops=OperationLedger(tmp_path / "o.db"),
-    )
-    state = RunState(
-        run_id="r",
-        task=Task(task_id="t", request="x", submitted_at=datetime.now(timezone.utc)),
-        strategy="portfolio",
-        branches=[
-            BranchState(
-                branch_id="b1",
-                strategy="scratch",
-                workspace_ref="w1",
-                budget=Budget(),
-                status="succeeded",
-            ),
-            BranchState(
-                branch_id="b2",
-                strategy="scratch",
-                workspace_ref="w2",
-                budget=Budget(),
-                status="dispatched",  # missing
-            ),
-        ],
-    )
-    outcome = join(state, ctx)
-    assert outcome.route == "otherwise"
-    assert outcome.state.failure is not None
-    assert outcome.state.failure.failure_class == "merge"
-    assert outcome.state.merge_audits[-1].missing == ["b2"]
+    with closing(OperationLedger(tmp_path / "o.db")) as ops:
+        ctx = NodeContext(
+            run_id="r",
+            attempt_no=1,
+            node="join",
+            workdir=work,
+            workspaces=WorkspaceManager(tmp_path / "snap"),
+            ledger=HashChainLedger(tmp_path / "l.jsonl"),
+            ops=ops,
+        )
+        state = RunState(
+            run_id="r",
+            task=Task(task_id="t", request="x", submitted_at=datetime.now(timezone.utc)),
+            strategy="portfolio",
+            branches=[
+                BranchState(
+                    branch_id="b1",
+                    strategy="scratch",
+                    workspace_ref="w1",
+                    budget=Budget(),
+                    status="succeeded",
+                ),
+                BranchState(
+                    branch_id="b2",
+                    strategy="scratch",
+                    workspace_ref="w2",
+                    budget=Budget(),
+                    status="dispatched",  # missing
+                ),
+            ],
+        )
+        outcome = join(state, ctx)
+        assert outcome.route == "otherwise"
+        assert outcome.state.failure is not None
+        assert outcome.state.failure.failure_class == "merge"
+        assert outcome.state.merge_audits[-1].missing == ["b2"]
 
 
 # --- M7 ---
