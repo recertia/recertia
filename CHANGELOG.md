@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Trading proposals stay on the job plane** ([ADR-0023](docs/adr/0023-trading-skill-evolution.md)).
+  `recertia jobs run trading` loads `data/official/aapl-plotly.csv` (MIT Plotly AAPL tape,
+  or `RECERTIA_OFFICIAL_BARS`) and returns a skip when the file is not an official tape or
+  is shorter than the locked 30-by-20 paper gate. It does not write `approved`. The ATLAS
+  repository is cited in [`docs/references.md`](docs/references.md) and the README. No ATLAS
+  code or prompt is copied.
+
 - **`EvalsRootMissing` (`evals_root_missing`)** — looking up the public `evals/` root from a
   wheel install (or any environment with no `evals/` at the cwd or the repository root) raises
   this named `RecertiaError`. The one-line message says to run from a source checkout and

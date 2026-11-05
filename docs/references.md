@@ -768,3 +768,14 @@ The agent that rewrites the policy also writes the tests. Self-assigned scores c
 **Take:** further support for ADR-0003. Promotion-weighted criteria must be exogenous to the author. Judge isolation is necessary and still not sufficient ([§1.8](#18-a-biased-judge-silently-disables-retirement)).
 
 **Decline:** do not add a SEAL node. Do not let the distiller write the certification criterion it is then graded on. No new assumption; a4 already tracks false-pass bias.
+
+## 16. ATLAS (2026-11-05) — cite; do not copy
+
+**Chris Worsey**, *ATLAS*, [github.com/chrisworsey55/atlas-gic](https://github.com/chrisworsey55/atlas-gic) **[F, practitioner]**. Read 2026-11-05. MIT for the framework, architecture notes, and example prompts. Trained prompts are excluded by the repository's own license note and are not used here.
+
+Relevance as architecture argument, not as evidence. The useful pieces are a stack of regime-conditioned skills, influence that follows measured results, and a specialist created only when a gap shows up. The published backtest in that repository's `results/summary.json` is not a Recertia result, and a deployment-phase claim in its README is not adopted.
+
+**Take:** map those ideas onto the planes that already exist. Outcomes stay `metric` criteria on a Goal (ADR-0010, ADR-0003). Influence is a derived stat, not a stored authority (ADR-0007). A skill change is a proposal on the improvement plane (ADR-0004). Retirement still needs a measured contribution (ADR-0006). The decision is [ADR-0023](adr/0023-trading-skill-evolution.md).
+
+**Decline:** do not copy ATLAS prompts, workers, or backtest code. Do not add a graph node. Do not place an order. Do not treat one uptick, or a tape that is shorter than the locked 30-by-20 paper gate, as lift.
+
