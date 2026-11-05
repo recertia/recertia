@@ -126,6 +126,7 @@ def default_job_specs() -> tuple[JobSpec, ...]:
         JobSpec("fail_cluster", ("fail_cluster_author",), _run_fail_cluster),
         JobSpec("hex", ("practice_hex",), _run_hex),
         JobSpec("compress", (), _run_compress),
+        JobSpec("trading", ("trading_propose",), _run_trading),
     )
 
 
@@ -351,6 +352,14 @@ def _run_compress(job: JobDispatch) -> Any:
     from recertia.jobs.workers import propose_compress
 
     return _run(job, "compress", propose_compress)
+
+
+def _run_trading(job: JobDispatch) -> Any:
+    """Load the official tape and return proposals only. Never writes approved."""
+
+    from recertia.trading.proposals import run_trading_tape
+
+    return run_trading_tape()
 
 
 _SERVICE: JobService | None = None

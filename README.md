@@ -10,7 +10,7 @@ Recertia is a self-improving agent system for recurring work. It solves a task a
 
 It does not improve by updating model weights. It improves by updating how knowledge is stored, retrieved, and re-certified.
 
-Related work: [SealedKeep](https://github.com/recertia/sealedkeep) keeps a code or experiment change only when a real evaluation metric improves. Recertia is the memory side of the same honesty rule of retrieve, solve, check, and keep only what still earns its place.
+Related work: [SealedKeep](https://github.com/recertia/sealedkeep) keeps a code or experiment change only when a real evaluation metric improves. Recertia is the memory side of the same honesty rule of retrieve, solve, check, and keep only what still earns its place. [ATLAS](https://github.com/chrisworsey55/atlas-gic) is an external MIT-licensed trading-agent framework. Recertia does not copy its prompts or its code. The ideas that survive contact with this repository are recorded in [ADR-0023](docs/adr/0023-trading-skill-evolution.md) and [docs/references.md](docs/references.md): proposals only, control-arm lift, and no change to the execution graph.
 
 ## What matters
 
