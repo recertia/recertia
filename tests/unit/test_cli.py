@@ -406,3 +406,82 @@ def test_facts_list_cases_show_proposals_queue(tmp_path: Path) -> None:
     )
     assert queue.exit_code == 0, queue.output
     assert "p1" in queue.output
+
+
+def _unproven_required_spec(workdir: Path, *, command: str, criterion_id: str = "impossible") -> dict:
+    """Required command criterion with no sensitivity proof (advisory per specs §15.2)."""
+
+    return {
+        "task": {"request": "advisory visibility"},
+        "criteria": [
+            {
+                "id": criterion_id,
+                "kind": "command",
+                "run": command,
+                "source": "caller",
+                "weight": 1.0,
+            }
+        ],
+        "script": [_python("pass")],
+        "workdir": str(workdir),
+    }
+
+
+def test_runs_show_advisory_summary_one_actual_fail(tmp_path: Path) -> None:
+    """Fail-first: unproven required command that fails → advisory-only line with 1 actual fail."""
+
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    spec_path = tmp_path / "spec.json"
+    # Same shape as the e2e unproven_required_criterion fixture.
+    spec_path.write_text(
+        json.dumps(
+            _unproven_required_spec(
+                workdir,
+                command=_python(
+                    "import os, sys; sys.exit(0 if os.path.isfile('this-file-will-never-exist.txt') else 1)"
+                ),
+            )
+        )
+    )
+    runs_root = tmp_path / "runs"
+    run = runner.invoke(
+        app,
+        ["run", "--spec", str(spec_path), "--runs-root", str(runs_root), "--run-id", "adv-fail"],
+    )
+    assert run.exit_code == 0, run.output
+    assert "terminal=solved" in run.output
+
+    show = runner.invoke(app, ["runs", "show", "adv-fail", "--runs-root", str(runs_root)])
+    assert show.exit_code == 0, show.output
+    assert "advisory-only: 1 criteria, 1 actual fails" in show.output
+    # Present without --route-log.
+    assert "--route-log" not in show.output
+
+
+def test_runs_show_advisory_summary_zero_actual_fails(tmp_path: Path) -> None:
+    """Advisory criterion that actually passes → same line with 0 actual fails (kills a hard-coded 1)."""
+
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(
+        json.dumps(
+            _unproven_required_spec(
+                workdir,
+                command=_python("import sys; sys.exit(0)"),
+                criterion_id="always-ok",
+            )
+        )
+    )
+    runs_root = tmp_path / "runs"
+    run = runner.invoke(
+        app,
+        ["run", "--spec", str(spec_path), "--runs-root", str(runs_root), "--run-id", "adv-pass"],
+    )
+    assert run.exit_code == 0, run.output
+    assert "terminal=solved" in run.output
+
+    show = runner.invoke(app, ["runs", "show", "adv-pass", "--runs-root", str(runs_root)])
+    assert show.exit_code == 0, show.output
+    assert "advisory-only: 1 criteria, 0 actual fails" in show.output

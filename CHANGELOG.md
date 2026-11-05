@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`runs show` prints an advisory-only summary** — when any criterion was advisory-downgraded (unproven required), `runs show` prints `advisory-only: K criteria, N actual fails` from the checkpointed results, with or without `--route-log`. The same line appears on `run` output. Gating is unchanged.
 
 - Migration programs carry an integer `version`. The store sets it to 1 on the first save
   and adds 1 on every later save, and it refuses a save that names a version other than the

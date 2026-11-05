@@ -47,6 +47,28 @@ def _first_error(exc: ValidationError) -> str:
     return f"{exc.error_count()} error(s); first at {where}: {first['msg']}"
 
 
+
+def _advisory_summary_line(results: list) -> str | None:
+    """One line when any criterion was advisory-downgraded; None otherwise.
+
+    Counts come from checkpointed ``state.results`` excerpts written by validate
+    (``[advisory] actual=pass|fail``). Does not change gating.
+    """
+
+    advisory = 0
+    actual_fails = 0
+    for result in results:
+        excerpt = result.output_excerpt or ""
+        if not excerpt.startswith("[advisory]"):
+            continue
+        advisory += 1
+        if "actual=fail" in excerpt.split(";", 1)[0]:
+            actual_fails += 1
+    if advisory == 0:
+        return None
+    return f"advisory-only: {advisory} criteria, {actual_fails} actual fails"
+
+
 def _prepare_execution() -> None:
     """Fail fast if the configured backend cannot run.
 
@@ -284,6 +306,9 @@ def _execute_run(
         bundle.close()
 
     typer.echo(f"run_id={rid} terminal={state.terminal} arm={state.arm}")
+    summary = _advisory_summary_line(state.results)
+    if summary is not None:
+        typer.echo(summary)
     if state.failure is not None:
         typer.echo(f"failure_class={state.failure.failure_class}")
     raise typer.Exit(code=0 if state.terminal in ("solved", "abstained") else 1)
@@ -368,6 +393,9 @@ def runs_show(
         f"run_id={run_id} terminal={state.terminal} next_node={next_node} "
         f"attempt_no={state.attempt_no}"
     )
+    summary = _advisory_summary_line(state.results)
+    if summary is not None:
+        typer.echo(summary)
     if route_log:
         for entry in state.route_log:
             reason = entry.reason.replace("\u2192", "->")
