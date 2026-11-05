@@ -96,6 +96,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "adr/0020-store-receipts.md",
             "adr/0021-deployment-model.md",
             "adr/0022-rootbusy-no-leftover-overlay.md",
+            "adr/0023-trading-skill-evolution.md",
         ),
     ),
     (
