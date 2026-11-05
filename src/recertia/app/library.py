@@ -109,7 +109,12 @@ class LibraryService:
         env_fingerprint: dict[str, str] | None = None,
         explain: bool = False,
     ) -> dict[str, Any]:
-        self._require(principal, "skills.search")
+        try:
+            self._require(principal, "skills.search")
+        except BaseException:
+            if hasattr(index, "close"):
+                index.close()
+            raise
         if workdir is None:
             try:
                 entries = list(store.iter_loaded())

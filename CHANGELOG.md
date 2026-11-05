@@ -96,6 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A policy-denied skills search closes the per-request skill index** — `POST /v1/skills/search` builds a `SkillIndex` and hands it to `LibraryService.search_skills`. A PDP denial from `_require` used to raise before the service's `finally` blocks, so the index's sqlite connection stayed open. Denial now closes the index and re-raises unchanged.
 - **A program write that loses a race returns 409 `conflict` instead of overwriting the
   other write** — before, only `PUT` checked the version: `accept`, `abandon`, step
   `PATCH`, step `run`, `skip`, `repo-binding`, `record-tip` and step preview read a program
