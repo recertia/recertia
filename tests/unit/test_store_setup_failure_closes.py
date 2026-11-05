@@ -5,6 +5,9 @@ steps inside ``init``. The test wraps the connection that ``sqlite3.connect`` re
 store's file, lets ``open_db``'s PRAGMAs through, and makes the store's first post-connect
 step raise, or its last one (the schema statement, the commit, or the settings load). The
 original error must propagate and ``close()`` must have run exactly once.
+Last-step cases also assert every earlier setup side effect (N1) and that an
+``execute`` failure matches the store's target schema table, not the first
+``CREATE`` (N2).
 Counting ``close()`` directly keeps the test independent of ``ResourceWarning`` (Python 3.12
 does not emit one for an unclosed sqlite3 connection).
 """
@@ -121,11 +124,22 @@ def test_first_setup_step_fails_closes_connection_once(
 
 
 class _LastStepSpy(_ConnSpy):
-    """A ``_ConnSpy`` that also works as a context manager and fails only a ``CREATE`` execute.
+    """A ``_ConnSpy`` that also works as a context manager and fails a target schema execute.
 
-    With ``fail_on="execute"`` the PRAGMAs of ``open_db`` still pass; the first schema
-    statement raises.
+    With ``fail_on="execute"`` the PRAGMAs of ``open_db`` still pass; only the store's
+    last schema statement (matched by table name) raises — not an earlier ``CREATE``.
     """
+
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        fail_on: str,
+        error: BaseException,
+        *,
+        target_table: str | None = None,
+    ) -> None:
+        super().__init__(conn, fail_on, error)
+        object.__setattr__(self, "_target_table", target_table)
 
     def __enter__(self) -> _LastStepSpy:
         self.uses.append(("enter", ""))
@@ -139,7 +153,9 @@ class _LastStepSpy(_ConnSpy):
     def execute(self, sql: str, *args: Any) -> sqlite3.Cursor:
         self.uses.append(("execute", sql.strip()))
         if self._fail_on == "execute" and sql.strip().upper().startswith("CREATE"):
-            raise self._error
+            target = object.__getattribute__(self, "_target_table")
+            if target is None or target in sql:
+                raise self._error
         return self._conn.execute(sql, *args)
 
 
@@ -156,6 +172,41 @@ LAST_STEPS: dict[str, str] = {
     "RunQueue": _SETTINGS,
     "WorkspaceRegistry": "execute",
 }
+
+# Last schema table each execute-based constructor creates (N2 target statement).
+TARGET_SCHEMA_TABLE: dict[str, str] = {
+    "JobRunStore": "job_runs",
+    "ProgramStore": "programs",
+    "ProposalStore": "proposals",
+    "WorkspaceRegistry": "workspaces",
+}
+
+
+
+def _assert_earlier_setup_effects(name: str, spy: _LastStepSpy, fail_on: str) -> None:
+    """N1: every step before the failing last step left its side effect on the spy."""
+
+    uses = spy.uses
+    if name in {
+        "JobRunStore",
+        "QuotaStore",
+        "ProgramStore",
+        "ProposalStore",
+        "WorkspaceRegistry",
+    }:
+        assert ("set", "row_factory") in uses, f"{name}: row_factory not set before {fail_on}: {uses}"
+    if name == "RunQueue":
+        assert ("set", "isolation_level") in uses, uses
+        assert ("set", "row_factory") in uses, uses
+        assert any(
+            kind == "execute" and "run_queue" in str(arg).lower() for kind, arg in uses
+        ), f"{name}: migrations/schema did not run before load_settings: {uses}"
+    if name == "SessionStore":
+        assert any(
+            (kind == "get" and arg == "executescript")
+            or (kind == "execute" and "console_sessions" in str(arg))
+            for kind, arg in uses
+        ), f"{name}: schema executescript did not run before commit: {uses}"
 
 
 @pytest.mark.parametrize("name", sorted(CASES))
@@ -174,7 +225,9 @@ def test_last_setup_step_fails_closes_connection_once(
         conn = real_connect(database, *args, **kwargs)
         if Path(database) != path:
             return conn
-        spy = _LastStepSpy(conn, fail_on, error)
+        spy = _LastStepSpy(
+            conn, fail_on, error, target_table=TARGET_SCHEMA_TABLE.get(name)
+        )
         spies.append(spy)
         return spy
 
@@ -194,13 +247,20 @@ def test_last_setup_step_fails_closes_connection_once(
     assert excinfo.value is error
     assert len(spies) == 1, f"{name} opened {len(spies)} connections to its file"
     spy = spies[0]
+    _assert_earlier_setup_effects(name, spy, fail_on)
     if fail_on == _SETTINGS:
         assert settings_calls == [0], f"{name}: load_settings calls {settings_calls}"
     else:
         failed = [use for use in spy.uses if use[0] != "exit"][-1]
         assert failed[0] in {"execute", "get"} and (
-            failed[1] == fail_on or (fail_on == "execute" and failed[1].upper().startswith("CREATE"))
+            failed[1] == fail_on
+            or (fail_on == "execute" and failed[1].upper().startswith("CREATE"))
         ), spy.uses
+        if fail_on == "execute":
+            target = TARGET_SCHEMA_TABLE[name]
+            assert target in failed[1], (
+                f"{name}: last-step spy must fail on target table {target!r}, got {failed}"
+            )
     assert spy.closes == 1, f"{name} closed its connection {spy.closes} times"
     with pytest.raises(sqlite3.ProgrammingError):
         spy._conn.execute("SELECT 1")

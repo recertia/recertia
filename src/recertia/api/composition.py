@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Callable
 
@@ -27,6 +29,19 @@ from recertia.proposals.store import ProposalStore
 from recertia.workers.embedded import EmbeddedQueueWorker
 from recertia.workers.queue import QueueItem, open_run_queue
 from recertia.workers.run_worker import AsyncRunRequest, AsyncRunWorker, dump_async_request
+
+_log = logging.getLogger(__name__)
+
+
+def _close_after_failed_assemble(store: Any) -> None:
+    """Close a store left by a failed assemble; a close error is logged, never raised."""
+
+    try:
+        store.close()
+    except Exception:
+        _log.warning(
+            "closing %s after a failed assemble failed", type(store).__name__, exc_info=True
+        )
 
 
 def assemble_app_state(
@@ -56,90 +71,105 @@ def assemble_app_state(
     settings: Any = None,
 ) -> AppState:
     pdp = PolicyDecisionPoint.load(surface="api")
-    sessions = SessionStore(path=root / "console_sessions.sqlite")
-    queue = open_run_queue(root)
-    queue.reconcile_orphans()
-    # Built once here and owned by AppState (closed by AppState.close). It opens control.db
-    # only on its first keyed bind; open_run_queue above has already created the file.
-    idempotency = IdempotencyStore(RuntimeLayout(root).control_db)
+    # A later step that raises must not leave stores built so far open. The stack closes
+    # them here; the caller still gets the original exception. AppState owns them after
+    # pop_all on success (closed by AppState.close).
+    with ExitStack() as stack:
+        sessions = SessionStore(path=root / "console_sessions.sqlite")
+        stack.callback(_close_after_failed_assemble, sessions)
+        queue = open_run_queue(root)
+        stack.callback(_close_after_failed_assemble, queue)
+        queue.reconcile_orphans()
+        # Opens control.db only on its first keyed bind; open_run_queue created the file.
+        idempotency = IdempotencyStore(RuntimeLayout(root).control_db)
+        stack.callback(_close_after_failed_assemble, idempotency)
 
-    def orchestrator_factory() -> Any:
-        import recertia.api as api_mod
+        def orchestrator_factory() -> Any:
+            import recertia.api as api_mod
 
-        return api_mod.build_default_orchestrator
+            return api_mod.build_default_orchestrator
 
-    def queued_run_record(**kwargs: Any) -> Any:
-        from recertia.api.schemas import RunRecord
+        def queued_run_record(**kwargs: Any) -> Any:
+            from recertia.api.schemas import RunRecord
 
-        return RunRecord(**kwargs)
+            return RunRecord(**kwargs)
 
-    def enqueue_async_run(**kwargs: Any) -> None:
-        replace_terminal = bool(kwargs.pop("replace_terminal", False))
-        queued = AsyncRunRequest(**kwargs)
-        queue.enqueue(
-            QueueItem(
-                tenant_id=queued.tenant_id,
-                run_id=queued.run_id,
-                kind="run",
-                payload=dump_async_request(queued),
+        def enqueue_async_run(**kwargs: Any) -> None:
+            replace_terminal = bool(kwargs.pop("replace_terminal", False))
+            queued = AsyncRunRequest(**kwargs)
+            queue.enqueue(
+                QueueItem(
+                    tenant_id=queued.tenant_id,
+                    run_id=queued.run_id,
+                    kind="run",
+                    payload=dump_async_request(queued),
+                ),
+                replace_terminal=replace_terminal,
+            )
+
+        def resolve_task_class(*, explicit: str | None, goal_task_class: str | None) -> str:
+            from recertia.bootstrap import resolve_task_class as resolve
+
+            return resolve(explicit=explicit, goal_task_class=goal_task_class)
+
+        proposals = ProposalStore(root / "proposals.sqlite")
+        stack.callback(_close_after_failed_assemble, proposals)
+        programs = ProgramStore(root / "programs.sqlite")
+        stack.callback(_close_after_failed_assemble, programs)
+        job_runs = JobRunStore(root / "job_runs.sqlite")
+        stack.callback(_close_after_failed_assemble, job_runs)
+        state = AppState(
+            root=root,
+            skills_root=skills_root,
+            facts_root=facts_root,
+            key_store=key_store,
+            quota_store=quota_store,
+            runs=runs,
+            run_slots=run_slots,
+            record_from_state=record_from_state,
+            load_from_checkpoints=load_from_checkpoints,
+            resolve_create_workdir=resolve_create_workdir,
+            persist_workdir=persist_workdir,
+            canonical_run_workdir=canonical_run_workdir,
+            clamp_criteria=clamp_criteria,
+            principal_may_exec=principal_may_exec,
+            require_scope=require_scope,
+            validate_run_id=validate_run_id,
+            workspace_registry=workspace_registry,
+            run_service=run_service,
+            pdp=pdp,
+            job_service=JobService(pdp=pdp),
+            promotion_service=PromotionService(pdp=pdp),
+            eval_service=EvalService(pdp=pdp),
+            library_service=LibraryService(pdp=pdp),
+            program_service=ProgramService(pdp=pdp),
+            workspace_service=WorkspaceService(pdp=pdp),
+            checkpoint_reader=CheckpointReader(),
+            key_service=KeyService(pdp=pdp),
+            ops_service=OpsService(pdp=pdp),
+            sessions=sessions,
+            proposals=proposals,
+            programs=programs,
+            job_runs=job_runs,
+            events=RunEventLog(root),
+            queue=queue,
+            worker=None,
+            embedded=None,
+            model_config_for_run=model_config_for_run,
+            tenant_has_checkpoints=tenant_has_checkpoints,
+            max_criterion_timeout_s=max_criterion_timeout_s,
+            load_persisted_workdir=load_persisted_workdir,
+            orchestrator_factory=orchestrator_factory,
+            queued_run_record=queued_run_record,
+            enqueue_async_run=enqueue_async_run,
+            resolve_task_class=resolve_task_class,
+            settings=settings,
+            principal_resolver=IdentityResolver(
+                keys=key_store, sessions=sessions, settings=settings
             ),
-            replace_terminal=replace_terminal,
+            idempotency=idempotency,
         )
-
-    def resolve_task_class(*, explicit: str | None, goal_task_class: str | None) -> str:
-        from recertia.bootstrap import resolve_task_class as resolve
-
-        return resolve(explicit=explicit, goal_task_class=goal_task_class)
-
-    state = AppState(
-        root=root,
-        skills_root=skills_root,
-        facts_root=facts_root,
-        key_store=key_store,
-        quota_store=quota_store,
-        runs=runs,
-        run_slots=run_slots,
-        record_from_state=record_from_state,
-        load_from_checkpoints=load_from_checkpoints,
-        resolve_create_workdir=resolve_create_workdir,
-        persist_workdir=persist_workdir,
-        canonical_run_workdir=canonical_run_workdir,
-        clamp_criteria=clamp_criteria,
-        principal_may_exec=principal_may_exec,
-        require_scope=require_scope,
-        validate_run_id=validate_run_id,
-        workspace_registry=workspace_registry,
-        run_service=run_service,
-        pdp=pdp,
-        job_service=JobService(pdp=pdp),
-        promotion_service=PromotionService(pdp=pdp),
-        eval_service=EvalService(pdp=pdp),
-        library_service=LibraryService(pdp=pdp),
-        program_service=ProgramService(pdp=pdp),
-        workspace_service=WorkspaceService(pdp=pdp),
-        checkpoint_reader=CheckpointReader(),
-        key_service=KeyService(pdp=pdp),
-        ops_service=OpsService(pdp=pdp),
-        sessions=sessions,
-        proposals=ProposalStore(root / "proposals.sqlite"),
-        programs=ProgramStore(root / "programs.sqlite"),
-        job_runs=JobRunStore(root / "job_runs.sqlite"),
-        events=RunEventLog(root),
-        queue=queue,
-        worker=None,
-        embedded=None,
-        model_config_for_run=model_config_for_run,
-        tenant_has_checkpoints=tenant_has_checkpoints,
-        max_criterion_timeout_s=max_criterion_timeout_s,
-        load_persisted_workdir=load_persisted_workdir,
-        orchestrator_factory=orchestrator_factory,
-        queued_run_record=queued_run_record,
-        enqueue_async_run=enqueue_async_run,
-        resolve_task_class=resolve_task_class,
-        settings=settings,
-        principal_resolver=IdentityResolver(keys=key_store, sessions=sessions, settings=settings),
-        idempotency=idempotency,
-    )
+        stack.pop_all()
     worker = AsyncRunWorker(
         events=state.events,
         on_complete=state._on_async_complete,

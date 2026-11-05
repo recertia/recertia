@@ -96,6 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **App assembly closes stores already opened when a later step fails** — `assemble_app_state` opens the console session store, run queue, proposal, program and job-run stores before `AppState` is built. A raise in a later constructor used to leave those sqlite connections open. Failed assembly now closes them and re-raises the original error; success still hands ownership to `AppState.close`.
 - **A policy-denied skills search closes the per-request skill index** — `POST /v1/skills/search` builds a `SkillIndex` and hands it to `LibraryService.search_skills`. A PDP denial from `_require` used to raise before the service's `finally` blocks, so the index's sqlite connection stayed open. Denial now closes the index and re-raises unchanged.
 - **A program write that loses a race returns 409 `conflict` instead of overwriting the
   other write** — before, only `PUT` checked the version: `accept`, `abandon`, step
