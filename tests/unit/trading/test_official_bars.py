@@ -35,7 +35,9 @@ def test_unstamped_file_is_refused() -> None:
 
 
 def test_trading_job_is_a_curator_class_proposal() -> None:
-    assert JobService(pdp=None).resolve("trading_propose").name == "trading"
+    spec = JobService(pdp=None).resolve("trading_propose")
+    assert spec is not None
+    assert spec.name == "trading"
     assert resolve_job_priority("trading") == "curator_retire"
     handler = (ROOT / "src/recertia/app/jobs.py").read_text(encoding="utf-8")
     body = handler[handler.index("def _run_trading") :]
