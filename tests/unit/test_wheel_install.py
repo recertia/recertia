@@ -197,6 +197,30 @@ def test_api_starts_from_an_installed_wheel(installed_python: tuple[Path, Path],
     assert out.startswith("started "), out
 
 
+def test_heldout_from_a_wheel_raises_a_named_error_when_evals_is_missing(
+    installed_python: tuple[Path, Path], tmp_path: Path
+) -> None:
+    # Wheels do not ship evals/; a successful lookup reaches public_evals_root.
+    out = _run_in_install(
+        installed_python,
+        tmp_path,
+        """
+        from recertia.evals.heldout import public_evals_root
+
+        try:
+            public_evals_root()
+        except Exception as exc:
+            print(type(exc).__name__, getattr(exc, "code", None), exc, sep="|")
+        else:
+            print("found")
+        """,
+    )
+    name, code, message = out.splitlines()[-1].split("|", 2)
+    assert (name, code) == ("EvalsRootMissing", "evals_root_missing"), out
+    assert "evals/" in message and "source checkout" in message, message
+    assert str(installed_python[1].parents[2]) not in message and str(tmp_path) not in message, message
+
+
 def test_default_authoring_prior_from_a_wheel_raises_a_named_error(
     installed_python: tuple[Path, Path], tmp_path: Path
 ) -> None:

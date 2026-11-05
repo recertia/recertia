@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`EvalsRootMissing` (`evals_root_missing`)** — looking up the public `evals/` root from a
+  wheel install (or any environment with no `evals/` at the cwd or the repository root) raises
+  this named `RecertiaError`. The one-line message says to run from a source checkout and
+  carries no absolute path. Wheels do not ship evals data; the plan to move held-out eval data
+  under `src/recertia` is deliberately not taken, so `evals/` stays at the repository root.
+
 - **`runs show` prints an advisory-only summary** — when any criterion was advisory-downgraded (unproven required), `runs show` prints `advisory-only: K criteria, N actual fails` from the checkpointed results, with or without `--route-log`. The same line appears on `run` output. Gating is unchanged.
 
 - Migration programs carry an integer `version`. The store sets it to 1 on the first save

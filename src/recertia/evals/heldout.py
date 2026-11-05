@@ -66,6 +66,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
+from recertia.errors import RecertiaError
+
 # The WO-06 tree verifier (on main since #118, recertia.evals.heldout_manifest):
 #   verify_heldout_tree(manifest_path: Path, root: Path) -> HeldoutManifest
 #   raises HeldoutManifestError on any refusal or mismatch; messages carry hashes and counts only.
@@ -84,6 +86,31 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _CHUNK = 1 << 20
 _PUBLIC_EVALS = Path("evals")
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+class EvalsRootMissing(RecertiaError):
+    """No public ``evals/`` root is available (the message never carries an absolute path)."""
+
+    code = "evals_root_missing"
+    http_status = 500
+    retryable = False
+    exit_code = 7
+
+
+def public_evals_root() -> Path:
+    """Return the public ``evals/`` directory, or raise ``EvalsRootMissing``.
+
+    Looks at ``Path("evals")`` relative to the cwd, then at the repository root next to
+    the package (``parents[3] / "evals"``). Wheels do not ship evals data.
+    """
+
+    for candidate in (_PUBLIC_EVALS, _REPO_ROOT / "evals"):
+        if candidate.is_dir():
+            return candidate
+    raise EvalsRootMissing(
+        "evals/ not found: wheel installs do not include it; run from a source checkout"
+    ) from None
+
 MANIFEST_KEYS = frozenset(
     {"schema_version", "split_id", "count", "hash_rule", "root_sha256", "ciphertext_sha256", "created_at"}
 )
@@ -673,6 +700,7 @@ def run(
 ) -> int:
     out = out if out is not None else sys.stdout
     env = env if env is not None else os.environ
+    public_evals_root()
     deny: list[str] = []
     leaks: list[int] = []
 
@@ -878,14 +906,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse(parser, rest)
     if args is None:
         return EXIT_USAGE
-    return run(
-        manifest_path=args.manifest,
-        ciphertext=args.ciphertext,
-        split_root=args.split_root,
-        audit_store=args.audit_store,
-        verify_only=args.verify_only,
-        require_offline=args.require_offline,
-    )
+    try:
+        return run(
+            manifest_path=args.manifest,
+            ciphertext=args.ciphertext,
+            split_root=args.split_root,
+            audit_store=args.audit_store,
+            verify_only=args.verify_only,
+            require_offline=args.require_offline,
+        )
+    except EvalsRootMissing as exc:
+        print(f"{exc.code}: {exc}", file=sys.stderr)
+        return int(exc.exit_code)
 
 
 if __name__ == "__main__":
