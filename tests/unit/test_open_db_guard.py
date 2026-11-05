@@ -7,10 +7,11 @@ A call passes when it has one of two shapes:
      that assignment is a ``try:``, and that ``try``'s ``finally:`` has ``x.close()`` as one of
      its own statements (not inside an ``if`` or any other block).
 
-Anything else needs an entry in ``ALLOWLIST``, keyed on the file and the enclosing function,
-with a reason and the tests that cover it as pytest node ids. The guard checks that each named
-test file and test function exists and that every entry still matches a call that has
-neither shape.
+Anything else needs an entry in ``ALLOWLIST``, keyed on ``(path, function, call)``, with a
+reason, the tests that cover it as pytest node ids, and a bare-call ``count`` pin (default 1).
+The guard checks that each named test file and test function exists, that the bare
+``open_db(`` / ``sqlite3.connect(`` count under the entry equals the pin (above → fail; below →
+stale), and that shaped calls never count toward the pin.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ class Entry:
     call: str  # OPEN_DB or CONNECT
     reason: str
     tests: tuple[str, ...]  # pytest node ids, relative to the repository root
+    count: int = 1  # bare open_db( / sqlite3.connect( pin; shaped calls never count
 
 
 ALLOWLIST: tuple[Entry, ...] = (
@@ -272,13 +274,21 @@ def _test_names(file: Path) -> set[str]:
 
 
 def check_allowlist(entries: Iterable[Entry], sites: Iterable[Site], repo: Path) -> list[str]:
-    """Problems with the allowlist itself: no reason, no tests, a missing test, a stale entry."""
+    """Problems with the allowlist itself: no reason, no tests, a missing test, count drift, stale."""
 
     problems: list[str] = []
     sites = tuple(sites)
-    # Only a bare call needs an entry; a call that passes a shape no longer does.
-    bare = {(s.path, s.function, s.call) for s in sites if not s.shape}
-    shaped = {(s.path, s.function, s.call): s.shape for s in sites if s.shape}
+    # Only bare calls count toward the pin; shaped calls never do.
+    bare_counts: dict[tuple[str, str, str], int] = {}
+    shaped_counts: dict[tuple[str, str, str], int] = {}
+    shaped_kind: dict[tuple[str, str, str], str] = {}
+    for s in sites:
+        key = (s.path, s.function, s.call)
+        if s.shape:
+            shaped_counts[key] = shaped_counts.get(key, 0) + 1
+            shaped_kind[key] = s.shape
+        else:
+            bare_counts[key] = bare_counts.get(key, 0) + 1
     for entry in entries:
         label = f"{entry.path} {entry.function} {entry.call}"
         if not entry.reason.strip():
@@ -295,12 +305,23 @@ def check_allowlist(entries: Iterable[Entry], sites: Iterable[Site], repo: Path)
             elif name.split("[", 1)[0] not in _test_names(test_file):
                 problems.append(f"{label}: node id {node_id} does not exist")
         key = (entry.path, entry.function, entry.call)
-        if key in bare:
+        bare_n = bare_counts.get(key, 0)
+        shaped_n = shaped_counts.get(key, 0)
+        # Bare evaluation: the pin is satisfied only when bare_n == entry.count.
+        if bare_n == entry.count:
             continue
-        if key in shaped:
-            problems.append(f"{label}: stale, its call already passes as {shaped[key]}")
-        else:
+        # Shaped evaluation: no bare match left, but a shaped call remains → stale-as-shaped.
+        if bare_n == 0 and shaped_n > 0:
+            problems.append(f"{label}: stale, its call already passes as {shaped_kind[key]}")
+            continue
+        if bare_n > entry.count:
+            problems.append(f"{label}: {bare_n} bare calls exceeds pin {entry.count}")
+            continue
+        # bare_n < entry.count (and not the shaped-only case above)
+        if bare_n == 0:
             problems.append(f"{label}: stale, matches no call")
+        else:
+            problems.append(f"{label}: stale, {bare_n} bare calls below pin {entry.count}")
     return problems
 
 
@@ -489,3 +510,43 @@ def test_entry_for_a_fixed_site_is_stale(tmp_path: Path, source: str, shape: str
     root, repo = _fixture_repo(tmp_path, {"test_m.py": "def test_m():\n    pass\n"}, source)
     entry = Entry("m.py", "f", OPEN_DB, "factory", ("test_m.py::test_m",))
     assert guard(root, repo, (entry,)) == [f"m.py f open_db: stale, its call already passes as {shape}"]
+
+_TWO_BARE = "def f(p):\n    a = open_db(p)\n    b = open_db(p)\n    return a, b\n"
+_NO_CALL = "def f(p):\n    return None\n"
+_MIXED_BARE_AND_CLOSING = (
+    "def f(p):\n"
+    "    bare = open_db(p)\n"
+    "    with closing(open_db(p)) as shaped:\n"
+    "        shaped.execute(\'x\')\n"
+    "    return bare\n"
+)
+
+
+def test_second_bare_call_in_allowlisted_function_fails(tmp_path: Path) -> None:
+    """(a) Above pin: a second bare call under an entry with count=1 fails the guard."""
+
+    root, repo = _fixture_repo(tmp_path, {"test_m.py": "def test_m():\n    pass\n"}, _TWO_BARE)
+    entry = Entry("m.py", "f", OPEN_DB, "factory", ("test_m.py::test_m",), count=1)
+    assert guard(root, repo, (entry,)) == ["m.py f open_db: 2 bare calls exceeds pin 1"]
+
+
+def test_removing_the_call_makes_the_entry_stale(tmp_path: Path) -> None:
+    """(b) Below pin: removing the bare call reports the entry as stale."""
+
+    root, repo = _fixture_repo(tmp_path, {"test_m.py": "def test_m():\n    pass\n"}, _NO_CALL)
+    entry = Entry("m.py", "f", OPEN_DB, "factory", ("test_m.py::test_m",), count=1)
+    assert guard(root, repo, (entry,)) == ["m.py f open_db: stale, matches no call"]
+
+
+def test_mixed_bare_and_shaped_counts_only_bare_toward_pin(tmp_path: Path) -> None:
+    """(c) Mixed: one bare + one shaped; only bare counts; entry is not stale.
+
+    Swap mutant (see PR body): swap the bare-satisfied ``continue`` with the shaped-stale
+    branch in ``check_allowlist`` — this test then fails.
+    """
+
+    root, repo = _fixture_repo(
+        tmp_path, {"test_m.py": "def test_m():\n    pass\n"}, _MIXED_BARE_AND_CLOSING
+    )
+    entry = Entry("m.py", "f", OPEN_DB, "factory", ("test_m.py::test_m",), count=1)
+    assert guard(root, repo, (entry,)) == []
