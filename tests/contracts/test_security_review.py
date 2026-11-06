@@ -150,9 +150,9 @@ def test_subprocess_list_form_is_clean(tmp_path: Path) -> None:
     assert report.findings == []
 
 def test_json_authoring_prior_paths_are_scanned_for_secrets(tmp_path: Path) -> None:
-    """Old and new prior JSON paths are selected; a synthetic marker hits the same rule."""
+    """Old and new prior JSON paths are selected via production review dispatch."""
 
-    from scripts.security_review import Finding, iter_files, review, scan_secrets
+    from scripts.security_review import iter_files, review
 
     (tmp_path / "contracts").mkdir()
     pkg = tmp_path / "src" / "recertia"
@@ -161,7 +161,7 @@ def test_json_authoring_prior_paths_are_scanned_for_secrets(tmp_path: Path) -> N
     new_path = pkg / "authoring-prior.json"
     old_path.parent.mkdir(parents=True)
     clean = {"schema_version": "1.0", "version": "ap-test", "notes": ["clean control"]}
-    # Marker matched by existing github_pat rule (36 chars after ghp_). Not a real credential.
+    # Synthetic marker matched by existing github_pat rule. Not a real credential.
     marker = "ghp_" + ("A" * 36)
     planted = {"schema_version": "1.0", "version": "ap-test", "notes": [f"marker {marker}"]}
 
@@ -175,17 +175,32 @@ def test_json_authoring_prior_paths_are_scanned_for_secrets(tmp_path: Path) -> N
     assert "policy/authoring-prior.json" in rels, rels
     assert "src/recertia/authoring-prior.json" in rels, rels
 
-    # Clean controls: no secret finding for either path under default production traversal.
     clean_report = review(tmp_path, profile="python", scan_all=False, include_tests=False)
-    secret_findings = [f for f in clean_report.findings if f.rule.startswith("secret-")]
-    assert secret_findings == [], secret_findings
+    clean_secrets = [
+        f
+        for f in clean_report.findings
+        if f.rule.startswith("secret-")
+        and f.path.replace("\\", "/").endswith("authoring-prior.json")
+    ]
+    assert clean_secrets == [], clean_secrets
 
-    # Plant the same synthetic marker in each JSON; expect the same rule + high severity.
     for path in (old_path, new_path):
         path.write_text(_json.dumps(planted) + "\n", encoding="utf-8")
-        findings: list[Finding] = []
-        scan_secrets(path, tmp_path, findings)
-        hits = [f for f in findings if f.rule == "secret-github_pat"]
-        assert len(hits) == 1, findings
-        assert hits[0].severity == "high"
-        assert hits[0].path.endswith("authoring-prior.json")
+
+    planted_report = review(tmp_path, profile="python", scan_all=False, include_tests=False)
+    hits = [
+        f
+        for f in planted_report.findings
+        if f.rule.startswith("secret-")
+        and f.path.replace("\\", "/").endswith("authoring-prior.json")
+    ]
+    paths = sorted({f.path.replace("\\", "/") for f in hits})
+    assert paths == [
+        "policy/authoring-prior.json",
+        "src/recertia/authoring-prior.json",
+    ], (paths, hits)
+    rules = {f.rule for f in hits}
+    severities = {f.severity for f in hits}
+    assert rules == {"secret-github_pat"}, rules
+    assert severities == {"high"}, severities
+    assert len(hits) == 2, hits

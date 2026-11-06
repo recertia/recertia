@@ -493,12 +493,42 @@ def test_api_run_from_a_wheel_reaches_distill_with_the_packaged_prior(
 
 
 def test_authoring_prior_in_wheel_record_is_exactly_one_file(built_wheel: Path) -> None:
-    names = sorted(
-        path
-        for path in _record(built_wheel)
-        if path.endswith("authoring-prior.json") and not path.endswith("/")
-    )
-    assert names == ["recertia/authoring-prior.json"], names
+    source = (_PACKAGE / "authoring-prior.json").read_bytes()
+    source_sha = hashlib.sha256(source).hexdigest()
+    with zipfile.ZipFile(built_wheel) as zf:
+        members = sorted(
+            name
+            for name in zf.namelist()
+            if name.endswith("authoring-prior.json") and not name.endswith("/")
+        )
+        assert members == ["recertia/authoring-prior.json"], members
+        raw = zf.read(members[0])
+        assert hashlib.sha256(raw).hexdigest() == source_sha
+    record = _record(built_wheel)
+    assert "recertia/authoring-prior.json" in record
+    digest = record["recertia/authoring-prior.json"]
+    assert digest, digest
+    algo, _, want = digest.partition("=")
+    got = base64.urlsafe_b64encode(hashlib.new(algo, source).digest()).rstrip(b"=").decode()
+    assert got == want, (got, want)
+
+
+def test_authoring_prior_in_sdist_is_exactly_one_matching_file(built_sdist: Path) -> None:
+    source = (_PACKAGE / "authoring-prior.json").read_bytes()
+    source_sha = hashlib.sha256(source).hexdigest()
+    with tarfile.open(built_sdist) as tf:
+        members = sorted(
+            m.name
+            for m in tf.getmembers()
+            if m.isfile() and m.name.endswith("src/recertia/authoring-prior.json")
+        )
+        assert len(members) == 1, members
+        assert members[0].endswith("src/recertia/authoring-prior.json"), members
+        extracted = tf.extractfile(members[0])
+        assert extracted is not None
+        raw = extracted.read()
+        assert hashlib.sha256(raw).hexdigest() == source_sha
+        assert raw == source
 
 
 
