@@ -1025,7 +1025,7 @@ CLI, API, and the worker call the same service methods. Routes are `APIRouter`s.
 ### Non-goals
 
 - The durable queue, enqueue fairness, and the worker process (REL-4). `RunService` accepts an optional queue port and, when it is absent, runs inline the way `create_run` does today.
-- Rewriting console HTML or `console/static`.
+- Rewriting console HTML or `src/recertia/console/static`.
 - OIDC protocol changes (SEC OIDC). The routes move; `SessionRepo` is the store (ARCH-7).
 - Backup semantics (REL-9).
 

@@ -114,7 +114,7 @@ operator guide.
 | OG-8 | `RECERTIA_OPENAI_MAX_TOKENS` is sent unless EXTRA_BODY already has `max_tokens` |
 | OG-9 | OpenRouter `{error:{message,code}}` raises `ProviderError` including `code=` |
 | OG-10 | List-shaped `message.content` concatenates `{type:text,text}` parts |
-| OG-11 | `POST /v1/runs` with a console-selected slug not on the server allowlist returns 400; allowlist is not in `console/static/`; `GET /v1/models` returns the allowlist |
+| OG-11 | `POST /v1/runs` with a console-selected slug not on the server allowlist returns 400; allowlist is not in `src/recertia/console/static/`; `GET /v1/models` returns the allowlist |
 
 Existing coverage: `tests/unit/test_openai_compat_gateway.py` (OR0–OR3). OG-11 lives with those tests.
 

@@ -197,6 +197,73 @@ def test_api_starts_from_an_installed_wheel(installed_python: tuple[Path, Path],
     assert out.startswith("started "), out
 
 
+def test_console_is_served_from_an_installed_wheel(
+    installed_python: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """Packaged console static files are served under /console with no checkout present."""
+
+    root = tmp_path / "console-root"
+    # cwd is tmp_path: no repo-root console/, no source checkout.
+    out = _run_in_install(
+        installed_python,
+        tmp_path,
+        f"""
+        from fastapi.testclient import TestClient
+        from recertia.api import create_app
+
+        app = create_app(root=pathlib.Path({str(root)!r}))
+        client = TestClient(app)
+        for path in ("/console", "/console/"):
+            page = client.get(path)
+            assert page.status_code == 200, (path, page.status_code, page.text[:200])
+            assert b"Recertia" in page.content or "Recertia" in page.text
+        for name in ("app.js", "index.html", "mark.svg", "styles.css"):
+            asset = client.get(f"/console/assets/{{name}}")
+            assert asset.status_code == 200, (name, asset.status_code)
+            assert len(asset.content) > 0
+        print("console-ok")
+        """,
+    )
+    assert out.endswith("console-ok"), out
+
+
+def test_console_static_in_wheel_record_is_exactly_the_four_files(built_wheel: Path) -> None:
+    prefix = "recertia/console/static/"
+    names = sorted(
+        path[len(prefix) :]
+        for path in _record(built_wheel)
+        if path.startswith(prefix) and not path.endswith("/")
+    )
+    assert names == ["app.js", "index.html", "mark.svg", "styles.css"], names
+
+
+def test_console_served_without_auth_while_v1_still_requires_it(
+    installed_python: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """Unauthenticated /console is 200; unauthenticated protected /v1 stays 401/403."""
+
+    root = tmp_path / "auth-root"
+    out = _run_in_install(
+        installed_python,
+        tmp_path,
+        f"""
+        from fastapi.testclient import TestClient
+        from recertia.api import create_app
+
+        app = create_app(root=pathlib.Path({str(root)!r}))
+        client = TestClient(app)
+        page = client.get("/console")
+        assert page.status_code == 200, page.status_code
+        css = client.get("/console/assets/styles.css")
+        assert css.status_code == 200, css.status_code
+        runs = client.get("/v1/runs")
+        assert runs.status_code in {{401, 403}}, runs.status_code
+        print("auth-boundary-ok", runs.status_code)
+        """,
+    )
+    assert "auth-boundary-ok" in out, out
+
+
 def test_heldout_from_a_wheel_raises_a_named_error_when_evals_is_missing(
     installed_python: tuple[Path, Path], tmp_path: Path
 ) -> None:
