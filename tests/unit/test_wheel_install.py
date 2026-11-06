@@ -165,7 +165,13 @@ def installed_python(built_wheel: Path, tmp_path_factory: pytest.TempPathFactory
     return child, Path(child_site)
 
 
-def _run_in_install(installed: tuple[Path, Path], cwd: Path, body: str) -> str:
+def _run_in_install(
+    installed: tuple[Path, Path],
+    cwd: Path,
+    body: str,
+    *,
+    env: dict[str, str] | None = None,
+) -> str:
     """Run ``body`` in the installed venv, after checking recertia comes from the wheel."""
     child, child_site = installed
     probe = textwrap.dedent(
@@ -177,7 +183,8 @@ def _run_in_install(installed: tuple[Path, Path], cwd: Path, body: str) -> str:
         assert where.is_relative_to(pathlib.Path({str(child_site)!r}).resolve()), where
         """
     ) + textwrap.dedent(body)
-    return _run([str(child), "-c", probe], cwd=cwd, env=_clean_env()).stdout.strip()
+    run_env = env if env is not None else _clean_env()
+    return _run([str(child), "-c", probe], cwd=cwd, env=run_env).stdout.strip()
 
 
 def test_api_starts_from_an_installed_wheel(installed_python: tuple[Path, Path], tmp_path: Path) -> None:
@@ -240,28 +247,57 @@ def test_console_static_in_wheel_record_is_exactly_the_four_files(built_wheel: P
 def test_console_served_without_auth_while_v1_still_requires_it(
     installed_python: tuple[Path, Path], tmp_path: Path
 ) -> None:
-    """Unauthenticated /console is 200; unauthenticated protected /v1 stays 401/403."""
+    """Packaged /console needs no auth; /v1/runs still requires an API key.
+
+    API-key auth is always wired: ``create_app`` opens ``ApiKeyStore``
+    (``src/recertia/api/__init__.py``) and ``GET /v1/runs`` depends on
+    ``require_runs`` → ``resolve_principal`` (``identity.py``), which raises
+    ``Unauthorized`` when no key is presented. Console-session auth is a
+    separate switch (``RECERTIA_CONSOLE_AUTH``, default ``off``); this test
+    forces it off so only the API-key path is live, then proves a positive
+    control with an issued key.
+    """
 
     root = tmp_path / "auth-root"
+    env = _clean_env()
+    # Scrub any host leak of the console-auth switch; API-key auth has no off switch.
+    env.pop("RECERTIA_CONSOLE_AUTH", None)
+    env["RECERTIA_CONSOLE_AUTH"] = "off"
     out = _run_in_install(
         installed_python,
         tmp_path,
         f"""
+        import os
+
+        os.environ["RECERTIA_CONSOLE_AUTH"] = "off"
         from fastapi.testclient import TestClient
         from recertia.api import create_app
+        from recertia.api.console_auth import auth_mode
 
+        assert auth_mode() == "off", auth_mode()
         app = create_app(root=pathlib.Path({str(root)!r}))
+        assert app.state.api_keys is not None
         client = TestClient(app)
-        page = client.get("/console")
-        assert page.status_code == 200, page.status_code
-        css = client.get("/console/assets/styles.css")
-        assert css.status_code == 200, css.status_code
-        runs = client.get("/v1/runs")
-        assert runs.status_code in {{401, 403}}, runs.status_code
-        print("auth-boundary-ok", runs.status_code)
+        for path in ("/console", "/console/"):
+            page = client.get(path)
+            assert page.status_code == 200, (path, page.status_code)
+        for name in ("app.js", "index.html", "mark.svg", "styles.css"):
+            asset = client.get(f"/console/assets/{{name}}")
+            assert asset.status_code == 200, (name, asset.status_code)
+            assert len(asset.content) > 0
+        no_key = client.get("/v1/runs")
+        assert no_key.status_code in {{401, 403}}, no_key.status_code
+        issued = app.state.api_keys.issue(tenant_id="t1", scopes={{"runs"}}, actor="test-admin")
+        with_key = client.get("/v1/runs", headers={{"X-API-Key": issued.secret}})
+        assert with_key.status_code == 200, (with_key.status_code, with_key.text[:200])
+        print("auth-boundary-ok", "no-key", no_key.status_code, "with-key", with_key.status_code)
         """,
+        env=env,
     )
     assert "auth-boundary-ok" in out, out
+    assert "with-key 200" in out, out
+    assert "no-key 401" in out or "no-key 403" in out, out
+    print(out.splitlines()[-1])
 
 
 def test_heldout_from_a_wheel_raises_a_named_error_when_evals_is_missing(
