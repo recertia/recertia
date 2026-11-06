@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Installed wheels ship the default authoring prior.** `authoring-prior.json` (version
+  `ap-2026.08.1`) is packaged with the library and loaded via `importlib.resources`. An
+  installed wheel completes the existing CLI/API distill path without a source checkout.
+  An explicit missing prior path still raises `AuthoringPriorMissing` (`authoring_prior_missing`)
+  with a file-only message and never falls back to the packaged default. The previous 0.4.0
+  known-limit (default prior only from a source checkout) is closed for this asset. Prior
+  contents and schema are unchanged.
+
 - **Installed wheels ship the web console under `/console`.** The four static files
   (`app.js`, `index.html`, `mark.svg`, `styles.css`) are packaged with the library and
   served without authentication. Run, program and other data under `/v1` still require API

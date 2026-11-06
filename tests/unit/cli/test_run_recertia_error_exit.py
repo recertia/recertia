@@ -19,7 +19,7 @@ runner = CliRunner()
 
 
 def _raise_missing_prior(**_kwargs: object) -> None:
-    raise AuthoringPriorMissing("default authoring prior policy/authoring-prior.json not found")
+    raise AuthoringPriorMissing("default authoring prior authoring-prior.json not found")
 
 
 @pytest.mark.parametrize("command", ["run", "resume"])

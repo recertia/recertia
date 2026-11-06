@@ -148,3 +148,44 @@ def test_subprocess_list_form_is_clean(tmp_path: Path) -> None:
     )
     report = review(tmp_path, profile="python")
     assert report.findings == []
+
+def test_json_authoring_prior_paths_are_scanned_for_secrets(tmp_path: Path) -> None:
+    """Old and new prior JSON paths are selected; a synthetic marker hits the same rule."""
+
+    from scripts.security_review import Finding, iter_files, review, scan_secrets
+
+    (tmp_path / "contracts").mkdir()
+    pkg = tmp_path / "src" / "recertia"
+    pkg.mkdir(parents=True)
+    old_path = tmp_path / "policy" / "authoring-prior.json"
+    new_path = pkg / "authoring-prior.json"
+    old_path.parent.mkdir(parents=True)
+    clean = {"schema_version": "1.0", "version": "ap-test", "notes": ["clean control"]}
+    # Marker matched by existing github_pat rule (36 chars after ghp_). Not a real credential.
+    marker = "ghp_" + ("A" * 36)
+    planted = {"schema_version": "1.0", "version": "ap-test", "notes": [f"marker {marker}"]}
+
+    import json as _json
+
+    for path in (old_path, new_path):
+        path.write_text(_json.dumps(clean) + "\n", encoding="utf-8")
+
+    selected = iter_files(tmp_path, include_tests=False, scan_all=False)
+    rels = {p.relative_to(tmp_path).as_posix() for p in selected}
+    assert "policy/authoring-prior.json" in rels, rels
+    assert "src/recertia/authoring-prior.json" in rels, rels
+
+    # Clean controls: no secret finding for either path under default production traversal.
+    clean_report = review(tmp_path, profile="python", scan_all=False, include_tests=False)
+    secret_findings = [f for f in clean_report.findings if f.rule.startswith("secret-")]
+    assert secret_findings == [], secret_findings
+
+    # Plant the same synthetic marker in each JSON; expect the same rule + high severity.
+    for path in (old_path, new_path):
+        path.write_text(_json.dumps(planted) + "\n", encoding="utf-8")
+        findings: list[Finding] = []
+        scan_secrets(path, tmp_path, findings)
+        hits = [f for f in findings if f.rule == "secret-github_pat"]
+        assert len(hits) == 1, findings
+        assert hits[0].severity == "high"
+        assert hits[0].path.endswith("authoring-prior.json")

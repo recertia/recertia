@@ -224,6 +224,6 @@ where = ["src", "."]
 include = ["contracts", "contracts.*", "recertia", "recertia.*"]
 
 [tool.setuptools.package-data]
-"recertia" = ["policy_default.json", "console/static/*"]
+"recertia" = ["policy_default.json", "authoring-prior.json", "console/static/*"]
 "recertia.store" = ["migrations/*.sql"]
 "recertia.persistence" = ["migrations/*/*.sql", "migrations/*/*.md"]

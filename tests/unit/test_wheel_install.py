@@ -324,34 +324,52 @@ def test_heldout_from_a_wheel_raises_a_named_error_when_evals_is_missing(
     assert str(installed_python[1].parents[2]) not in message and str(tmp_path) not in message, message
 
 
-def test_default_authoring_prior_from_a_wheel_raises_a_named_error(
+def test_default_authoring_prior_from_a_wheel_loads_the_packaged_default(
     installed_python: tuple[Path, Path], tmp_path: Path
 ) -> None:
-    # Wheels do not ship policy/; a successful run reaches load_authoring_prior via distill.
+    """Installed wheel loads the packaged default prior (not checkout/cwd/cache)."""
+
+    child, child_site = installed_python
+    # Isolate the lru_cache and prove the resource lives under the wheel site-packages.
     out = _run_in_install(
         installed_python,
         tmp_path,
-        """
-        from recertia.distill.prior import load_authoring_prior
+        f"""
+        import json
+        from importlib.resources import files
+        from recertia.distill import prior as prior_mod
 
-        try:
-            load_authoring_prior()
-        except Exception as exc:
-            print(type(exc).__name__, getattr(exc, "code", None), exc, sep="|")
-        else:
-            print("loaded")
+        prior_mod.load_authoring_prior.cache_clear()
+        loaded = prior_mod.load_authoring_prior()
+        prior_mod.load_authoring_prior.cache_clear()
+        again = prior_mod.load_authoring_prior()
+        resource = files("recertia").joinpath("authoring-prior.json")
+        assert resource.is_file(), resource
+        resource_path = pathlib.Path(str(resource)).resolve()
+        site = pathlib.Path({str(child_site)!r}).resolve()
+        assert resource_path.is_relative_to(site), (resource_path, site)
+        assert loaded.version == "ap-2026.08.1", loaded.version
+        assert again.version == loaded.version
+        assert loaded.require_parameter_or_recurrence is True
+        assert loaded.max_steps == 12
+        print(
+            "prior-ok",
+            loaded.version,
+            loaded.max_steps,
+            json.dumps(list(loaded.notes)[:1]),
+        )
         """,
     )
-    name, code, message = out.splitlines()[-1].split("|", 2)
-    assert (name, code) == ("AuthoringPriorMissing", "authoring_prior_missing"), out
-    assert "policy/authoring-prior.json" in message and "source checkout" in message, message
-    assert str(installed_python[1].parents[2]) not in message and str(tmp_path) not in message, message
+    assert "prior-ok ap-2026.08.1 12" in out, out
+    assert str(tmp_path) not in out
+    assert "policy/authoring-prior.json" not in out
 
 
-def test_cli_run_from_a_wheel_names_the_missing_prior_without_a_traceback(
+def test_cli_run_from_a_wheel_reaches_distill_with_the_packaged_prior(
     installed_python: tuple[Path, Path], tmp_path: Path
 ) -> None:
-    # The installed console script, on the default passing path, which drafts a skill.
+    """Installed console script completes the default path through distill (exit 0)."""
+
     child, child_site = installed_python
     assert _run_in_install(installed_python, tmp_path, 'print("from-wheel")') == "from-wheel"
     script = child.parent / ("recertia.exe" if os.name == "nt" else "recertia")
@@ -365,6 +383,7 @@ def test_cli_run_from_a_wheel_names_the_missing_prior_without_a_traceback(
     }
     spec_path = tmp_path / "spec.json"
     spec_path.write_text(json.dumps(spec))
+    runs_root = tmp_path / "runs"
     cmd = [str(script), "run", "--spec", str(spec_path), "--local-exec"]
     for flag, name in (("--runs-root", "runs"), ("--skills-root", "skills"), ("--facts-root", "facts")):
         cmd += [flag, str(tmp_path / name)]
@@ -373,19 +392,25 @@ def test_cli_run_from_a_wheel_names_the_missing_prior_without_a_traceback(
         cmd, cwd=tmp_path, env=env, capture_output=True, text=True, timeout=_STEP_TIMEOUT_S, check=False
     )
     output = proc.stdout + proc.stderr
-    assert proc.returncode == 7, output
-    assert "Traceback" not in output and 'File "' not in output, output
-    venv_dir = child_site.parents[2] if os.name != "nt" else child_site.parents[1]
-    for absolute in (str(venv_dir), str(child_site), str(tmp_path), "site-packages"):
-        assert absolute not in output, (absolute, output)
-    assert "authoring_prior_missing: " in proc.stderr, output
-    assert "policy/authoring-prior.json" in proc.stderr, output
+    assert proc.returncode == 0, output
+    assert "terminal=solved" in proc.stdout, output
+    assert "authoring_prior_missing" not in output, output
+    assert "Traceback" not in output, output
+    # Distill node ran (packaged prior loaded); route_entries records it.
+    import sqlite3
+
+    con = sqlite3.connect(runs_root / "runtime.db")
+    routes = [json.loads(row[0]) for row in con.execute("select entry_json from route_entries")]
+    distill_routes = [r for r in routes if r.get("node") == "distill"]
+    assert distill_routes, routes
+    print("cli-distill-ok", proc.stdout.strip().splitlines()[-1], distill_routes[0]["route"])
 
 
-def test_api_run_from_a_wheel_ends_with_the_missing_prior_code(
+def test_api_run_from_a_wheel_reaches_distill_with_the_packaged_prior(
     installed_python: tuple[Path, Path], tmp_path: Path
 ) -> None:
-    # POST /v1/runs (sync) on the default passing path; the run's error event keeps the code.
+    """Authenticated POST /v1/runs reaches a successful terminal and distill output."""
+
     root = tmp_path / "api-root"
     out = _run_in_install(
         installed_python,
@@ -393,39 +418,88 @@ def test_api_run_from_a_wheel_ends_with_the_missing_prior_code(
         f"""
         import json
         import os
+        import sqlite3
 
         os.environ["RECERTIA_EXECUTION_BACKEND"] = "local"
         from fastapi.testclient import TestClient
         from recertia.api import create_app
-        from recertia.api.events import RunEventLog
 
         root = pathlib.Path({str(root)!r})
         app = create_app(root=root)
         issued = app.state.api_keys.issue(tenant_id="t1", scopes={{"runs", "exec"}}, actor="test-admin")
         body = {{
             "run_id": "wheel-sync",
-            "goal": {{
-                "desired": [{{"id": "f", "kind": "file_exists", "path": "output.txt"}}],
-                "context": "write output.txt",
-                "task_class": "repo-chore",
-            }},
+            "request": "write output.txt",
+            "task_class": "repo-chore",
             "script": ["python3 -c \\"open('output.txt','w').write('done')\\""],
+            "criteria": [
+                {{
+                    "id": "output-exists",
+                    "kind": "command",
+                    "run": "test -f output.txt",
+                    "source": "caller",
+                    "weight": 1.0,
+                    "sensitivity_proof": {{
+                        "criterion_id": "output-exists",
+                        "negative_fixture": "empty workspace",
+                        "rejected": True,
+                        "checked_at": "2026-01-01T00:00:00Z",
+                    }},
+                }}
+            ],
         }}
         with TestClient(app) as client:
             resp = client.post("/v1/runs", json=body, headers={{"X-API-Key": issued.secret}})
-        events = RunEventLog(root).list_after("t1", "wheel-sync")
-        errors = [e["payload"] for e in events if e["type"] == "error"]
-        terminal = resp.json().get("terminal")
-        print(json.dumps({{"status": resp.status_code, "terminal": terminal, "errors": errors}}))
+        payload = resp.json()
+        db_candidates = list(root.rglob("runtime.db"))
+        routes = []
+        facts = 0
+        for db in db_candidates:
+            con = sqlite3.connect(db)
+            try:
+                routes = [json.loads(r[0]) for r in con.execute("select entry_json from route_entries")]
+            except Exception:
+                routes = []
+            try:
+                for _run_id, _seq, node, _next, state_json in con.execute(
+                    "select run_id, seq, node, next_node, state_json from checkpoints"
+                ):
+                    if node == "distill":
+                        st = json.loads(state_json)
+                        facts = len(st.get("facts_extracted") or [])
+            except Exception:
+                pass
+        distill_routes = [r for r in routes if r.get("node") == "distill"]
+        print(
+            json.dumps(
+                {{
+                    "status": resp.status_code,
+                    "terminal": payload.get("terminal"),
+                    "distill_routes": len(distill_routes),
+                    "distill_route": distill_routes[0]["route"] if distill_routes else None,
+                    "facts": facts,
+                }}
+            )
+        )
         """,
     )
     result = json.loads(out.splitlines()[-1])
-    assert result["terminal"] == "error", result
-    assert [e["code"] for e in result["errors"]] == ["authoring_prior_missing"], result
-    message = result["errors"][0]["message"]
-    assert "policy/authoring-prior.json" in message and "source checkout" in message, result
-    for absolute in (str(installed_python[1].parents[2]), str(tmp_path), "site-packages"):
-        assert absolute not in out, (absolute, out)
+    assert result["status"] == 200, result
+    assert result["terminal"] == "solved", result
+    assert result["distill_routes"] >= 1, result
+    assert result["facts"] >= 1, result
+    assert "authoring_prior_missing" not in out, out
+    print("api-distill-ok", result)
+
+
+def test_authoring_prior_in_wheel_record_is_exactly_one_file(built_wheel: Path) -> None:
+    names = sorted(
+        path
+        for path in _record(built_wheel)
+        if path.endswith("authoring-prior.json") and not path.endswith("/")
+    )
+    assert names == ["recertia/authoring-prior.json"], names
+
 
 
 def _run_installed_cli(
