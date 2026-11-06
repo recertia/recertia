@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Installed wheels ship the web console under `/console`.** The four static files
+  (`app.js`, `index.html`, `mark.svg`, `styles.css`) are packaged with the library and
+  served without authentication. Run, program and other data under `/v1` still require API
+  authentication. The previous 0.4.0 known-limit (console only from a source checkout) is
+  closed for this asset.
+
 - **Trading proposals stay on the job plane** ([ADR-0023](docs/adr/0023-trading-skill-evolution.md)).
   `recertia jobs run trading` loads `data/official/aapl-plotly.csv` (MIT Plotly AAPL tape,
   or `RECERTIA_OFFICIAL_BARS`) and returns a skip when the file is not an official tape or

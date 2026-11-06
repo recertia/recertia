@@ -67,7 +67,7 @@ Versioned under `/v1`. JSON only. Auth: `X-API-Key` with scoped keys (`runs`, `b
 | `GET` | `/v1/facts` · `/v1/cases` · `/v1/cases/{case_id}` · `/v1/affordances` | Tenant-scoped non-procedural memory reads |
 | `POST` | `/v1/memory/query` | Federated retrieve debug across planes; does not start a run |
 | `GET` | `/v1/policy` · `POST` `/v1/policy/proposals` | Read Policy (no secrets); T2 proposal only — does not apply |
-| `GET` | `/v1/models` | Server-side console model allowlist (OG-11). Not shipped in `console/static/`. |
+| `GET` | `/v1/models` | Server-side console model allowlist (OG-11). Not shipped in `src/recertia/console/static/`. |
 | `GET` | `/v1/ledger/verify` | Verify the integrity chain (§21) |
 | `GET` | `/v1/workspaces` · `POST`/`PATCH`/`DELETE` | Registered workspaces (console) |
 | `GET` | `/v1/me` · `POST` `/v1/auth/*` | Console session (dev login / OIDC). C5 tenant-switcher **UI** is not shipped. |

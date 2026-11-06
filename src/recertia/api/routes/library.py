@@ -93,7 +93,7 @@ def register_library_routes(app: FastAPI, rs: RouteState) -> None:
     # ----- C1 proposals / jobs -----
     @app.get("/v1/models")
     def list_models(principal=Depends(require_runs)) -> dict[str, Any]:
-        """Server-side console model allowlist (OG-11). Never embed this in ``console/static/``."""
+        """Server-side console model allowlist (OG-11). Never embed this in package static."""
 
         return ctx.library_service.list_models(principal)
     @app.get("/v1/policy")

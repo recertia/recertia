@@ -1,7 +1,7 @@
 """Server-side model slug allowlist for console-selected ``POST /v1/runs`` (OR3 / OG-11).
 
 The allowlist is process configuration (``RECERTIA_MODEL_ALLOWLIST`` and/or
-``RECERTIA_MODEL_ALLOWLIST_PATH``). It MUST NOT be shipped in ``console/static/``.
+``RECERTIA_MODEL_ALLOWLIST_PATH``). It MUST NOT be shipped in package ``console/static/``.
 Omitting ``model`` on a run keeps process-level env (``RECERTIA_MODEL_PROVIDER`` /
 ``RECERTIA_MODEL_ID``). A present ``model`` is fail-closed: empty allowlist or an
 unknown slug is rejected.

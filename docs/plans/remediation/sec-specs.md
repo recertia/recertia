@@ -1553,7 +1553,7 @@ Dev-login (`console_session_routes.py:53-74`) stays behind `dev_login_enabled()`
 ### Files
 
 - `api/console_auth.py`, `api/console_session_routes.py`, `api/console_deps.py` (CSRF dependency), new `auth/oidc.py`, `persistence/oidc_state.py`.
-- Console static fetch helper, if it posts with cookies, must send the CSRF header. That is `console/static/` and is in this item's file list.
+- Console static fetch helper, if it posts with cookies, must send the CSRF header. That is `src/recertia/console/static/` and is in this item's file list.
 - Tests: `tests/security/test_sec10_session.py`.
 
 ### Migration and breaking changes

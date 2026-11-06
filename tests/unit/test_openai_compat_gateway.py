@@ -230,7 +230,7 @@ def test_og11_allowlist_not_in_console_static() -> None:
 
     from recertia.solver.model_allowlist import canonical_model_ref, model_is_allowed
 
-    static = Path(__file__).resolve().parents[2] / "console" / "static"
+    static = Path(__file__).resolve().parents[2] / "src" / "recertia" / "console" / "static"
     assert static.is_dir()
     forbidden = ("RECERTIA_MODEL_ALLOWLIST", "MODEL_ALLOWLIST", "openai:moonshotai/")
     for path in static.rglob("*"):
