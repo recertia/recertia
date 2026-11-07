@@ -174,11 +174,19 @@ jobs:
           import zipfile
           from pathlib import Path
 
+          FAMILIES = ("control", "runtime", "quota")
           dist = Path("dist")
           wheels = list(dist.glob("*.whl"))
           sdists = list(dist.glob("*.tar.gz"))
           assert len(wheels) == 1, wheels
           assert len(sdists) == 1, sdists
+
+          def family_sql(names: list[str], family: str) -> list[str]:
+              marker = f"persistence/migrations/{family}/"
+              return [
+                  n for n in names
+                  if marker in n.replace("\\", "/") and n.endswith(".sql")
+              ]
 
           with zipfile.ZipFile(wheels[0]) as zf:
               names = zf.namelist()
@@ -186,38 +194,106 @@ jobs:
           assert any(n.endswith(".sqlite.sql") for n in sql), names
           assert any(n.endswith(".postgres.sql") for n in sql), names
           assert any(n.endswith("policy_default.json") for n in names), names
+          wheel_families = {family: family_sql(names, family) for family in FAMILIES}
+          for family, found in wheel_families.items():
+              assert found, f"wheel missing persistence/migrations/{family}/ sql"
 
           with tarfile.open(sdists[0], "r:gz") as tf:
               sdist_names = tf.getnames()
           assert any(n.endswith(".sqlite.sql") for n in sdist_names), sdist_names
           assert any(n.endswith(".postgres.sql") for n in sdist_names), sdist_names
           assert any(n.endswith("policy_default.json") for n in sdist_names), sdist_names
+          sdist_families = {family: family_sql(sdist_names, family) for family in FAMILIES}
+          for family, found in sdist_families.items():
+              assert found, f"sdist missing persistence/migrations/{family}/ sql"
           print("wheel sql:", sql)
+          print("wheel persistence:", wheel_families)
+          print("sdist persistence:", sdist_families)
           PY
 
       - name: Install wheel in a clean venv and smoke
         run: |
           python3 -m venv /tmp/rec-smoke
           /tmp/rec-smoke/bin/pip install dist/*.whl
-          /tmp/rec-smoke/bin/python - <<'PY'
+          mkdir -p /tmp/rec-smoke-cwd
+          (
+            cd /tmp/rec-smoke-cwd
+            env -u PYTHONPATH PYTHONNOUSERSITE=1 /tmp/rec-smoke/bin/python - <<'PY'
+          import sys
           from pathlib import Path
           from tempfile import TemporaryDirectory
 
+          import recertia.persistence as persistence
+          from recertia.persistence.db import apply_migrations, open_db
           from recertia.policy_load import load_policy
           from recertia.store import apply_sqlite_migrations, list_migrations
+
+          where = Path(persistence.__file__).resolve()
+          assert where.is_relative_to(Path(sys.prefix).resolve()), where
+          print("installed recertia.persistence", where)
 
           sqlite = list_migrations(dialect="sqlite")
           postgres = list_migrations(dialect="postgres")
           assert sqlite, "installed package applied 0 sqlite migrations"
           assert postgres, "installed package shipped 0 postgres migrations"
           with TemporaryDirectory() as tmp:
-              applied = apply_sqlite_migrations(Path(tmp) / "store.sqlite")
-          assert applied, applied
+              root = Path(tmp)
+              applied = apply_sqlite_migrations(root / "store.sqlite")
+              assert applied, applied
+              base = where.parent / "migrations"
+              for family in ("control", "runtime", "quota"):
+                  directory = base / family
+                  sql = sorted(p.name for p in directory.glob("*.sqlite.sql"))
+                  assert sql, f"installed wheel shipped 0 {family} migrations under {directory}"
+                  conn = open_db(root / f"{family}.sqlite")
+                  try:
+                      family_applied = apply_migrations(conn, directory)
+                  finally:
+                      conn.close()
+                  assert family_applied, (family, sql, family_applied)
+                  print(family, "sql", sql, "applied", family_applied)
           policy = load_policy()
           assert policy.version
           print("migrations", [p.name for p in sqlite], "policy", policy.version)
           PY
-          /tmp/rec-smoke/bin/recertia --help
+            env -u PYTHONPATH PYTHONNOUSERSITE=1 /tmp/rec-smoke/bin/recertia --help
+          )
+
+      - name: Install sdist in a clean venv and apply persistence migrations
+        run: |
+          python3 -m venv /tmp/rec-smoke-sdist
+          /tmp/rec-smoke-sdist/bin/pip install dist/*.tar.gz
+          mkdir -p /tmp/rec-smoke-sdist-cwd
+          (
+            cd /tmp/rec-smoke-sdist-cwd
+            env -u PYTHONPATH PYTHONNOUSERSITE=1 /tmp/rec-smoke-sdist/bin/python - <<'PY'
+          import sys
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          import recertia.persistence as persistence
+          from recertia.persistence.db import apply_migrations, open_db
+
+          where = Path(persistence.__file__).resolve()
+          assert where.is_relative_to(Path(sys.prefix).resolve()), where
+          print("installed recertia.persistence", where)
+
+          base = where.parent / "migrations"
+          with TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              for family in ("control", "runtime", "quota"):
+                  directory = base / family
+                  sql = sorted(p.name for p in directory.glob("*.sqlite.sql"))
+                  assert sql, f"installed sdist shipped 0 {family} migrations under {directory}"
+                  conn = open_db(root / f"{family}.sqlite")
+                  try:
+                      applied = apply_migrations(conn, directory)
+                  finally:
+                      conn.close()
+                  assert applied, (family, sql, applied)
+                  print(family, "sql", sql, "applied", applied)
+          PY
+          )
 
   container-smoke:
     name: container sandbox smoke
