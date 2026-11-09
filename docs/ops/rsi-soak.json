@@ -1,0 +1,36 @@
+{
+  "aborted": false,
+  "authorization": "none",
+  "blocking": "both",
+  "control_arm": {
+    "baseline": null,
+    "current": null,
+    "measured": false,
+    "noise_band": null,
+    "regressed": false
+  },
+  "days_required": 14,
+  "decisions": 0,
+  "decisions_required": 30,
+  "default_on": false,
+  "default_on_scheduled": false,
+  "elapsed_days": 0.0,
+  "evaluated_at": "2026-11-09T01:52:14Z",
+  "findings": [],
+  "flags_default_changed": false,
+  "flags_forced_off": false,
+  "kind": "rsi_soak",
+  "note": "No live promotion-decision window is on this checkout. The abort predicate is implemented and tested. Default-on is not scheduled.",
+  "open_reasons": [
+    "window",
+    "no_retirement_rows",
+    "control_arm_unmeasured"
+  ],
+  "passed": false,
+  "retirement_rows": 0,
+  "retirement_threshold": 0.05,
+  "rollback_generation": null,
+  "started_at": "2026-11-09T01:52:14Z",
+  "status": "open",
+  "window_complete": false
+}
