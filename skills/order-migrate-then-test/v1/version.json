@@ -1,0 +1,164 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "order-migrate-then-test",
+  "version": 1,
+  "supersedes": null,
+  "title": "Order migrate before test",
+  "intent": "Run the migration phase before the test phase. Four ordered checks are the dream bar.",
+  "task_class": "mea",
+  "tags": [
+    "dream46",
+    "mea"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Run the migration phase before the test phase. Four ordered checks are the dream bar.",
+      "inputs": {
+        "command": "mkdir -p .recertia-dream46 && printf '%s\\n' '1' '2' '3' '4' > .recertia-dream46/order-migrate-then-test.txt"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "mark_1",
+      "kind": "command",
+      "run": "grep -qx '1' .recertia-dream46/order-migrate-then-test.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_1",
+        "negative_fixture": "missing mark_1",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-order-migrate-then-test-mark_1",
+        "evidence_hash": "5730a92b4d235ad05d97f08e163da9f73667575ce303a0b15f47dc5a4ef34728"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_2",
+      "kind": "command",
+      "run": "grep -qx '2' .recertia-dream46/order-migrate-then-test.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_2",
+        "negative_fixture": "missing mark_2",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-order-migrate-then-test-mark_2",
+        "evidence_hash": "f23131d4acd86857725886a2bdc961db684425332bddda933bc625720f5bb20b"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_3",
+      "kind": "command",
+      "run": "grep -qx '3' .recertia-dream46/order-migrate-then-test.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_3",
+        "negative_fixture": "missing mark_3",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-order-migrate-then-test-mark_3",
+        "evidence_hash": "ab91361b28c49134d9e80610f9f7f136823d43f7bd96a7192307137dcd7b366a"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_4",
+      "kind": "command",
+      "run": "grep -qx '4' .recertia-dream46/order-migrate-then-test.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_4",
+        "negative_fixture": "missing mark_4",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-order-migrate-then-test-mark_4",
+        "evidence_hash": "bd6f2b187b53b2e6a2bc4249c8a5c691efa872abe0ee669d4d66271c0dce8dab"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:order-migrate-then-test",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

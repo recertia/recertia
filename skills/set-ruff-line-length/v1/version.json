@@ -1,0 +1,110 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "set-ruff-line-length",
+  "version": 1,
+  "supersedes": null,
+  "title": "Set the Ruff line length",
+  "intent": "Set the Ruff line length to 110 in pyproject so the formatter matches the repo gate.",
+  "task_class": "repo-chore",
+  "tags": [
+    "dream46",
+    "repo-chore"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Set the Ruff line length to 110 in pyproject so the formatter matches the repo gate.",
+      "inputs": {
+        "command": "printf '%s\\n' '[tool.ruff]' 'line-length = 110' >> pyproject.toml"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "section",
+      "kind": "command",
+      "run": "grep -q '\\[tool.ruff\\]' pyproject.toml",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "section",
+        "negative_fixture": "missing section",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-set-ruff-line-length-section",
+        "evidence_hash": "94d37f9e56cfb136fa7ad322a8f527cff0504d96a49f8b4a64bca178271e6e23"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "length",
+      "kind": "command",
+      "run": "grep -q 'line-length = 110' pyproject.toml",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "length",
+        "negative_fixture": "missing length",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-set-ruff-line-length-length",
+        "evidence_hash": "38f77bfcb0f5fbab4563f6dfef20e8a1097989e62dff728d193ee604d11ca250"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:set-ruff-line-length",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

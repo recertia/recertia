@@ -1,0 +1,137 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "redact-env-example",
+  "version": 1,
+  "supersedes": null,
+  "title": "Write an empty env example",
+  "intent": "Write .env.example with the key names and blank values so a real token is not committed.",
+  "task_class": "repo-chore",
+  "tags": [
+    "dream46",
+    "repo-chore"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Write .env.example with the key names and blank values so a real token is not committed.",
+      "inputs": {
+        "command": "printf '%s\\n' 'API_TOKEN=' 'DATABASE_URL=' > .env.example"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "file",
+      "kind": "command",
+      "run": "test -f .env.example",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "file",
+        "negative_fixture": "missing file",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-redact-env-example-file",
+        "evidence_hash": "a53ac7445c13d39560e7849555f76d541ba5a7cded53ccd534d4bb04fcff5a72"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "token-blank",
+      "kind": "command",
+      "run": "grep -qx 'API_TOKEN=' .env.example",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "token-blank",
+        "negative_fixture": "missing token-blank",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-redact-env-example-token-blank",
+        "evidence_hash": "16bdad22e1bb04c15de0591870ff1a054d2209d3626245441959deb4beb0e486"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "url-blank",
+      "kind": "command",
+      "run": "grep -qx 'DATABASE_URL=' .env.example",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "url-blank",
+        "negative_fixture": "missing url-blank",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-redact-env-example-url-blank",
+        "evidence_hash": "0127bed19f6b11e6f400caec7610d57b0311bad2582f74b5c40d97eadaaf587d"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:redact-env-example",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

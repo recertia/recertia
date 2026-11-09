@@ -1,0 +1,110 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "ignore-pytest-cache",
+  "version": 1,
+  "supersedes": null,
+  "title": "Ignore pytest cache files",
+  "intent": "Add pytest and bytecode caches to gitignore. The dream run passed only the pytest-cache line.",
+  "task_class": "repo-chore",
+  "tags": [
+    "dream46",
+    "repo-chore"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Add pytest and bytecode caches to gitignore. The dream run passed only the pytest-cache line.",
+      "inputs": {
+        "command": "printf '%s\\n' '.pytest_cache/' '__pycache__/' > .gitignore"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "pytest-cache",
+      "kind": "command",
+      "run": "grep -qx '.pytest_cache/' .gitignore",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "pytest-cache",
+        "negative_fixture": "missing pytest-cache",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-ignore-pytest-cache-pytest-cache",
+        "evidence_hash": "32cdfe620db0cab08973565f84bb9616580c1d853107791815caa064607cfb84"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "pycache",
+      "kind": "command",
+      "run": "grep -qx '__pycache__/' .gitignore",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "pycache",
+        "negative_fixture": "missing pycache",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-ignore-pytest-cache-pycache",
+        "evidence_hash": "358e4c5cfb666b64724b38b2ebd4beed094cd3188feb78416d13e6a58a0394f7"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:ignore-pytest-cache",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

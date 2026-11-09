@@ -1,0 +1,137 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "pin-dockerfile-base",
+  "version": 1,
+  "supersedes": null,
+  "title": "Pin the Docker base image",
+  "intent": "Write a Dockerfile whose base image is a digest-pinned python tag rather than a floating latest.",
+  "task_class": "repo-chore",
+  "tags": [
+    "dream46",
+    "repo-chore"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Write a Dockerfile whose base image is a digest-pinned python tag rather than a floating latest.",
+      "inputs": {
+        "command": "printf '%s\\n' 'FROM python:3.12-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000' 'WORKDIR /app' 'COPY . .' > Dockerfile"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "file",
+      "kind": "command",
+      "run": "test -f Dockerfile",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "file",
+        "negative_fixture": "missing file",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-pin-dockerfile-base-file",
+        "evidence_hash": "d9403287a3dff662c2f1fa2a486302665d29fc2cc799ef2e676fb92eac15b22d"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "from",
+      "kind": "command",
+      "run": "grep -q '^FROM python:3.12-slim@sha256:' Dockerfile",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "from",
+        "negative_fixture": "missing from",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-pin-dockerfile-base-from",
+        "evidence_hash": "4c4bf31f36a42aacbd026ecaaa145bb60ce2d48c7973da4cdff648addd263317"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "not-latest",
+      "kind": "command",
+      "run": "! grep -q ':latest' Dockerfile",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "not-latest",
+        "negative_fixture": "missing not-latest",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-pin-dockerfile-base-not-latest",
+        "evidence_hash": "b21a1520f3e6281f1152bc004dfa946bf2170f188f2482cf7a21281dd1a0530d"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:pin-dockerfile-base",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

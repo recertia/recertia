@@ -1,0 +1,164 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "add-pytest-workflow",
+  "version": 1,
+  "supersedes": null,
+  "title": "Add a pytest CI workflow",
+  "intent": "Add a GitHub Actions workflow that runs pytest on push and pull request and does not print the environment.",
+  "task_class": "repo-chore",
+  "tags": [
+    "dream46",
+    "repo-chore"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Add a GitHub Actions workflow that runs pytest on push and pull request and does not print the environment.",
+      "inputs": {
+        "command": "mkdir -p .github/workflows && printf '%s\\n' 'name: ci' 'on: [push, pull_request]' 'jobs:' '  test:' '    runs-on: ubuntu-latest' '    steps:' '      - run: pytest' > .github/workflows/ci.yml"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "file",
+      "kind": "command",
+      "run": "test -f .github/workflows/ci.yml",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "file",
+        "negative_fixture": "missing file",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-pytest-workflow-file",
+        "evidence_hash": "2d5296ae2bdb598197930c0894a5ebb903ae184c1e3b7ba81f62a546d7d2166a"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "pytest",
+      "kind": "command",
+      "run": "grep -q 'run: pytest' .github/workflows/ci.yml",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "pytest",
+        "negative_fixture": "missing pytest",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-pytest-workflow-pytest",
+        "evidence_hash": "87875d942abbb026f2f5fb5fc80e83afe61da8a56d1cf085ae0417587ffb675e"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "push",
+      "kind": "command",
+      "run": "grep -q push .github/workflows/ci.yml",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "push",
+        "negative_fixture": "missing push",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-pytest-workflow-push",
+        "evidence_hash": "3c8e627655ba73965f95a5efb30454edb28b9cd8d43d87b3bada2aa656b7eebc"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "quiet",
+      "kind": "command",
+      "run": "! grep -q 'printenv' .github/workflows/ci.yml",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "quiet",
+        "negative_fixture": "missing quiet",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-pytest-workflow-quiet",
+        "evidence_hash": "8adb3c6f9bfd3376ae8575d0c79a5820935cea56a2c46cee5b410d0e9d485cdf"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:add-pytest-workflow",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

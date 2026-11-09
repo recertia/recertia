@@ -1,0 +1,137 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "add-dependabot-pip",
+  "version": 1,
+  "supersedes": null,
+  "title": "Add weekly pip Dependabot",
+  "intent": "Write a Dependabot config that checks pip at the repo root once a week and names the pip ecosystem.",
+  "task_class": "repo-chore",
+  "tags": [
+    "dream46",
+    "repo-chore"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Write a Dependabot config that checks pip at the repo root once a week and names the pip ecosystem.",
+      "inputs": {
+        "command": "mkdir -p .github && printf '%s\\n' 'version: 2' 'updates:' '  - package-ecosystem: pip' '    directory: /' '    schedule:' '      interval: weekly' > .github/dependabot.yml"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "file",
+      "kind": "command",
+      "run": "test -f .github/dependabot.yml",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "file",
+        "negative_fixture": "missing file",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-dependabot-pip-file",
+        "evidence_hash": "a8013ee631d3fe49889a7a81041d5e09e65c343a4d635fe7cdaebaddd9d65ce9"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "pip",
+      "kind": "command",
+      "run": "grep -q 'package-ecosystem: pip' .github/dependabot.yml",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "pip",
+        "negative_fixture": "missing pip",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-dependabot-pip-pip",
+        "evidence_hash": "c14a641836c9d05a4df881f6c3f7a349f0b403e296d32513efd860b5c6563984"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "weekly",
+      "kind": "command",
+      "run": "grep -q 'interval: weekly' .github/dependabot.yml",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "weekly",
+        "negative_fixture": "missing weekly",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-dependabot-pip-weekly",
+        "evidence_hash": "af9c4658e5c154b1d6694f2e87c4482ec77d8dc07540e9dba97cd144425a5b62"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:add-dependabot-pip",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "stop-at-error-toast",
+  "version": 1,
+  "supersedes": null,
+  "title": "Stop at the error toast",
+  "intent": "End the replay when the error toast is the screen. Three checks are the dream bar.",
+  "task_class": "playtest-operator",
+  "tags": [
+    "dream46",
+    "playtest-operator"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "End the replay when the error toast is the screen. Three checks are the dream bar.",
+      "inputs": {
+        "command": "mkdir -p .recertia-dream46 && printf '%s\\n' '1' '2' '3' > .recertia-dream46/stop-at-error-toast.txt"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "mark_1",
+      "kind": "command",
+      "run": "grep -qx '1' .recertia-dream46/stop-at-error-toast.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_1",
+        "negative_fixture": "missing mark_1",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-stop-at-error-toast-mark_1",
+        "evidence_hash": "10eb6aaf06cab1ba8c318b8619d54326457f5f4a552c16aa955b0738f25edf04"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_2",
+      "kind": "command",
+      "run": "grep -qx '2' .recertia-dream46/stop-at-error-toast.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_2",
+        "negative_fixture": "missing mark_2",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-stop-at-error-toast-mark_2",
+        "evidence_hash": "b09f2df9fae03c184710d0fa3f6703fb91ab663de4ffad15f255c0d3d07ab9eb"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_3",
+      "kind": "command",
+      "run": "grep -qx '3' .recertia-dream46/stop-at-error-toast.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_3",
+        "negative_fixture": "missing mark_3",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-stop-at-error-toast-mark_3",
+        "evidence_hash": "429a1c29ff7f04691d7b8607da3e6549a8bc0b468cd3814f0c0e86fa571020b4"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:stop-at-error-toast",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

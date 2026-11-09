@@ -1,0 +1,110 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "no-extra-navigation",
+  "version": 1,
+  "supersedes": null,
+  "title": "Take no extra navigation",
+  "intent": "The replay visits only the pages in the log. An extra hop fails the check.",
+  "task_class": "playtest-operator",
+  "tags": [
+    "dream46",
+    "playtest-operator"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "The replay visits only the pages in the log. An extra hop fails the check.",
+      "inputs": {
+        "command": "printf '%s\\n' 'home' 'done' > pages.txt"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "home",
+      "kind": "command",
+      "run": "grep -qx home pages.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "home",
+        "negative_fixture": "missing home",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-no-extra-navigation-home",
+        "evidence_hash": "f6e8b2064202dab0d208cab292c04b272de12b0b13955b5d7acb78be071e58e4"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "no-extra",
+      "kind": "command",
+      "run": "! grep -qx settings pages.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "no-extra",
+        "negative_fixture": "missing no-extra",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-no-extra-navigation-no-extra",
+        "evidence_hash": "7df8f6f0ff94bab894edc9f388c3afb1070954504d72714519b6a5188ce20075"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:no-extra-navigation",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

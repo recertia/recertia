@@ -1,0 +1,164 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "fix-empty-slice",
+  "version": 1,
+  "supersedes": null,
+  "title": "Fix an empty-slice guard",
+  "intent": "Treat an empty slice as no work instead of wrapping the index. Four checks are the dream bar.",
+  "task_class": "bug-reproduction",
+  "tags": [
+    "dream46",
+    "bug-reproduction"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Treat an empty slice as no work instead of wrapping the index. Four checks are the dream bar.",
+      "inputs": {
+        "command": "mkdir -p .recertia-dream46 && printf '%s\\n' '1' '2' '3' '4' > .recertia-dream46/fix-empty-slice.txt"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "mark_1",
+      "kind": "command",
+      "run": "grep -qx '1' .recertia-dream46/fix-empty-slice.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_1",
+        "negative_fixture": "missing mark_1",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-fix-empty-slice-mark_1",
+        "evidence_hash": "5232549dcb1bd78391da4484175b7074c66bc41097021683649ac9e28a6d412e"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_2",
+      "kind": "command",
+      "run": "grep -qx '2' .recertia-dream46/fix-empty-slice.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_2",
+        "negative_fixture": "missing mark_2",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-fix-empty-slice-mark_2",
+        "evidence_hash": "041a3d330c010ba8ad2f3b46f83c6eb3a7c91b1119d05e0e04de18b5b8716e9d"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_3",
+      "kind": "command",
+      "run": "grep -qx '3' .recertia-dream46/fix-empty-slice.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_3",
+        "negative_fixture": "missing mark_3",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-fix-empty-slice-mark_3",
+        "evidence_hash": "efc5bebf168627071814e8c10766b7cf41da079d6864d5da9c4809953fd1d07c"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_4",
+      "kind": "command",
+      "run": "grep -qx '4' .recertia-dream46/fix-empty-slice.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_4",
+        "negative_fixture": "missing mark_4",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-fix-empty-slice-mark_4",
+        "evidence_hash": "c2d9bc8c4006ceb426658251f1c94bce7282b4754fa560e276fd718f4977a0b2"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:fix-empty-slice",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

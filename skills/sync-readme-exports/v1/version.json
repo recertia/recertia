@@ -1,0 +1,137 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "sync-readme-exports",
+  "version": 1,
+  "supersedes": null,
+  "title": "Sync README exports",
+  "intent": "List only the names the package actually exports, and list every public name the README claims.",
+  "task_class": "docs-auditor",
+  "tags": [
+    "dream46",
+    "docs-auditor"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "List only the names the package actually exports, and list every public name the README claims.",
+      "inputs": {
+        "command": "printf '%s\\n' 'def open_soak():' '    return None' > api.py && printf '%s\\n' 'Exports: open_soak' > README.md"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "readme",
+      "kind": "command",
+      "run": "grep -q 'open_soak' README.md",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "readme",
+        "negative_fixture": "missing readme",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-sync-readme-exports-readme",
+        "evidence_hash": "40c1e468252509e17309225f0ff8cac5f65a5357a790a067d949e472ebb48ac5"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "export",
+      "kind": "command",
+      "run": "grep -q 'def open_soak' api.py",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "export",
+        "negative_fixture": "missing export",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-sync-readme-exports-export",
+        "evidence_hash": "ac436a5d4b8c26bb4654d1301cb6637e548a32a005d5038402d3c6649bbe7449"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "no-extra",
+      "kind": "command",
+      "run": "! grep -q 'missing_symbol' README.md",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "no-extra",
+        "negative_fixture": "missing no-extra",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-sync-readme-exports-no-extra",
+        "evidence_hash": "79cb21fc939123699568a8cb71c3186bde35c4489e517ffd789eaf49bacc897a"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:sync-readme-exports",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

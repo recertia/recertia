@@ -1,0 +1,191 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "separate-format-from-behavior",
+  "version": 1,
+  "supersedes": null,
+  "title": "Separate format from behavior",
+  "intent": "Keep a formatting edit out of a behavior phase. The dream run passed three of the five phase checks.",
+  "task_class": "mea",
+  "tags": [
+    "dream46",
+    "mea"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Keep a formatting edit out of a behavior phase. The dream run passed three of the five phase checks.",
+      "inputs": {
+        "command": "mkdir -p .recertia-dream46 && printf '%s\\n' '1' '2' '3' '4' '5' > .recertia-dream46/separate-format-from-behavior.txt"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "mark_1",
+      "kind": "command",
+      "run": "grep -qx '1' .recertia-dream46/separate-format-from-behavior.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_1",
+        "negative_fixture": "missing mark_1",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-separate-format-from-behavior-mark_1",
+        "evidence_hash": "354f8dbf7c1dd61b6aad5393a0d338e546fed5fab2b8d5d1ec552d15589d7228"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_2",
+      "kind": "command",
+      "run": "grep -qx '2' .recertia-dream46/separate-format-from-behavior.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_2",
+        "negative_fixture": "missing mark_2",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-separate-format-from-behavior-mark_2",
+        "evidence_hash": "2a4b1aca28f260fb474ce4635cc250db8ecffb918b7f6ca6e809e546e7bb6761"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_3",
+      "kind": "command",
+      "run": "grep -qx '3' .recertia-dream46/separate-format-from-behavior.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_3",
+        "negative_fixture": "missing mark_3",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-separate-format-from-behavior-mark_3",
+        "evidence_hash": "3e4941103bd3562a68b23b5fb5c4098417a065131bc1bbc615be7f27d29a8734"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_4",
+      "kind": "command",
+      "run": "grep -qx '4' .recertia-dream46/separate-format-from-behavior.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_4",
+        "negative_fixture": "missing mark_4",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-separate-format-from-behavior-mark_4",
+        "evidence_hash": "650305f413a7e302a01ee2932fb0c7744bd3b0eb6b60402d1fad6a1f8cfd6b92"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_5",
+      "kind": "command",
+      "run": "grep -qx '5' .recertia-dream46/separate-format-from-behavior.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_5",
+        "negative_fixture": "missing mark_5",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-separate-format-from-behavior-mark_5",
+        "evidence_hash": "41a9fe9eeee1d4c3ae9670161b99593c5069aa897fd6a4760568b9a775dc0d03"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:separate-format-from-behavior",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

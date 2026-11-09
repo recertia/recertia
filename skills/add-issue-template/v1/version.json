@@ -1,0 +1,110 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "add-issue-template",
+  "version": 1,
+  "supersedes": null,
+  "title": "Add a bug issue template",
+  "intent": "Add a bug report template that asks for the version and the exact command that failed.",
+  "task_class": "repo-chore",
+  "tags": [
+    "dream46",
+    "repo-chore"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Add a bug report template that asks for the version and the exact command that failed.",
+      "inputs": {
+        "command": "mkdir -p .github/ISSUE_TEMPLATE && printf '%s\\n' 'name: Bug' 'about: A reproduced failure' 'body:' '  - type: textarea' '    attributes:' '      label: Command' > .github/ISSUE_TEMPLATE/bug.yml"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "file",
+      "kind": "command",
+      "run": "test -f .github/ISSUE_TEMPLATE/bug.yml",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "file",
+        "negative_fixture": "missing file",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-issue-template-file",
+        "evidence_hash": "7a6864126888dcdb57cde0907d3fb29769f004740c43ce7ef1b9634ee3b19923"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "command",
+      "kind": "command",
+      "run": "grep -q 'label: Command' .github/ISSUE_TEMPLATE/bug.yml",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "command",
+        "negative_fixture": "missing command",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-issue-template-command",
+        "evidence_hash": "7872dd49b28443dc0700906ba6d629f18329e61dac51f584ecd601f2e10340c0"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:add-issue-template",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

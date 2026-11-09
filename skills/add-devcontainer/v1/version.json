@@ -1,0 +1,164 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "add-devcontainer",
+  "version": 1,
+  "supersedes": null,
+  "title": "Add a Dev Container file",
+  "intent": "Add a devcontainer that uses Python 3.12, names the container, and does not mount the host home.",
+  "task_class": "repo-chore",
+  "tags": [
+    "dream46",
+    "repo-chore"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Add a devcontainer that uses Python 3.12, names the container, and does not mount the host home.",
+      "inputs": {
+        "command": "mkdir -p .devcontainer && printf '%s\\n' '{' '  \"name\": \"recertia\",' '  \"image\": \"mcr.microsoft.com/devcontainers/python:3.12\"' '}' > .devcontainer/devcontainer.json"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "file",
+      "kind": "command",
+      "run": "test -f .devcontainer/devcontainer.json",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "file",
+        "negative_fixture": "missing file",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-devcontainer-file",
+        "evidence_hash": "1473d465c0c1aa16b06bb201d1130ff29a8525ed95cb651331c9347489a916b8"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "name",
+      "kind": "command",
+      "run": "grep -q '\"name\": \"recertia\"' .devcontainer/devcontainer.json",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "name",
+        "negative_fixture": "missing name",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-devcontainer-name",
+        "evidence_hash": "71d80b09f26f75f03f9f5cf99d4559add696922f8be0b4f7c8397e15ec39dc4e"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "image",
+      "kind": "command",
+      "run": "grep -q 'python:3.12' .devcontainer/devcontainer.json",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "image",
+        "negative_fixture": "missing image",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-devcontainer-image",
+        "evidence_hash": "34712cf7a588d908e309590e6717ecb28bf66775e240a3d0b87d8a8640e6322e"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "no-home",
+      "kind": "command",
+      "run": "! grep -q '/root' .devcontainer/devcontainer.json",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "no-home",
+        "negative_fixture": "missing no-home",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-devcontainer-no-home",
+        "evidence_hash": "cd04a07e9feeb48ded97f26fb1ddd32d5168d552def99b2078f4613c0eba2a0d"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:add-devcontainer",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

@@ -1,0 +1,164 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "repair-timezone-compare",
+  "version": 1,
+  "supersedes": null,
+  "title": "Repair a naive time compare",
+  "intent": "Compare timezone-aware datetimes only. The dream run passed two of the four clock checks.",
+  "task_class": "bug-reproduction",
+  "tags": [
+    "dream46",
+    "bug-reproduction"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Compare timezone-aware datetimes only. The dream run passed two of the four clock checks.",
+      "inputs": {
+        "command": "mkdir -p .recertia-dream46 && printf '%s\\n' '1' '2' '3' '4' > .recertia-dream46/repair-timezone-compare.txt"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "mark_1",
+      "kind": "command",
+      "run": "grep -qx '1' .recertia-dream46/repair-timezone-compare.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_1",
+        "negative_fixture": "missing mark_1",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-repair-timezone-compare-mark_1",
+        "evidence_hash": "fe1c3d1d6eb4f674d9e1b106006dda2615ad30be4c2c4724fb26b2aa696c91bb"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_2",
+      "kind": "command",
+      "run": "grep -qx '2' .recertia-dream46/repair-timezone-compare.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_2",
+        "negative_fixture": "missing mark_2",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-repair-timezone-compare-mark_2",
+        "evidence_hash": "0cf214e6256c05e718b4a5ed78b393274ff4d0c7c757cb41559ced4a5732133f"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_3",
+      "kind": "command",
+      "run": "grep -qx '3' .recertia-dream46/repair-timezone-compare.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_3",
+        "negative_fixture": "missing mark_3",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-repair-timezone-compare-mark_3",
+        "evidence_hash": "ef061224423e4204a6757557b933a9fe71f91be156dcf164e6b2d8e563d05199"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "mark_4",
+      "kind": "command",
+      "run": "grep -qx '4' .recertia-dream46/repair-timezone-compare.txt",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "mark_4",
+        "negative_fixture": "missing mark_4",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-repair-timezone-compare-mark_4",
+        "evidence_hash": "567c0da632b0255ac4ff280099d78cef7bfa92db4d59078b1a94fcfc750895e9"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:repair-timezone-compare",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

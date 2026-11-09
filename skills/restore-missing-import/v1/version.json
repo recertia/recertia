@@ -1,0 +1,164 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "restore-missing-import",
+  "version": 1,
+  "supersedes": null,
+  "title": "Restore a missing import",
+  "intent": "Add the missing import so the module loads, without deleting the call site that needed it.",
+  "task_class": "bug-reproduction",
+  "tags": [
+    "dream46",
+    "bug-reproduction"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Add the missing import so the module loads, without deleting the call site that needed it.",
+      "inputs": {
+        "command": "printf '%s\\n' 'from pathlib import Path' 'def root():' '    return Path(\".\")' > sample.py"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "import",
+      "kind": "command",
+      "run": "grep -q 'from pathlib import Path' sample.py",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "import",
+        "negative_fixture": "missing import",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-restore-missing-import-import",
+        "evidence_hash": "b92e11b80ec777baea18b1ad80933817742bafe4604c182f633cd5c832e65cbd"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "call",
+      "kind": "command",
+      "run": "grep -q 'Path(' sample.py",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "call",
+        "negative_fixture": "missing call",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-restore-missing-import-call",
+        "evidence_hash": "5cd5290e4e2af1a48a115dc50ab432bffc7eb382ee714b2251488d29f94faedc"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "function",
+      "kind": "command",
+      "run": "grep -q 'def root' sample.py",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "function",
+        "negative_fixture": "missing function",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-restore-missing-import-function",
+        "evidence_hash": "b8016d24f11020899f2e4cf99835a4734259b9a3f320bf1908af4f2f712f3191"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "file",
+      "kind": "command",
+      "run": "test -f sample.py",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "file",
+        "negative_fixture": "missing file",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-restore-missing-import-file",
+        "evidence_hash": "e547769f8ef883e573b6fd2ad247d6ae3eeeee0942bac7e64565b270a3aab7bd"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:restore-missing-import",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

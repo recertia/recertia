@@ -1,0 +1,20 @@
+{
+  "skill_id": "add-makefile-help",
+  "version": 1,
+  "lifecycle": "candidate",
+  "active": false,
+  "certification": {
+    "model_validated_on": null,
+    "tool_fingerprint": {},
+    "golden_set_ref": null,
+    "last_recertified_at": null,
+    "recert_status": "never"
+  },
+  "retirement": {
+    "benched_at": null,
+    "reason": null,
+    "evidence": null,
+    "restored_at": null,
+    "grace_period_remaining": null
+  }
+}

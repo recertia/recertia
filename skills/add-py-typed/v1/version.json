@@ -1,0 +1,110 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "add-py-typed",
+  "version": 1,
+  "supersedes": null,
+  "title": "Add a py.typed marker",
+  "intent": "Write an empty py.typed so type checkers treat the package as typed without a partial waiver.",
+  "task_class": "repo-chore",
+  "tags": [
+    "dream46",
+    "repo-chore"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Write an empty py.typed so type checkers treat the package as typed without a partial waiver.",
+      "inputs": {
+        "command": "mkdir -p src/pkg && : > src/pkg/py.typed"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "exists",
+      "kind": "command",
+      "run": "test -f src/pkg/py.typed",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "exists",
+        "negative_fixture": "missing exists",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-py-typed-exists",
+        "evidence_hash": "00f3114af0fc97f0fac6c356311170f89e3d6f7a8f012c39f777bd1635a53655"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    },
+    {
+      "id": "empty",
+      "kind": "command",
+      "run": "! grep -q . src/pkg/py.typed",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "empty",
+        "negative_fixture": "missing empty",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-add-py-typed-empty",
+        "evidence_hash": "3a2acb6114b3eb5195d2e2fd24c99a10c5a1e336b1946fae553216e5b5fa7c56"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:add-py-typed",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "schema_version": "2.0",
+  "skill_id": "fix-broken-anchor",
+  "version": 1,
+  "supersedes": null,
+  "title": "Fix a broken doc anchor",
+  "intent": "Point the README link at a heading that exists in the same file.",
+  "task_class": "docs-auditor",
+  "tags": [
+    "dream46",
+    "docs-auditor"
+  ],
+  "scope": "project",
+  "uses": [],
+  "parameters": [],
+  "preconditions": [],
+  "steps": [
+    {
+      "id": "write",
+      "tool": "shell",
+      "intent": "Point the README link at a heading that exists in the same file.",
+      "inputs": {
+        "command": "printf '%s\\n' '# Use' 'See [Use](#use).' > README.md"
+      },
+      "outputs": [],
+      "input_bindings": [],
+      "optional": false,
+      "resources": [],
+      "loop": null
+    }
+  ],
+  "certification_criteria": [
+    {
+      "id": "anchor",
+      "kind": "command",
+      "run": "grep -q '](#use)' README.md",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "anchor",
+        "negative_fixture": "missing anchor",
+        "rejected": true,
+        "checked_at": "2026-11-09T03:05:00Z",
+        "checked_against": "sha256:dream46-fix-broken-anchor-anchor",
+        "evidence_hash": "3967cdba77b3a3206cf75c9823af55a7a4a73737fe275a63cd93c72cf3156b78"
+      },
+      "authored_by": "human",
+      "preregistered": true
+    }
+  ],
+  "failure_modes": [],
+  "provenance": {
+    "distilled_from_run": "dream46:fix-broken-anchor",
+    "distilled_at": "2026-11-09T03:05:00Z",
+    "authored_by": "human",
+    "curation": "human_authored",
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null,
+    "source_case_ids": [],
+    "source_run_ids": [],
+    "source_session_ids": [],
+    "source_contributor_ids": [],
+    "attribution_summary": null
+  },
+  "hygiene": {
+    "secret_scan": "passed",
+    "scanned_at": "2026-11-09T03:05:00Z",
+    "lint_content_hash": null
+  }
+}
