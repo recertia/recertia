@@ -1,0 +1,21 @@
+{
+  "measured_at": "2026-11-09T00:08:53Z",
+  "batch_size": 0,
+  "reexec_fraction": 0.0,
+  "median_reexec_s": null,
+  "p95_reexec_s": null,
+  "pool_headroom": null,
+  "go": false,
+  "slo_waiver": null,
+  "measured": {
+    "window_days": 30,
+    "history_records": 10,
+    "ignored": 0,
+    "dropped_bad_stamp": 0,
+    "dropped_outside_window": 10,
+    "durations_observed": 0,
+    "pool_slots": null,
+    "distill_slo_s": null,
+    "reason": "batch_size 0 < 50; no declared sandbox pool or distill SLO"
+  }
+}
