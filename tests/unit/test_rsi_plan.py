@@ -264,7 +264,26 @@ class HygieneSuite(unittest.TestCase):
         self.assertEqual(second.reason, "duplicate")
         self.assertEqual(second.duplicate_of, first.artifact_id)
         self.assertEqual(len(world.screened), 1)
-        self.assertEqual(world.sandbox_calls, 1)
+        # The hash is known only after a fresh run, so the second call re-executes.
+        self.assertEqual(world.sandbox_calls, 2)
+
+    def test_distinct_payload_is_not_a_duplicate(self):
+        world = _world()
+        calls = {"n": 0}
+
+        def executor(public):
+            calls["n"] += 1
+            marker = f"payload-{calls['n']}"
+            return _ok_exec(observations=[marker])(public)
+
+        gate = HygieneGate(world, executor)
+        first = gate.run(_req("a"))
+        second = gate.run(_req("b"))
+        self.assertTrue(first.accepted)
+        self.assertTrue(second.accepted)
+        self.assertNotEqual(first.artifact_id, second.artifact_id)
+        self.assertEqual(len(world.screened), 2)
+        self.assertEqual(world.sandbox_calls, 2)
 
     def test_single_flight_executes_once(self):
         world = _world()

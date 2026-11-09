@@ -72,6 +72,7 @@ def register_trajectories_routes(app: FastAPI, rs: RouteState) -> None:
                 trajectory=body.trajectory,
                 actor=getattr(principal, "key_id", "api"),
                 task_class=body.task_class,
+                runs_root=ctx.root,
             )
         except ConfigError as exc:
             raise V1HTTPError(400, code="distill_rejected", message=exc.message) from exc

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -559,6 +560,8 @@ class LibraryService:
         actor: str,
         task_class: str,
         from_file: Path | None = None,
+        runs_root: Path | None = None,
+        executor: Any | None = None,
     ) -> dict[str, Any]:
         self._require(principal, "skills.read")
         from pydantic import ValidationError
@@ -566,7 +569,34 @@ class LibraryService:
         from recertia.distill.imported import DistillRejected, as_public_dict, distill_imported
 
         try:
-            if from_file is not None:
+            if os.environ.get("RECERTIA_HYGIENE_ENABLED") == "1":
+                from recertia.memory.episodic import EpisodicStore
+                from recertia.nodes.rsi_bridge import gate_import
+
+                imported = _load_import(trajectory, from_file)
+                if runs_root is None:
+                    raise ConfigError("hygiene gate requires runs_root")
+                result = gate_import(
+                    imported,
+                    task_class=task_class,
+                    runs_root=runs_root,
+                    executor=executor,
+                )
+                if not result.accepted or not result.artifact_id:
+                    raise ConfigError(f"hygiene rejected: {result.reason}")
+                known = (
+                    EpisodicStore(runs_root / "episodic").get_by_case_id(result.artifact_id)
+                    is not None
+                )
+                version = distill_imported(
+                    imported,
+                    store,
+                    actor=actor,
+                    task_class=task_class,
+                    screened_artifact_id=result.artifact_id,
+                    screened_known=known,
+                )
+            elif from_file is not None:
                 from recertia.distill.imported import distill_imported_file
 
                 version = distill_imported_file(
@@ -622,3 +652,13 @@ class LibraryService:
         if pdp is None:
             return
         pdp.require(principal, action, Resource(tenant_id=principal.tenant_id))
+
+
+def _load_import(trajectory: Any, from_file: Path | None) -> Any:
+    from contracts.trajectory_import import TrajectoryImport
+
+    if from_file is not None:
+        return TrajectoryImport.model_validate_json(from_file.read_text(encoding="utf-8"))
+    if hasattr(trajectory, "steps") and hasattr(trajectory, "import_id"):
+        return trajectory
+    return TrajectoryImport.model_validate(trajectory)

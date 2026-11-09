@@ -7,6 +7,7 @@ This node MUST NOT scan the episodic store for clusters.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from contracts.budget import BudgetReservation, budget_excess
@@ -153,6 +154,15 @@ def _version_write_budget(state: RunState) -> NodeOutcome | None:
 
 
 def _author_or_reject(state: RunState, ctx: NodeContext) -> NodeOutcome:
+    screened_id = None
+    if os.environ.get("RECERTIA_HYGIENE_ENABLED") == "1":
+        from recertia.nodes.rsi_bridge import live_hygiene_block
+
+        hold = live_hygiene_block(state, ctx)
+        if hold is not None:
+            if hold.outcome is not None:
+                return hold.outcome
+            screened_id = hold.artifact_id
     prior = load_authoring_prior()
     commands = _commands_from_context(state, ctx)
     sightings = _task_class_sightings(ctx, state.task.task_class)
@@ -174,6 +184,10 @@ def _author_or_reject(state: RunState, ctx: NodeContext) -> NodeOutcome:
         environment=environment,
         locked_criteria=list(state.criteria),
     )
+    if draft is not None and screened_id:
+        from recertia.nodes.rsi_bridge import point_provenance
+
+        draft = point_provenance(draft, screened_id)
 
     if draft is not None:
         applicability = refuse_if_inapplicable(
