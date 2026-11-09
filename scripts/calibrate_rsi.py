@@ -1,4 +1,7 @@
-"""Offline calibration. Writes a candidate constant set and does not activate it."""
+"""Offline calibration on a synthetic 30-row script. Not for activation.
+
+Writes a candidate constant set and does not activate it.
+"""
 
 from __future__ import annotations
 

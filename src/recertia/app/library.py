@@ -516,6 +516,8 @@ class LibraryService:
             practice_conversion = report.practice_conversion
             unavailable = report.unavailable.get("practice_conversion")
         pending = proposals.list(tenant_id=tenant_id, status="pending", limit=100)
+        from recertia.ops.rsi_phase_c import console_snapshot
+
         return {
             "active_cap_pressure": mean_pressure,
             "pressure_by_class": pressure,
@@ -523,6 +525,7 @@ class LibraryService:
             "practice_conversion": practice_conversion,
             "practice_conversion_unavailable": unavailable,
             "pending_proposals": len(pending),
+            "rsi_snapshot": console_snapshot([], None),
         }
 
     def list_models(self, principal: Principal) -> dict[str, Any]:

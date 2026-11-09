@@ -544,11 +544,21 @@ function formatSkillDetail(d) {
 
 async function refreshTower() {
   const summary = await api("/v1/console/tower-summary");
+  const rsi = summary.rsi_snapshot || {};
+  const lift = rsi.control_arm_lift == null ? "—" : rsi.control_arm_lift;
+  const label = rsi.label
+    ? `<div class="card"><div class="k">rsi</div><div class="v">${escapeHtml(rsi.label)}</div></div>`
+    : "";
   $("#towerSummary").innerHTML = `
     <div class="card"><div class="k">active_cap_pressure</div><div class="v">${escapeHtml(summary.active_cap_pressure ?? "—")}</div></div>
     <div class="card"><div class="k">composition depth</div><div class="v">${escapeHtml(summary.mean_composition_depth ?? "—")}</div></div>
     <div class="card"><div class="k">practice_conversion</div><div class="v">${escapeHtml(summary.practice_conversion ?? summary.practice_conversion_unavailable ?? "—")}</div></div>
-    <div class="card"><div class="k">pending proposals</div><div class="v">${escapeHtml(summary.pending_proposals)}</div></div>`;
+    <div class="card"><div class="k">pending proposals</div><div class="v">${escapeHtml(summary.pending_proposals)}</div></div>
+    <div class="card"><div class="k">process score</div><div class="v">${escapeHtml(rsi.process_score ?? "—")}</div></div>
+    <div class="card"><div class="k">strict completion</div><div class="v">${escapeHtml(rsi.strict_completion ?? "—")}</div></div>
+    <div class="card"><div class="k">failure share</div><div class="v">${escapeHtml(rsi.failure_share ?? "—")}</div></div>
+    <div class="card"><div class="k">control-arm lift</div><div class="v">${escapeHtml(lift)}</div></div>
+    ${label}`;
   const props = await api("/v1/proposals");
   const tb = $("#proposalsTable tbody");
   tb.innerHTML = "";
