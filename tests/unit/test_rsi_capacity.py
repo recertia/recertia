@@ -20,7 +20,7 @@ NOW = datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc)
 
 def _row(i: int, *, at: datetime | None = None, elapsed: float | None = 10.0) -> dict:
     stamp = NOW if at is None else at
-    row = {
+    row: dict[str, object] = {
         "skill_id": f"skill-{i}",
         "run_id": f"run-{i}",
         "at": stamp.isoformat(),
