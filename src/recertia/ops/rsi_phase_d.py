@@ -12,10 +12,11 @@ from __future__ import annotations
 import json
 from collections.abc import MutableMapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from recertia.autonomy import DEFAULT_AUTONOMY
+from recertia.evals.metrics import first_attempt_success_sample
 from recertia.ledger.hashchain import HashChainLedger
 from recertia.ops.rsi_phase_c import DurableIndex, rollback_dry_run
 from recertia.rsi.models import ScoreSidecar
@@ -25,6 +26,7 @@ from recertia.rsi.scoring import soak_must_abort
 WINDOW_DAYS = 14
 WINDOW_DECISIONS = 30
 _ACTOR = "rsi-phase-d"
+_BAND_KIND = "rsi_noise_band"
 _FLAG_NAMES = (
     "RECERTIA_HYGIENE_ENABLED",
     "RECERTIA_CALIBRATED_SCORING",
@@ -139,6 +141,154 @@ def promotion_decision_times(
             found.append(at)
     found.sort()
     return found
+
+
+def _baseline_promote(ledger: HashChainLedger, snapshot_id: str) -> dict[str, Any] | None:
+    found: dict[str, Any] | None = None
+    for entry in ledger.entries():
+        evidence = entry.evidence or {}
+        if (
+            evidence.get("kind") == "rsi_stage"
+            and evidence.get("stage") == "promote"
+            and evidence.get("snapshot_id") == snapshot_id
+            and evidence.get("baseline") is True
+        ):
+            found = evidence
+    return found
+
+
+def ensure_baseline_promote(
+    ledger: HashChainLedger,
+    index: DurableIndex,
+    *,
+    snapshot_id: str,
+    at: datetime,
+) -> dict[str, Any]:
+    """One pre-change promote row. A second call does not append another.
+
+    The timestamp is the caller's. Pass a time before the soak start so this
+    restore point is not one of the 30 in-window decisions. The row records
+    the live generation at call time. Call it before a later index commit.
+    """
+
+    existing = _baseline_promote(ledger, snapshot_id)
+    if existing is not None:
+        return {
+            "written": False,
+            "snapshot_id": snapshot_id,
+            "baseline": True,
+            "index_generation": int(existing["index_generation"]),
+            "active_skill_ids": [str(item) for item in existing.get("active_skill_ids") or []],
+        }
+    generation = index.live_generation()
+    skill_ids = index.live_ids()
+    ledger.append(
+        actor=_ACTOR,
+        action="write",
+        target=snapshot_id,
+        at=_aware(at),
+        evidence={
+            "kind": "rsi_stage",
+            "snapshot_id": snapshot_id,
+            "stage": "promote",
+            "baseline": True,
+            "index_generation": generation,
+            "active_skill_ids": list(skill_ids),
+        },
+    )
+    return {
+        "written": True,
+        "snapshot_id": snapshot_id,
+        "baseline": True,
+        "index_generation": generation,
+        "active_skill_ids": skill_ids,
+    }
+
+
+def register_noise_band(
+    ledger: HashChainLedger,
+    *,
+    soak_id: str,
+    noise_band: float,
+    at: datetime,
+) -> dict[str, Any]:
+    """Write the band once, before any control-arm comparison.
+
+    A later call with a different number is refused. The same number is a replay.
+    """
+
+    if isinstance(noise_band, bool) or not isinstance(noise_band, (int, float)):
+        raise ValueError("noise band must be a number")
+    band = float(noise_band)
+    if band < 0:
+        raise ValueError("noise band must be >= 0")
+    prior = registered_noise_band(ledger, soak_id)
+    if prior is not None:
+        if prior != band:
+            raise PermissionError("noise band already registered")
+        return {"written": False, "soak_id": soak_id, "noise_band": prior}
+    ledger.append(
+        actor=_ACTOR,
+        action="write",
+        target=soak_id,
+        at=_aware(at),
+        evidence={"kind": _BAND_KIND, "soak_id": soak_id, "noise_band": band},
+    )
+    return {"written": True, "soak_id": soak_id, "noise_band": band}
+
+
+def registered_noise_band(ledger: HashChainLedger, soak_id: str) -> float | None:
+    found: float | None = None
+    for entry in ledger.entries():
+        evidence = entry.evidence or {}
+        if evidence.get("kind") == _BAND_KIND and evidence.get("soak_id") == soak_id:
+            found = float(evidence["noise_band"])
+    return found
+
+
+def control_arm_rate(observations: list[dict[str, Any]]) -> dict[str, Any]:
+    """First-attempt success on the existing soak's control arm.
+
+    Rows with any other ``arm`` are ignored. No control rows yields a null rate.
+    """
+
+    control = [row for row in observations if row.get("arm") == "control"]
+    sample = first_attempt_success_sample(control)
+    return {"trials": sample.trials, "successes": sample.successes, "rate": sample.rate}
+
+
+def skills_from_sidecars(ledger: HashChainLedger) -> list[SoakSkill]:
+    """Sidecar rows that name a skill. A row without ``skill_id`` is not a watch."""
+
+    found: list[SoakSkill] = []
+    seen: set[str] = set()
+    for entry in ledger.entries():
+        evidence = entry.evidence or {}
+        if evidence.get("kind") != "rsi_score_sidecar":
+            continue
+        skill_id = evidence.get("skill_id")
+        if not skill_id or str(skill_id) in seen:
+            continue
+        seen.add(str(skill_id))
+        found.append(
+            SoakSkill(
+                skill_id=str(skill_id),
+                legacy=float(evidence["legacy"]),
+                prioritized=float(evidence["prioritized"]),
+            )
+        )
+    return found
+
+
+def watch_skills(skills: list[SoakSkill]) -> list[SoakSkill]:
+    """One row per skill. An empty list cannot open the soak."""
+
+    if not skills:
+        raise ValueError("an empty skill list cannot open a soak")
+    ids = [skill.skill_id for skill in skills]
+    if len(ids) != len(set(ids)):
+        raise ValueError("duplicate skill_id")
+    return list(skills)
 
 
 def flipped_skills(skills: list[SoakSkill], threshold: float) -> list[str]:
@@ -269,19 +419,97 @@ def evaluate_soak(
     return planned
 
 
+def open_soak(
+    ledger: HashChainLedger,
+    index: DurableIndex,
+    *,
+    started_at: datetime,
+    now: datetime,
+    baseline_snapshot_id: str,
+    post_change_skill_id: str,
+    noise_band: float,
+    skills: list[SoakSkill] | None = None,
+    observations: list[dict[str, Any]] | None = None,
+    threshold: float | None = None,
+    environ: MutableMapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Write the baseline promote, register the band, then watch the skills.
+
+    The promote is stamped one second before ``started_at``, so it is the
+    restore point and not a soak decision. The current control-arm rate is
+    left unmeasured. Copying the baseline into the current rate would let a
+    later window pass without a new measurement.
+    """
+
+    started = _aware(started_at)
+    current = _aware(now)
+    soak_id = f"{baseline_snapshot_id}:{_iso(started)}"
+    baseline = ensure_baseline_promote(
+        ledger,
+        index,
+        snapshot_id=baseline_snapshot_id,
+        at=started - timedelta(seconds=1),
+    )
+    band = register_noise_band(ledger, soak_id=soak_id, noise_band=noise_band, at=started)
+    rate = control_arm_rate(list(observations or []))
+    watched = skills_from_sidecars(ledger) if skills is None else list(skills)
+    if not watched:
+        return {
+            "status": "not_opened",
+            "soak_id": soak_id,
+            "passed": False,
+            "aborted": False,
+            "default_on": False,
+            "default_on_scheduled": False,
+            "flags_default_changed": False,
+            "authorization": "none",
+            "reason": "no_retirement_rows",
+            "baseline_promote": baseline,
+            "noise_band": band,
+            "control_arm_baseline": rate,
+            "skills": [],
+            "retirement_threshold": (
+                DEFAULT_AUTONOMY.retirement_threshold if threshold is None else threshold
+            ),
+        }
+    watched = watch_skills(watched)
+    result = evaluate_soak(
+        ledger,
+        index,
+        started_at=started,
+        now=current,
+        skills=watched,
+        baseline_snapshot_id=baseline_snapshot_id,
+        post_change_skill_id=post_change_skill_id,
+        threshold=threshold,
+        baseline_rate=rate["rate"],
+        current_rate=None,
+        noise_band=band["noise_band"],
+        environ=environ,
+    )
+    result["baseline_promote"] = baseline
+    result["noise_band_registration"] = band
+    result["control_arm_baseline"] = rate
+    return result
+
+
 def _control_arm(
     baseline_rate: float | None,
     current_rate: float | None,
     noise_band: float | None,
 ) -> dict[str, Any]:
-    if baseline_rate is None or current_rate is None:
-        if noise_band is not None or baseline_rate is not None or current_rate is not None:
-            raise ValueError("control-arm rates are both required when either is set")
-        return _unmeasured_control()
-    if noise_band is None:
-        raise ValueError("noise band must be pre-registered")
-    if noise_band < 0:
+    if noise_band is not None and noise_band < 0:
         raise ValueError("noise band must be >= 0")
+    if current_rate is not None and baseline_rate is None:
+        raise ValueError("current rate requires a baseline rate")
+    if baseline_rate is None or current_rate is None or noise_band is None:
+        return {
+            "measured": False,
+            "baseline": baseline_rate,
+            "current": current_rate,
+            "noise_band": noise_band,
+            "regressed": False,
+        }
     regressed = should_rollback(current_rate, baseline_rate, noise_band)
     return {
         "measured": True,

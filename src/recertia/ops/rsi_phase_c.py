@@ -543,6 +543,7 @@ def rollback_dry_run(
     """Force the recorded flags off, restore the pointer, keep every receipt."""
 
     promote = None
+    baseline = None
     for entry in ledger.entries():
         evidence = entry.evidence or {}
         if (
@@ -551,6 +552,9 @@ def rollback_dry_run(
             and evidence.get("snapshot_id") == baseline_snapshot_id
         ):
             promote = evidence
+            if evidence.get("baseline") is True:
+                baseline = evidence
+    promote = baseline or promote
     if promote is None:
         raise KeyError("no baseline promote entry")
     before = [entry.entry_hash for entry in ledger.entries()]

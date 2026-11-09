@@ -13,8 +13,10 @@ from recertia.ops.rsi_phase_c import DurableIndex
 from recertia.ops.rsi_phase_d import (
     SoakSkill,
     checkout_record,
+    control_arm_rate,
     evaluate_soak,
     flipped_skills,
+    open_soak,
     record_promotion,
     window_state,
 )
@@ -403,3 +405,146 @@ def test_phase_d_does_not_change_flag_defaults() -> None:
         for name, value in saved.items():
             if value is not None:
                 os.environ[name] = value
+
+
+def test_open_soak_writes_the_baseline_and_locks_the_band(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    index = _index(ledger)
+    observations = [
+        {"arm": "control", "first_attempt_success": True},
+        {"arm": "control", "first_attempt_success": False},
+        {"arm": "treatment", "first_attempt_success": True},
+    ]
+    env = {"RECERTIA_HYGIENE_ENABLED": "1", "OTHER": "keep"}
+    opened = open_soak(
+        ledger,
+        index,
+        started_at=_START,
+        now=_START,
+        baseline_snapshot_id="base",
+        post_change_skill_id="sk_new",
+        noise_band=0.05,
+        skills=[_kept()],
+        observations=observations,
+        environ=env,
+    )
+    assert opened["status"] == "open"
+    assert opened["passed"] is False
+    assert opened["decisions"] == 0
+    assert opened["baseline_promote"]["written"] is True
+    assert opened["baseline_promote"]["baseline"] is True
+    assert opened["baseline_promote"]["index_generation"] == 1
+    assert opened["baseline_promote"]["active_skill_ids"] == ["sk_old"]
+    assert opened["noise_band_registration"]["written"] is True
+    assert opened["noise_band_registration"]["noise_band"] == 0.05
+    assert opened["control_arm_baseline"]["trials"] == 2
+    assert opened["control_arm_baseline"]["rate"] == 0.5
+    assert opened["control_arm"]["measured"] is False
+    assert opened["control_arm"]["current"] is None
+    assert opened["default_on"] is False
+    assert env["RECERTIA_HYGIENE_ENABLED"] == "1"
+    assert env["OTHER"] == "keep"
+    kinds = [entry.evidence.get("kind") for entry in ledger.entries()]
+    assert kinds.count("rsi_stage") == 1
+    assert kinds.count("rsi_noise_band") == 1
+    again = open_soak(
+        ledger,
+        index,
+        started_at=_START,
+        now=_START,
+        baseline_snapshot_id="base",
+        post_change_skill_id="sk_new",
+        noise_band=0.05,
+        skills=[_kept()],
+        observations=observations,
+        environ=env,
+    )
+    assert again["baseline_promote"]["written"] is False
+    assert [entry.evidence.get("kind") for entry in ledger.entries()].count("rsi_noise_band") == 1
+    try:
+        open_soak(
+            ledger,
+            index,
+            started_at=_START,
+            now=_START,
+            baseline_snapshot_id="base",
+            post_change_skill_id="sk_new",
+            noise_band=0.2,
+            skills=[_kept()],
+            environ=env,
+        )
+    except PermissionError as exc:
+        assert "already registered" in str(exc)
+    else:
+        raise AssertionError("a second noise band must be refused")
+
+
+def test_open_soak_without_skills_does_not_start(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    index = _index(ledger)
+    opened = open_soak(
+        ledger,
+        index,
+        started_at=_START,
+        now=_START,
+        baseline_snapshot_id="base",
+        post_change_skill_id="sk_new",
+        noise_band=0.05,
+        skills=[],
+    )
+    assert opened["status"] == "not_opened"
+    assert opened["reason"] == "no_retirement_rows"
+    assert opened["passed"] is False
+    assert [entry.evidence.get("kind") for entry in ledger.entries()].count("rsi_soak") == 0
+    assert control_arm_rate([{"arm": "treatment", "first_attempt_success": True}])["rate"] is None
+
+
+def test_open_soak_reads_skill_sidecars_and_keeps_the_baseline_on_abort(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    index = _index(ledger)
+    ledger.append(
+        actor="rsi-phase-c",
+        action="write",
+        target="sk_kept",
+        evidence={
+            "kind": "rsi_score_sidecar",
+            "skill_id": "sk_kept",
+            "run_id": "run-kept",
+            "legacy": 10.0,
+            "prioritized": 10.0,
+        },
+    )
+    opened = open_soak(
+        ledger,
+        index,
+        started_at=_START,
+        now=_START,
+        baseline_snapshot_id="base",
+        post_change_skill_id="sk_new",
+        noise_band=0.05,
+    )
+    assert opened["status"] == "open"
+    assert opened["retirement_rows"] == 1
+    _later(index)
+    record_promotion(
+        ledger,
+        snapshot_id="base",
+        at=_START + timedelta(days=1),
+        index_generation=2,
+        active_skill_ids=["sk_old", "sk_new"],
+    )
+    aborted = evaluate_soak(
+        ledger,
+        index,
+        started_at=_START,
+        now=_START + timedelta(days=2),
+        skills=[_flip()],
+        baseline_snapshot_id="base",
+        post_change_skill_id="sk_new",
+        noise_band=0.05,
+        environ={},
+    )
+    assert aborted["status"] == "aborted"
+    assert aborted["rollback_generation"] == 1
+    assert index.retrieve("sk_new") == []
+    assert index.retrieve("sk_old") == ["sk_old"]

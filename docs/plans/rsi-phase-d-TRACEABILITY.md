@@ -13,6 +13,9 @@ Plan: gap contract Phase D. Soak record. Flags stay default off. Default-on is n
 | Completed window does not schedule default-on | `evaluate_soak` | `test_complete_window_does_not_schedule_default_on` | status `passed`, `default_on_scheduled` false, pointer unmoved | PASS |
 | Unmeasured control arm cannot pass | `evaluate_soak` | `test_unmeasured_control_arm_cannot_pass` | open, reason `control_arm_unmeasured` | PASS |
 | No flag default change | `Flags`, `rsi_phase_d.py` | `test_phase_d_does_not_change_flag_defaults` | defaults remain off; module does not assign a flag to `1` | PASS |
+| Baseline promote before the window | `ensure_baseline_promote` | `test_open_soak_writes_the_baseline_and_locks_the_band` | one `baseline: true` row, generation 1, not counted as a decision | PASS |
+| Noise band registered once, before the comparison | `register_noise_band` | `test_open_soak_writes_the_baseline_and_locks_the_band` | a second number raises; the current rate stays null | PASS |
+| One skill row, or no open | `watch_skills`, `skills_from_sidecars`, `open_soak` | `test_open_soak_without_skills_does_not_start`, `test_open_soak_reads_skill_sidecars_and_keeps_the_baseline_on_abort` | empty list writes no soak row; a sidecar skill is watched; abort restores generation 1 | PASS |
 
 **Notes:**
 
