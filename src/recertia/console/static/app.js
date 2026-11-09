@@ -445,14 +445,20 @@ $("#templateSelect").onchange = async () => {
 
 async function refreshRuns() {
   const data = await api("/v1/runs");
+  const items = data.items || [];
   const tb = $("#runsTable tbody");
   tb.innerHTML = "";
-  for (const r of data.items || []) {
+  let failed = 0;
+  for (const r of items) {
+    const terminal = r.terminal || r.status || "—";
+    const failure = (r.failure && r.failure.failure_class) || r.failure_class || "—";
+    if (String(terminal).toLowerCase().includes("fail")) failed++;
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${escapeHtml(r.run_id)}</td><td>${escapeHtml(r.task_class)}</td><td>${escapeHtml(r.terminal || r.status)}</td><td>${escapeHtml(r.cost_usd ?? "—")}</td><td><button class="secondary">Open</button></td>`;
+    tr.innerHTML = `<td>${escapeHtml(r.run_id)}</td><td>${escapeHtml(r.task_class)}</td><td>${escapeHtml(terminal)}</td><td>${escapeHtml(failure)}</td><td>${escapeHtml(r.cost_usd ?? "—")}</td><td><button class="secondary">Open</button></td>`;
     tr.querySelector("button").onclick = () => openRun(r.run_id);
     tb.appendChild(tr);
   }
+  $("#runsSummary").textContent = `${items.length} runs · ${failed} failed`;
 }
 
 async function openRun(runId) {
@@ -544,21 +550,11 @@ function formatSkillDetail(d) {
 
 async function refreshTower() {
   const summary = await api("/v1/console/tower-summary");
-  const rsi = summary.rsi_snapshot || {};
-  const lift = rsi.control_arm_lift == null ? "—" : rsi.control_arm_lift;
-  const label = rsi.label
-    ? `<div class="card"><div class="k">rsi</div><div class="v">${escapeHtml(rsi.label)}</div></div>`
-    : "";
   $("#towerSummary").innerHTML = `
     <div class="card"><div class="k">active_cap_pressure</div><div class="v">${escapeHtml(summary.active_cap_pressure ?? "—")}</div></div>
     <div class="card"><div class="k">composition depth</div><div class="v">${escapeHtml(summary.mean_composition_depth ?? "—")}</div></div>
     <div class="card"><div class="k">practice_conversion</div><div class="v">${escapeHtml(summary.practice_conversion ?? summary.practice_conversion_unavailable ?? "—")}</div></div>
-    <div class="card"><div class="k">pending proposals</div><div class="v">${escapeHtml(summary.pending_proposals)}</div></div>
-    <div class="card"><div class="k">process score</div><div class="v">${escapeHtml(rsi.process_score ?? "—")}</div></div>
-    <div class="card"><div class="k">strict completion</div><div class="v">${escapeHtml(rsi.strict_completion ?? "—")}</div></div>
-    <div class="card"><div class="k">failure share</div><div class="v">${escapeHtml(rsi.failure_share ?? "—")}</div></div>
-    <div class="card"><div class="k">control-arm lift</div><div class="v">${escapeHtml(lift)}</div></div>
-    ${label}`;
+    <div class="card"><div class="k">pending proposals</div><div class="v">${escapeHtml(summary.pending_proposals)}</div></div>`;
   const props = await api("/v1/proposals");
   const tb = $("#proposalsTable tbody");
   tb.innerHTML = "";
@@ -606,14 +602,112 @@ $("#runPractice").onclick = async () => {
   $("#proposalDetail").textContent = JSON.stringify(d, null, 2);
 };
 
+const FAILURE_CLASSES = ["environment","tool","retrieval","plan","execution","criteria","budget","merge"];
+const EXCLUDED_FROM_TRUST = new Set(["environment","tool","budget","merge"]);
+
+let lastFailureCounts = {};
+
+function renderFailureTable(counts, filter = "all") {
+  lastFailureCounts = counts || {};
+  const tb = document.querySelector("#failTable tbody");
+  if (!tb) return;
+  tb.innerHTML = "";
+  FAILURE_CLASSES.filter(c => filter === "all" || c === filter).forEach(cls => {
+    const n = lastFailureCounts[cls] || 0;
+    const trust = !EXCLUDED_FROM_TRUST.has(cls);
+    const escalate = cls === "criteria";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><code>${cls}</code></td>
+      <td>${n}</td>
+      <td>${trust ? "yes" : "no"}</td>
+      <td>${escalate ? '<span class="pill danger">yes</span>' : "no"}</td>
+      <td>${n ? "in window" : "—"}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
 $("#refreshMetrics").onclick = async () => {
+  const status = $("#metricsStatus");
+  status.textContent = "loading…";
   try {
-    const report = await api("/v1/metrics/report");
-    const canary = await api("/v1/metrics/canary");
-    const dash = await api("/v1/metrics/dashboard");
+    const [report, canary, dash] = await Promise.all([
+      api("/v1/metrics/report").catch(() => ({})),
+      api("/v1/metrics/canary").catch(() => ({})),
+      api("/v1/metrics/dashboard").catch(() => ({})),
+    ]);
     $("#metricsOut").textContent = JSON.stringify({ report, canary, dashboard: dash }, null, 2);
-  } catch (e) { $("#metricsOut").textContent = String(e); }
+
+    // Best-effort extraction from whatever shape the endpoints return
+    const runs = dash.runs_total ?? report.runs_total ?? dash.activity?.runs ?? "—";
+    const cost = dash.cost_usd ?? report.cost_usd ?? "—";
+    const lift = dash.causal_lift ?? report.causal_lift;
+    const liftText = (lift && typeof lift === "object" && lift.status === "not_established")
+      ? "not established"
+      : (lift ?? "—");
+    const liftNote = (lift && lift.reason) || "Wilson interval / low run count";
+
+    setText("m-runs", String(runs));
+    setText("m-cost", typeof cost === "number" ? `$${cost.toFixed(2)}` : String(cost));
+    setText("m-lift", String(liftText));
+    if (String(liftText).includes("not established")) {
+      document.getElementById("m-lift")?.classList.add("not-established");
+    }
+    setText("m-lift-note", liftNote);
+
+    const canaryHit = canary.caught ?? canary.hits ?? "—";
+    const canaryTotal = canary.total ?? canary.planted ?? "—";
+    setText("m-canary", `${canaryHit} / ${canaryTotal}`);
+    const canaryStatus = document.getElementById("m-canary-status");
+    if (canaryStatus) {
+      canaryStatus.innerHTML = canary.established === false
+        ? '<span class="pill warn">a4 not established</span>'
+        : '<span class="pill muted">live verifier</span>';
+    }
+
+    // Failure counts — accept several possible shapes
+    const counts = {};
+    const src = dash.failure_classes || report.failure_classes || dash.failures || {};
+    if (Array.isArray(src)) {
+      src.forEach(f => { counts[f.class || f.failure_class] = f.count || 0; });
+    } else if (typeof src === "object") {
+      Object.assign(counts, src);
+    }
+    renderFailureTable(counts);
+
+    // Escalate queue
+    const escalates = dash.escalate || report.escalate || [];
+    const eq = document.getElementById("escalateQueue");
+    if (eq) {
+      if (Array.isArray(escalates) && escalates.length) {
+        eq.innerHTML = escalates.map(e =>
+          `<div style="padding:0.35rem 0;border-bottom:1px solid #2a3544"><span class="pill danger">criteria</span> ${escapeHtml(e.run_id || e.id || "")}<br><span class="muted">${escapeHtml(e.reason || e.detail || "")}</span></div>`
+        ).join("");
+      } else {
+        eq.textContent = "No criteria failures in window.";
+      }
+    }
+
+    status.textContent = "loaded";
+  } catch (e) {
+    $("#metricsOut").textContent = String(e);
+    status.textContent = "error";
+  }
 };
+
+// Failure class filters
+document.querySelectorAll("#failFilters button").forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll("#failFilters button").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    renderFailureTable(lastFailureCounts, btn.dataset.f);
+  };
+});
 
 $("#devLogin").onclick = async () => {
   const d = await api("/v1/auth/dev-login", {

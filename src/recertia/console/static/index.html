@@ -4,7 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Recertia Console</title>
-  <link rel="icon" href="/console/assets/mark.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/console/assets/styles.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -13,10 +12,7 @@
 <body>
   <div class="app">
     <aside class="nav">
-      <div class="brand">
-        <img class="brand-mark" src="/console/assets/mark.svg" width="28" height="28" alt="" />
-        Recertia
-      </div>
+      <div class="brand">Recertia</div>
       <p class="brand-sub">Pilot · Tower · Ops</p>
       <nav>
         <button data-view="pilot" class="active">Pilot</button>
@@ -37,7 +33,8 @@
     <main>
       <section id="view-pilot" class="view active">
         <h1>Pilot</h1>
-        <p class="lede">Compose a checkable Goal (draft → review → lock preview), then run.</p>
+        <p class="lede">Compose a checkable Goal (draft → review → lock preview), then run. Goal questions lose their value after the run starts — answer them before lock.</p>
+        <p class="muted" id="firstGoalRubric">First-Goal rubric: weekly frequency · reversible (no send/pay/publish) · ≥1 required non-judge check · cheap kinds decide most fails.</p>
         <div class="mode-toggle" role="tablist" aria-label="Pilot mode">
           <button type="button" data-pilot-mode="compose" class="active">Compose</button>
           <button type="button" data-pilot-mode="run">Run</button>
@@ -138,8 +135,11 @@
 
       <section id="view-runs" class="view">
         <h1>Runs</h1>
-        <button type="button" id="refreshRuns" class="secondary">Refresh</button>
-        <table id="runsTable"><thead><tr><th>ID</th><th>Class</th><th>Terminal</th><th>Cost</th><th></th></tr></thead><tbody></tbody></table>
+        <div class="actions">
+          <button type="button" id="refreshRuns" class="secondary">Refresh</button>
+          <span class="muted" id="runsSummary">—</span>
+        </div>
+        <table id="runsTable"><thead><tr><th>ID</th><th>Class</th><th>Terminal</th><th>Failure</th><th>Cost</th><th></th></tr></thead><tbody></tbody></table>
         <div id="runDetail" class="panel hidden"></div>
         <pre id="eventStream" class="panel hidden"></pre>
       </section>
@@ -161,11 +161,67 @@
         </div>
         <table id="proposalsTable"><thead><tr><th>ID</th><th>Kind</th><th>Skill</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
         <pre id="proposalDetail" class="panel hidden"></pre>
+        <h2>Never again <span class="muted" id="railCount">(0 active)</span></h2>
+        <p class="muted">Standing must-not constraints. Promote one into a Goal to make it required. The solver cannot write this list.</p>
+        <ul id="constraintRail"></ul>
+        <h2>Work queue</h2>
+        <p class="muted">Ranked snapshot. Buttons call existing jobs or skip a pack step. No auto-advance.</p>
+        <table id="workQueueTable"><thead><tr><th>Score</th><th>Kind</th><th>Reason</th><th></th></tr></thead><tbody></tbody></table>
       </section>
 
       <section id="view-metrics" class="view">
-        <h1>Ops — metrics & canary</h1>
-        <button type="button" id="refreshMetrics" class="secondary">Refresh</button>
+        <h1>Ops — activity, logs & failures</h1>
+        <div class="actions">
+          <button type="button" id="refreshMetrics" class="secondary">Refresh</button>
+          <span class="muted" id="metricsStatus">not loaded</span>
+        </div>
+
+        <div class="cards" id="opsCards">
+          <div class="card">
+            <div class="card-label">Activity (window)</div>
+            <div class="metric" id="m-runs">—</div>
+            <div class="muted" id="m-terminal-mix">—</div>
+          </div>
+          <div class="card">
+            <div class="card-label">Cost</div>
+            <div class="metric" id="m-cost">—</div>
+            <div class="muted">estimated · Flash via env</div>
+          </div>
+          <div class="card">
+            <div class="card-label">Canary</div>
+            <div class="metric" id="m-canary">—</div>
+            <div id="m-canary-status"></div>
+          </div>
+          <div class="card">
+            <div class="card-label">Causal lift</div>
+            <div class="metric" id="m-lift">—</div>
+            <div class="muted" id="m-lift-note">—</div>
+          </div>
+        </div>
+
+        <h2>Failure classes</h2>
+        <div class="filters" id="failFilters">
+          <button type="button" class="active" data-f="all">All</button>
+          <button type="button" data-f="environment">environment</button>
+          <button type="button" data-f="tool">tool</button>
+          <button type="button" data-f="retrieval">retrieval</button>
+          <button type="button" data-f="plan">plan</button>
+          <button type="button" data-f="execution">execution</button>
+          <button type="button" data-f="criteria">criteria</button>
+          <button type="button" data-f="budget">budget</button>
+          <button type="button" data-f="merge">merge</button>
+        </div>
+        <table id="failTable">
+          <thead>
+            <tr><th>Class</th><th>Count</th><th>Counts against trust</th><th>Escalate</th><th>Latest</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+
+        <h2>Escalate queue <span class="muted">(criteria only)</span></h2>
+        <div id="escalateQueue" class="panel muted">No criteria failures in window.</div>
+
+        <h2>Raw payloads <span class="muted">(debug)</span></h2>
         <pre id="metricsOut" class="panel"></pre>
       </section>
 
@@ -176,7 +232,7 @@
           <h2>Registered workspaces</h2>
           <div class="row">
             <label>ID <input id="wsId" type="text" placeholder="recertia" /></label>
-            <label>Display name <input id="wsName" type="text" placeholder="example/recertia" /></label>
+            <label>Display name <input id="wsName" type="text" placeholder="quantrobs/recertia" /></label>
           </div>
           <label>Host root (Windows)
             <input id="wsHostRoot" type="text" placeholder="D:\src\recertia" autocomplete="off" />
