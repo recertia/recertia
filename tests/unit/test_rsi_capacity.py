@@ -40,6 +40,7 @@ class CapacitySuite:
         assert report["median_reexec_s"] is None
         assert report["p95_reexec_s"] is None
         assert report["pool_headroom"] is None
+        assert report["observed_p95_reexec_s"] is None
         assert report["slo_waiver"] is None
         assert "elapsed_s missing" not in report["measured"]["reason"]
         assert os.environ == before
@@ -141,6 +142,7 @@ class CapacitySuite:
         assert written["go"] is False
         assert written["slo_waiver"] == "keep me"
         assert written["pool_headroom"] is None
+        assert written["observed_p95_reexec_s"] is None
         assert (history / "one.json").read_text(encoding="utf-8") == "{not json"
         assert list(p for p in (tmp_path / "docs").rglob("*") if p.is_file()) == [out]
 

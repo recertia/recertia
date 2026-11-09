@@ -1,5 +1,5 @@
 {
-  "measured_at": "2026-11-09T00:08:53Z",
+  "measured_at": "2026-11-09T00:48:23Z",
   "batch_size": 0,
   "reexec_fraction": 0.0,
   "median_reexec_s": null,
@@ -7,6 +7,7 @@
   "pool_headroom": null,
   "go": false,
   "slo_waiver": null,
+  "observed_p95_reexec_s": null,
   "measured": {
     "window_days": 30,
     "history_records": 10,

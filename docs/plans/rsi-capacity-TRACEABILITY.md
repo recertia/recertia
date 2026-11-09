@@ -20,7 +20,7 @@ Plan: `docs/plans` gap contract, Phase A and G9.
 
 **Notes:**
 
-- Phase B is not started. `go` is false and `slo_waiver` is null.
+- The capacity file is still a no-go. `slo_waiver` is null. That does not authorize setting `RECERTIA_HYGIENE_ENABLED` in a worker.
 - The only in-repo distill history is `evals/golden/_promotion_logs` (10 records, all dated 2026-07-31). None fall in the 30 days before 2026-11-08. No file in the repo declares a sandbox pool size or a distill SLO, so headroom is null rather than 0.
 - `pool_headroom` is free slots divided by `batch_size * p95_reexec_s / distill_slo_s`.
 - This change does not import `recertia.rsi` into distill, nodes, or the worker.
