@@ -7,6 +7,7 @@ snake ComputerUseTaskClass on the CLI, kebab SkillVersion.task_class). There is 
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,9 +87,18 @@ def distill_imported(
     *,
     actor: str = "import-distill",
     task_class: str,
+    screened_artifact_id: str | None = None,
+    screened_known: bool = False,
 ) -> SkillVersion:
     """Author a *candidate* from an external trajectory. Promotion stays outside this path."""
 
+    if os.environ.get("RECERTIA_HYGIENE_ENABLED") == "1":
+        if (
+            not screened_artifact_id
+            or not screened_artifact_id.startswith("scr_")
+            or not screened_known
+        ):
+            raise DistillRejected("hygiene gate did not accept this trajectory")
     if not is_computer_use_class(task_class):
         from contracts.policy import COMPUTER_USE_TASK_CLASSES
 
@@ -140,6 +150,17 @@ def distill_imported(
         ),
         hygiene=Hygiene(secret_scan="passed", scanned_at=_NOW),
     )
+    if (
+        os.environ.get("RECERTIA_HYGIENE_ENABLED") == "1"
+        and screened_artifact_id
+        and screened_known
+    ):
+        ids = list(version.provenance.source_case_ids)
+        if screened_artifact_id not in ids:
+            ids.append(screened_artifact_id)
+        version = version.model_copy(
+            update={"provenance": version.provenance.model_copy(update={"source_case_ids": ids})}
+        )
     return store.write_candidate(assert_candidate_hygiene(version))
 
 
@@ -163,9 +184,18 @@ def distill_imported_file(
     *,
     actor: str = "import-distill",
     task_class: str,
+    screened_artifact_id: str | None = None,
+    screened_known: bool = False,
 ) -> SkillVersion:
     imported = TrajectoryImport.model_validate_json(path.read_text(encoding="utf-8"))
-    return distill_imported(imported, store, actor=actor, task_class=task_class)
+    return distill_imported(
+        imported,
+        store,
+        actor=actor,
+        task_class=task_class,
+        screened_artifact_id=screened_artifact_id,
+        screened_known=screened_known,
+    )
 
 
 def _scan_payload(imported: TrajectoryImport) -> list[str]:

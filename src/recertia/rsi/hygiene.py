@@ -49,23 +49,6 @@ class HygieneGate:
 
         parent, import_hash = self._identity(req)
         lock_key = (parent or import_hash, req.criteria_hash)
-        existing = self.world.accepted_keys.get(lock_key)
-        if existing is not None:
-            art = self.world.screened[existing]
-            result = HygieneResult(
-                accepted=False,
-                reason="duplicate",
-                ledger_receipt=art.ledger_receipt,
-                checks_passed=art.checks_passed,
-                checks_total=art.checks_total,
-                strict_success=art.strict_success,
-                artifact_id=None,
-                fresh_execution_id=art.fresh_execution_id,
-                duplicate_of=art.artifact_id,
-            )
-            self._remember(req.idempotency_key, result)
-            return result
-
         leader, flight = self._begin(lock_key)
         if not leader:
             assert flight is not None
@@ -147,6 +130,24 @@ class HygieneGate:
         }
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         digest = hashlib.sha256(raw).hexdigest()
+        accept_key = (parent or import_hash, req.criteria_hash, digest)
+        existing_id = self.world.accepted_keys.get(accept_key)
+        if existing_id is not None:
+            art = self.world.screened[existing_id]
+            result = HygieneResult(
+                accepted=False,
+                reason="duplicate",
+                ledger_receipt=art.ledger_receipt,
+                checks_passed=art.checks_passed,
+                checks_total=art.checks_total,
+                strict_success=art.strict_success,
+                artifact_id=None,
+                fresh_execution_id=art.fresh_execution_id,
+                duplicate_of=art.artifact_id,
+            )
+            self._remember(req.idempotency_key, result)
+            self._count("duplicate")
+            return result
         if findings:
             return self._reject(req, "leakage", parent, import_hash, sha=digest, executed=executed, raw=None)
         if len(raw) > PAYLOAD_CAP_BYTES:
@@ -199,7 +200,7 @@ class HygieneGate:
             import_hash=import_hash,
         )
         self.world.screened[artifact_id] = artifact
-        self.world.accepted_keys[(parent or import_hash, req.criteria_hash)] = artifact_id
+        self.world.accepted_keys[accept_key] = artifact_id
         self.world.ledger.append(
             "stage",
             {

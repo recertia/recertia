@@ -147,6 +147,7 @@ def measure(
         "pool_headroom": head,
         "go": go,
         "slo_waiver": waiver,
+        "observed_p95_reexec_s": None,
         "measured": {
             "window_days": WINDOW_DAYS,
             "history_records": seen,

@@ -91,6 +91,7 @@ def retrieve(state: RunState, ctx: NodeContext) -> NodeOutcome:
         affordances=ctx.affordances,
         config=config,
     )
+    bundle = _without_screened_ids(bundle)
     state_updates: dict = {"bundle": bundle}
     if snapshot_id is not None:
         state_updates["manifest"] = state.manifest.model_copy(
@@ -102,3 +103,30 @@ def retrieve(state: RunState, ctx: NodeContext) -> NodeOutcome:
         f"cautions={len(bundle.tool_cautions)} dropped={dropped}"
     )
     return NodeOutcome(state=new_state, route="always", note=note)
+
+
+def _without_screened_ids(bundle: MemoryBundle) -> MemoryBundle:
+    """A screened artifact is episodic evidence, not a skill. ``scr_`` ids never return."""
+
+    skills = [item for item in bundle.skills if not item.skill_id.startswith("scr_")]
+    cases = [item for item in bundle.cases if not item.ref.startswith("scr_")]
+    dead_ends = [item for item in bundle.dead_ends if not item.ref.startswith("scr_")]
+    facts = [item for item in bundle.facts if not item.ref.startswith("scr_")]
+    cautions = [item for item in bundle.tool_cautions if not item.ref.startswith("scr_")]
+    if (
+        len(skills) == len(bundle.skills)
+        and len(cases) == len(bundle.cases)
+        and len(dead_ends) == len(bundle.dead_ends)
+        and len(facts) == len(bundle.facts)
+        and len(cautions) == len(bundle.tool_cautions)
+    ):
+        return bundle
+    return bundle.model_copy(
+        update={
+            "skills": skills,
+            "cases": cases,
+            "dead_ends": dead_ends,
+            "facts": facts,
+            "tool_cautions": cautions,
+        }
+    )
