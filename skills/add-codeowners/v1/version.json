@@ -13,7 +13,14 @@
   "scope": "project",
   "uses": [],
   "parameters": [],
-  "preconditions": [],
+  "preconditions": [
+    {
+      "kind": "tool_available",
+      "value": "shell",
+      "arguments": {},
+      "description": "shell tool available in the run sandbox"
+    }
+  ],
   "steps": [
     {
       "id": "write",
@@ -85,7 +92,12 @@
       "preregistered": true
     }
   ],
-  "failure_modes": [],
+  "failure_modes": [
+    {
+      "symptom": "marker file missing or incomplete after write",
+      "response": "re-run the write step; do not promote on partial marks"
+    }
+  ],
   "provenance": {
     "distilled_from_run": "dream46:add-codeowners",
     "distilled_at": "2026-11-09T03:05:00Z",

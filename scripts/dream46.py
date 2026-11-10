@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from contracts.criteria import SkillCertificationCriterion, mint_rejecting_proof
-from contracts.skill import Hygiene, Provenance, SkillVersion, Step
+from contracts.skill import FailureMode, Hygiene, Precondition, Provenance, SkillVersion, Step
 from contracts.stats import SkillStats
 from contracts.status import SkillStatus
 from recertia.ledger.hashchain import HashChainLedger
@@ -658,6 +658,19 @@ def build_version(row: dict[str, Any]) -> SkillVersion:
             derivation="hand_authored",
         ),
         hygiene=Hygiene(secret_scan="passed", scanned_at=DREAM_AT),
+        preconditions=[
+            Precondition(
+                kind="tool_available",
+                value="shell",
+                description="shell tool available in the run sandbox",
+            )
+        ],
+        failure_modes=[
+            FailureMode(
+                symptom="marker file missing or incomplete after write",
+                response="re-run the write step; do not promote on partial marks",
+            )
+        ],
     )
 
 
