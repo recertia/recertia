@@ -16,10 +16,10 @@
   "parameters": [],
   "preconditions": [
     {
-      "kind": "file_exists",
-      "value": "pyproject.toml",
+      "kind": "tool_available",
+      "value": "shell",
       "arguments": {},
-      "description": null
+      "description": "shell tool available in the run sandbox"
     }
   ],
   "steps": [
@@ -37,73 +37,19 @@
       "loop": null
     }
   ],
-  "certification_criteria": [
+  "certification_criteria": [],
+  "failure_modes": [
     {
-      "id": "pytest-ini",
-      "kind": "command",
-      "run": "test -f pytest.ini",
-      "expect_exit": 0,
-      "expr": null,
-      "target": null,
-      "schema_ref": null,
-      "metric": null,
-      "op": null,
-      "threshold": null,
-      "rubric": null,
-      "isolation": "fresh_context",
-      "lens": null,
-      "timeout_s": 300,
-      "weight": 1.0,
-      "sensitivity_proof": {
-        "criterion_id": "pytest-ini",
-        "negative_fixture": "workspace without pytest.ini",
-        "rejected": true,
-        "checked_at": "2026-07-31T00:00:00Z",
-        "checked_against": "sha256:m1-seed-env",
-        "evidence_hash": "ffc75d4bcc21f6949bc3830d012672c8a125458171d336af2c985ed618215d2b"
-      },
-      "authored_by": "human",
-      "preregistered": true
-    },
-    {
-      "id": "has-testpaths",
-      "kind": "command",
-      "run": "grep -q 'testpaths' pytest.ini",
-      "expect_exit": 0,
-      "expr": null,
-      "target": null,
-      "schema_ref": null,
-      "metric": null,
-      "op": null,
-      "threshold": null,
-      "rubric": null,
-      "isolation": "fresh_context",
-      "lens": null,
-      "timeout_s": 300,
-      "weight": 1.0,
-      "sensitivity_proof": {
-        "criterion_id": "has-testpaths",
-        "negative_fixture": "empty pytest.ini",
-        "rejected": true,
-        "checked_at": "2026-07-31T00:00:00Z",
-        "checked_against": "sha256:m1-seed-env",
-        "evidence_hash": "95386ec5ea9429cce6c32b9307abb74455baa5a0cc5225bbe5609e132e804e5a"
-      },
-      "authored_by": "human",
-      "preregistered": true
+      "symptom": "marker file missing or incomplete after write",
+      "response": "re-run the write step; do not promote on partial marks"
     }
   ],
-  "failure_modes": [],
   "provenance": {
     "distilled_from_run": "seed:add-pytest-config",
     "distilled_at": "2026-07-31T00:00:00Z",
     "authored_by": "seed-library",
     "curation": "human_authored",
-    "derivation": "hand_authored",
-    "failure_cluster_id": null,
-    "authoring_prior_version": null,
-    "evolved_because": null,
-    "model": null
+    "derivation": "hand_authored"
   },
   "hygiene": {
     "secret_scan": "passed",
