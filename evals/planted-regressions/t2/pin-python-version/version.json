@@ -23,7 +23,14 @@
       "description": null
     }
   ],
-  "preconditions": [],
+  "preconditions": [
+    {
+      "kind": "tool_available",
+      "value": "shell",
+      "arguments": {},
+      "description": "shell tool available in the run sandbox"
+    }
+  ],
   "steps": [
     {
       "id": "write",
@@ -39,73 +46,19 @@
       "loop": null
     }
   ],
-  "certification_criteria": [
+  "certification_criteria": [],
+  "failure_modes": [
     {
-      "id": "pin-file",
-      "kind": "command",
-      "run": "test -f .python-version",
-      "expect_exit": 0,
-      "expr": null,
-      "target": null,
-      "schema_ref": null,
-      "metric": null,
-      "op": null,
-      "threshold": null,
-      "rubric": null,
-      "isolation": "fresh_context",
-      "lens": null,
-      "timeout_s": 300,
-      "weight": 1.0,
-      "sensitivity_proof": {
-        "criterion_id": "pin-file",
-        "negative_fixture": "no .python-version",
-        "rejected": true,
-        "checked_at": "2026-07-31T00:00:00Z",
-        "checked_against": "sha256:m1-seed-env",
-        "evidence_hash": "70098a900194ac5b64d266eae4d7af15297b122b05f8e86e7355a3652079c023"
-      },
-      "authored_by": "human",
-      "preregistered": true
-    },
-    {
-      "id": "pin-value",
-      "kind": "command",
-      "run": "grep -q '3.12' .python-version",
-      "expect_exit": 0,
-      "expr": null,
-      "target": null,
-      "schema_ref": null,
-      "metric": null,
-      "op": null,
-      "threshold": null,
-      "rubric": null,
-      "isolation": "fresh_context",
-      "lens": null,
-      "timeout_s": 300,
-      "weight": 1.0,
-      "sensitivity_proof": {
-        "criterion_id": "pin-value",
-        "negative_fixture": "wrong pin",
-        "rejected": true,
-        "checked_at": "2026-07-31T00:00:00Z",
-        "checked_against": "sha256:m1-seed-env",
-        "evidence_hash": "088d612faa1cf2f8519bacb30dbca6cdae1021e9f3ca7c2fee655c24d1d0fbdd"
-      },
-      "authored_by": "human",
-      "preregistered": true
+      "symptom": "marker file missing or incomplete after write",
+      "response": "re-run the write step; do not promote on partial marks"
     }
   ],
-  "failure_modes": [],
   "provenance": {
     "distilled_from_run": "seed:pin-python-version",
     "distilled_at": "2026-07-31T00:00:00Z",
     "authored_by": "seed-library",
     "curation": "human_authored",
-    "derivation": "hand_authored",
-    "failure_cluster_id": null,
-    "authoring_prior_version": null,
-    "evolved_because": null,
-    "model": null
+    "derivation": "hand_authored"
   },
   "hygiene": {
     "secret_scan": "passed",
