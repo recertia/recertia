@@ -33,3 +33,13 @@ def retriever(tmp_path: Path) -> Iterator[Retriever]:
         yield Retriever(index)
     finally:
         index.close()
+
+
+def _materialise_workdir(tmp_path: Path, files: dict[str, str]) -> Path:
+    workdir = tmp_path / "work"
+    workdir.mkdir(parents=True, exist_ok=True)
+    for rel, content in files.items():
+        path = workdir / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    return workdir
