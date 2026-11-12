@@ -13,7 +13,14 @@
   "scope": "project",
   "uses": [],
   "parameters": [],
-  "preconditions": [],
+  "preconditions": [
+    {
+      "kind": "tool_available",
+      "value": "shell",
+      "arguments": {},
+      "description": "shell tool available in the run sandbox"
+    }
+  ],
   "steps": [
     {
       "id": "ensure",
@@ -29,73 +36,19 @@
       "loop": null
     }
   ],
-  "certification_criteria": [
+  "certification_criteria": [],
+  "failure_modes": [
     {
-      "id": "makefile-exists",
-      "kind": "command",
-      "run": "test -f Makefile",
-      "expect_exit": 0,
-      "expr": null,
-      "target": null,
-      "schema_ref": null,
-      "metric": null,
-      "op": null,
-      "threshold": null,
-      "rubric": null,
-      "isolation": "fresh_context",
-      "lens": null,
-      "timeout_s": 300,
-      "weight": 1.0,
-      "sensitivity_proof": {
-        "criterion_id": "makefile-exists",
-        "negative_fixture": "no Makefile",
-        "rejected": true,
-        "checked_at": "2026-07-31T00:00:00Z",
-        "checked_against": "sha256:m1-seed-env",
-        "evidence_hash": "185297b3c1c3e01c5cf6bb3dab39f7ef7d00021ec161fc007ba7fac03699b6a9"
-      },
-      "authored_by": "human",
-      "preregistered": true
-    },
-    {
-      "id": "has-test-target",
-      "kind": "command",
-      "run": "grep -q '^test:' Makefile",
-      "expect_exit": 0,
-      "expr": null,
-      "target": null,
-      "schema_ref": null,
-      "metric": null,
-      "op": null,
-      "threshold": null,
-      "rubric": null,
-      "isolation": "fresh_context",
-      "lens": null,
-      "timeout_s": 300,
-      "weight": 1.0,
-      "sensitivity_proof": {
-        "criterion_id": "has-test-target",
-        "negative_fixture": "Makefile without test",
-        "rejected": true,
-        "checked_at": "2026-07-31T00:00:00Z",
-        "checked_against": "sha256:m1-seed-env",
-        "evidence_hash": "ed90800fdd1e57385ac2280c4533509f4578a83b9e7c0e6b2acb4d5943e3d601"
-      },
-      "authored_by": "human",
-      "preregistered": true
+      "symptom": "marker file missing or incomplete after write",
+      "response": "re-run the write step; do not promote on partial marks"
     }
   ],
-  "failure_modes": [],
   "provenance": {
     "distilled_from_run": "seed:add-makefile-target",
     "distilled_at": "2026-07-31T00:00:00Z",
     "authored_by": "seed-library",
     "curation": "human_authored",
-    "derivation": "hand_authored",
-    "failure_cluster_id": null,
-    "authoring_prior_version": null,
-    "evolved_because": null,
-    "model": null
+    "derivation": "hand_authored"
   },
   "hygiene": {
     "secret_scan": "passed",
