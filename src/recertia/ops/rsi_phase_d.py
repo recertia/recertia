@@ -34,6 +34,10 @@ _FLAG_NAMES = (
 )
 
 
+class NoiseBandMismatchError(PermissionError):
+    """The band given to a soak evaluation is not the band registered for that soak."""
+
+
 @dataclass(frozen=True)
 class SoakSkill:
     """One skill the soak compares. Retirement still reads ``legacy``."""
@@ -246,6 +250,18 @@ def registered_noise_band(ledger: HashChainLedger, soak_id: str) -> float | None
     return found
 
 
+def _require_registered_band(
+    ledger: HashChainLedger, soak_id: str, noise_band: float | None
+) -> None:
+    registered = registered_noise_band(ledger, soak_id)
+    if registered is None:
+        if noise_band is not None:
+            raise NoiseBandMismatchError("noise band must be pre-registered")
+        return
+    if noise_band is None or float(noise_band) != registered:
+        raise NoiseBandMismatchError("noise band does not match the registered band")
+
+
 def control_arm_rate(observations: list[dict[str, Any]]) -> dict[str, Any]:
     """First-attempt success on the existing soak's control arm.
 
@@ -365,10 +381,17 @@ def evaluate_soak(
     noise_band: float | None = None,
     environ: MutableMapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Write the soak result. Abort rolls back. A pass does not turn a flag on."""
+    """Write the soak result. Abort rolls back. A pass does not turn a flag on.
+
+    ``noise_band`` must equal the band registered for this soak. A band that was
+    never registered, or a wider, narrower, or dropped band, is refused before
+    anything is written.
+    """
 
     started = _aware(started_at)
     current = _aware(now)
+    soak_id = f"{baseline_snapshot_id}:{_iso(started)}"
+    _require_registered_band(ledger, soak_id, noise_band)
     cutoff = threshold if threshold is not None else DEFAULT_AUTONOMY.retirement_threshold
     decisions = promotion_decision_times(ledger, started_at=started, now=current)
     window = window_state(started_at=started, now=current, decision_count=len(decisions))
@@ -394,7 +417,6 @@ def evaluate_soak(
         flags_forced_off=aborted,
         note=_note(status),
     )
-    soak_id = f"{baseline_snapshot_id}:{_iso(started)}"
     planned["soak_id"] = soak_id
     planned["baseline_snapshot_id"] = baseline_snapshot_id
     latest = _latest_soak(ledger, soak_id)
@@ -500,6 +522,8 @@ def _control_arm(
 ) -> dict[str, Any]:
     if noise_band is not None and noise_band < 0:
         raise ValueError("noise band must be >= 0")
+    if baseline_rate is not None and current_rate is not None and noise_band is None:
+        raise ValueError("noise band must be pre-registered")
     if current_rate is not None and baseline_rate is None:
         raise ValueError("current rate requires a baseline rate")
     if baseline_rate is None or current_rate is None or noise_band is None:

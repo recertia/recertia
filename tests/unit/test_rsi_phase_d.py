@@ -8,9 +8,12 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from recertia.ledger.hashchain import HashChainLedger
 from recertia.ops.rsi_phase_c import DurableIndex
 from recertia.ops.rsi_phase_d import (
+    NoiseBandMismatchError,
     SoakSkill,
     checkout_record,
     control_arm_rate,
@@ -18,6 +21,7 @@ from recertia.ops.rsi_phase_d import (
     flipped_skills,
     open_soak,
     record_promotion,
+    register_noise_band,
     window_state,
 )
 from recertia.rsi.world import Flags
@@ -26,6 +30,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _PHASE = _ROOT / "src" / "recertia" / "ops" / "rsi_phase_d.py"
 _SOAK_FILE = _ROOT / "docs" / "ops" / "rsi-soak.json"
 _START = datetime(2026, 11, 1, tzinfo=timezone.utc)
+_SOAK_ID = "base:2026-11-01T00:00:00Z"
 
 
 def _ledger(tmp_path: Path) -> HashChainLedger:
@@ -53,6 +58,10 @@ def _decisions(ledger: HashChainLedger, count: int, *, start: datetime = _START)
             index_generation=1,
             active_skill_ids=["sk_old"],
         )
+
+
+def _band(ledger: HashChainLedger, band: float = 0.05) -> None:
+    register_noise_band(ledger, soak_id=_SOAK_ID, noise_band=band, at=_START)
 
 
 def _kept() -> SoakSkill:
@@ -87,6 +96,7 @@ def test_decisions_outside_the_window_do_not_count(tmp_path: Path) -> None:
     ledger = _ledger(tmp_path)
     index = _index(ledger)
     _decisions(ledger, 30, start=_START - timedelta(days=40))
+    _band(ledger)
     result = evaluate_soak(
         ledger,
         index,
@@ -220,6 +230,7 @@ def test_control_arm_drop_aborts_inside_the_band_does_not(tmp_path: Path) -> Non
         index_generation=1,
         active_skill_ids=["sk_old"],
     )
+    _band(ledger)
     dropped = evaluate_soak(
         ledger,
         index,
@@ -247,6 +258,7 @@ def test_control_arm_drop_aborts_inside_the_band_does_not(tmp_path: Path) -> Non
         index_generation=1,
         active_skill_ids=["sk_old"],
     )
+    _band(held)
     edge = evaluate_soak(
         held,
         held_index,
@@ -266,6 +278,72 @@ def test_control_arm_drop_aborts_inside_the_band_does_not(tmp_path: Path) -> Non
     assert edge["flags_forced_off"] is False
 
 
+def _evaluate_with_band(
+    ledger: HashChainLedger, index: DurableIndex, noise_band: float | None
+) -> dict[str, object]:
+    return evaluate_soak(
+        ledger,
+        index,
+        started_at=_START,
+        now=_START + timedelta(days=1),
+        skills=[_kept()],
+        baseline_snapshot_id="base",
+        post_change_skill_id="sk_new",
+        baseline_rate=0.50,
+        current_rate=0.50,
+        noise_band=noise_band,
+        environ={},
+    )
+
+
+def test_registered_noise_band_is_accepted(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    index = _index(ledger)
+    _band(ledger)
+    result = _evaluate_with_band(ledger, index, 0.05)
+    assert result["status"] == "open"
+    assert result["control_arm"] == {
+        "measured": True,
+        "baseline": 0.50,
+        "current": 0.50,
+        "noise_band": 0.05,
+        "regressed": False,
+    }
+
+
+@pytest.mark.parametrize("given", [0.10, 0.01, None], ids=["widened", "narrowed", "dropped"])
+def test_a_band_other_than_the_registered_one_is_refused(
+    tmp_path: Path, given: float | None
+) -> None:
+    ledger = _ledger(tmp_path)
+    index = _index(ledger)
+    _band(ledger)
+    before = len(list(ledger.entries()))
+    with pytest.raises(NoiseBandMismatchError, match="registered band"):
+        _evaluate_with_band(ledger, index, given)
+    assert len(list(ledger.entries())) == before
+    assert index.live_generation() == 1
+
+
+def test_an_unregistered_band_is_refused(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    index = _index(ledger)
+    register_noise_band(ledger, soak_id="other:2026-11-01T00:00:00Z", noise_band=0.05, at=_START)
+    with pytest.raises(NoiseBandMismatchError, match="pre-registered"):
+        _evaluate_with_band(ledger, index, 0.05)
+    kinds = [entry.evidence.get("kind") for entry in ledger.entries()]
+    assert kinds.count("rsi_soak") == 0
+
+
+def test_both_control_rates_without_a_band_are_refused(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    index = _index(ledger)
+    with pytest.raises(ValueError, match="noise band must be pre-registered"):
+        _evaluate_with_band(ledger, index, None)
+    kinds = [entry.evidence.get("kind") for entry in ledger.entries()]
+    assert kinds.count("rsi_soak") == 0
+
+
 def test_below_threshold_is_not_a_flip() -> None:
     below = SoakSkill(skill_id="sk_low", legacy=0.04, prioritized=0.0)
     assert flipped_skills([below], 0.05) == []
@@ -278,6 +356,7 @@ def test_complete_window_does_not_schedule_default_on(tmp_path: Path) -> None:
     ledger = _ledger(tmp_path)
     index = _index(ledger)
     _decisions(ledger, 30)
+    _band(ledger)
     env = {"RECERTIA_HYGIENE_ENABLED": "1"}
     result = evaluate_soak(
         ledger,
