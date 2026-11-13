@@ -22,14 +22,7 @@ def retriever(tmp_path: Path) -> Iterator[Retriever]:
     store = SkillStore(SKILLS_ROOT)
     index = SkillIndex(tmp_path / "index.db")
     try:
-        # Dream-46 candidates are draft keeps for a soak experiment.
-        # They must not dilute the M1 probe index used for precision@3.
-        entries = [
-            (v, s, st)
-            for v, s, st in store.iter_loaded()
-            if "dream46" not in (v.tags or [])
-        ]
-        index.rebuild(entries)
+        index.rebuild(store.iter_loaded())
         yield Retriever(index)
     finally:
         index.close()

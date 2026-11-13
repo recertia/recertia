@@ -25,10 +25,10 @@
   ],
   "preconditions": [
     {
-      "kind": "tool_available",
-      "value": "shell",
+      "kind": "file_exists",
+      "value": "pyproject.toml",
       "arguments": {},
-      "description": "shell tool available in the run sandbox"
+      "description": null
     }
   ],
   "steps": [
@@ -46,19 +46,46 @@
       "loop": null
     }
   ],
-  "certification_criteria": [],
-  "failure_modes": [
+  "certification_criteria": [
     {
-      "symptom": "marker file missing or incomplete after write",
-      "response": "re-run the write step; do not promote on partial marks"
+      "id": "init-exists",
+      "kind": "command",
+      "run": "test -f src/demo_pkg/__init__.py",
+      "expect_exit": 0,
+      "expr": null,
+      "target": null,
+      "schema_ref": null,
+      "metric": null,
+      "op": null,
+      "threshold": null,
+      "rubric": null,
+      "isolation": "fresh_context",
+      "lens": null,
+      "timeout_s": 300,
+      "weight": 1.0,
+      "sensitivity_proof": {
+        "criterion_id": "init-exists",
+        "negative_fixture": "no src package",
+        "rejected": true,
+        "checked_at": "2026-07-31T00:00:00Z",
+        "checked_against": "sha256:m1-seed-env",
+        "evidence_hash": "07627d045da94606a7935981a1b803bbc940e649721f7ce9d1c3abfdf3b41940"
+      },
+      "authored_by": "human",
+      "preregistered": true
     }
   ],
+  "failure_modes": [],
   "provenance": {
     "distilled_from_run": "seed:ensure-src-layout",
     "distilled_at": "2026-07-31T00:00:00Z",
     "authored_by": "seed-library",
     "curation": "human_authored",
-    "derivation": "hand_authored"
+    "derivation": "hand_authored",
+    "failure_cluster_id": null,
+    "authoring_prior_version": null,
+    "evolved_because": null,
+    "model": null
   },
   "hygiene": {
     "secret_scan": "passed",

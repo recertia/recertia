@@ -65,12 +65,7 @@
       "preregistered": true
     }
   ],
-  "failure_modes": [
-    {
-      "symptom": "marker file missing or incomplete after write",
-      "response": "re-run the write step; do not promote on partial marks"
-    }
-  ],
+  "failure_modes": [],
   "provenance": {
     "distilled_from_run": "seed:add-readme-section",
     "distilled_at": "2026-07-31T00:00:00Z",
