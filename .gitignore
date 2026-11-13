@@ -12,3 +12,6 @@ __pycache__/
 .recertia/
 
 
+
+# Runtime flock files from HashChainLedger, created beside each ledger.jsonl.
+*.jsonl.lock
