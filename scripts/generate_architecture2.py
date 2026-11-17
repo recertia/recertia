@@ -40,6 +40,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "architecture/arxiv-ingest.md",
             "architecture/operations.md",
             "architecture/container-sandbox.md",
+            "architecture/app-containers.md",
             "architecture/go-live.md",
             "architecture/openai-compat-gateways.md",
             "architecture/measurement-integrity.md",

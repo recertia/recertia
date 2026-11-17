@@ -26,6 +26,7 @@ SPLIT_DOCS: dict[str, tuple[str, ...]] = {
         "architecture/risk-and-governance.md",
         "architecture/measurement-and-scope.md",
         "architecture/container-sandbox.md",
+        "architecture/app-containers.md",
         "architecture/go-live.md",
         "architecture/openai-compat-gateways.md",
         "architecture/remaining-work.md",

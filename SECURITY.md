@@ -32,5 +32,9 @@ coordinate a fix on `main` before any public write-up.
 
 Production solves should use `RECERTIA_EXECUTION_BACKEND=container`. The local
 executor and API break-glass flags are development-only. See
-[`docs/architecture/container-sandbox.md`](docs/architecture/container-sandbox.md)
+[`docs/architecture/container-sandbox.md`](docs/architecture/container-sandbox.md),
+[`docs/architecture/app-containers.md`](docs/architecture/app-containers.md),
 and [`docs/architecture/go-live.md`](docs/architecture/go-live.md).
+The product API/worker image is not the execution sandbox; do not point
+`RECERTIA_CONTAINER_IMAGE` at it, and do not set `RECERTIA_ALLOW_CUSTOM_IMAGE`
+to make that possible.

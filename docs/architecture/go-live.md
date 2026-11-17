@@ -295,3 +295,10 @@ Tabletop incident review: `recertia tabletop <run_id> --restore-from backups/…
 writes the ops log JSON. See [`incident-tabletop.md`](incident-tabletop.md).
 `recertia canary --live` scores planted failures with `RECERTIA_VERIFIER_MODEL_ID`
 and does not update assumption `a4`.
+
+## Packaged API and worker containers
+
+A digest-pinned image and `docker-compose.app.yml` (`api`, `worker`, soak Postgres)
+are documented in [app-containers.md](app-containers.md). Default compose does not
+mount the Docker socket and does not set `RECERTIA_API_ALLOW_LOCAL_EXEC`; the
+console still binds with `--no-proxy-headers`.
