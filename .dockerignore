@@ -1,0 +1,48 @@
+# Build context for the product API/worker image (repo-root Dockerfile).
+# Keep this out of the pin-dockerfile-base practice skill workspaces.
+
+# VCS, caches, local runtime
+.git
+.github
+.cursor
+.venv
+.recertia
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+coverage.xml
+htmlcov
+dist
+build
+*.egg-info
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+*.jsonl.lock
+
+# Secrets and local env (compose reads these on the host, never bakes them)
+.env
+.env.*
+!.env.example
+docker/app.env
+**/*.pem
+**/*.key
+**/id_rsa
+**/.ssh/
+
+# Tests, docs, research — not required to install or run api/worker
+tests
+conftest.py
+docs
+research
+mypy-baseline.txt
+
+# Eval trees, including held-out / private fixtures. Only the public schema
+# lives under evals/heldout/ in git; still exclude the whole tree from the image.
+evals
+
+# Operator-only / private names that must never enter an image layer
+**/heldout/**
+**/*held-out*
+**/private/**

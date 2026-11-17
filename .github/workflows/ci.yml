@@ -467,3 +467,63 @@ jobs:
               sys.exit(f"guard: {counts['passed']} windows-marked tests passed, fewer than {minimum}: {summary}")
           print(f"guard: {summary}")
           PY
+
+  # Control-plane image only (no push, no compose, no REL-3 probe skip changes).
+  image-build:
+    name: app image build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether to build
+        id: decide
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          range=""
+          if [ -n "${BASE:-}" ]; then
+            git fetch --no-tags origin "$BASE" || true
+            if git rev-parse --verify "${BASE}^{commit}" >/dev/null 2>&1; then
+              range="${BASE}..${SHA}"
+            fi
+          elif [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            git fetch --no-tags origin "$BEFORE" || true
+            if git rev-parse --verify "${BEFORE}^{commit}" >/dev/null 2>&1; then
+              range="${BEFORE}..${SHA}"
+            fi
+          fi
+          if [ -z "$range" ]; then
+            echo "build=1" >> "$GITHUB_OUTPUT"
+            echo "no compare range; building"
+            exit 0
+          fi
+          echo "range=$range"
+          if ! files=$(git diff --name-only "$range"); then
+            echo "build=1" >> "$GITHUB_OUTPUT"
+            echo "git diff failed; building"
+            exit 0
+          fi
+          printf '%s\n' "$files"
+          if printf '%s\n' "$files" | grep -Eq \
+            '^(Dockerfile|\.dockerignore|docker-compose\.app\.yml|docker-compose\.app\.sandbox\.yml|docker/entrypoint\.sh)$'; then
+            echo "build=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=0" >> "$GITHUB_OUTPUT"
+            echo "Docker files unchanged; skipping docker build"
+          fi
+
+      - name: Build image (no push)
+        if: steps.decide.outputs.build == '1'
+        run: |
+          set -euo pipefail
+          docker build -t recertia:ci .
+          docker image inspect recertia:ci --format 'id={{.Id}} user={{.Config.User}} cmd={{json .Config.Cmd}}'
+          docker run --rm --entrypoint python recertia:ci -c "import recertia,sys; print('import_ok', sys.version.split()[0])"

@@ -1,0 +1,138 @@
+# Recertia API (console) + worker + the soak Postgres service.
+#
+#   cp docker/app.env.example .env   # fill secrets; file is gitignored
+#   docker compose -f docker-compose.app.yml up --build
+#
+# Postgres reuses docker-compose.soak.yml's volume name, healthcheck, and
+# role/db names. The image is digest-pinned here (soak.yml still floats).
+# Secrets come from the host environment / `.env` — no values are committed.
+#
+# Execution sandbox: this file does **not** mount docker.sock. The worker
+# keeps RECERTIA_EXECUTION_BACKEND=container and RECERTIA_ALLOW_CUSTOM_IMAGE
+# unset, so queued solves fail closed without a host OCI runtime rather than
+# silently switching to local exec. See docs/architecture/app-containers.md
+# and docker-compose.app.sandbox.yml for the sibling-container opt-in.
+#
+# Bind the published ports to loopback. Uvicorn inside the container must
+# listen on 0.0.0.0; always pass --no-proxy-headers (see go-live.md).
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16@sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-recertia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see docker/app.env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-recertia}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - recertia_soak_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recertia -d recertia"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: recertia:local
+    init: true
+    working_dir: /home/recertia
+    command:
+      - python
+      - -m
+      - uvicorn
+      - recertia.api.app:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8080"
+      - --no-proxy-headers
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment: &app-env
+      # Recertia data root is the compose volume mounted at this path.
+      RECERTIA_DATA_ROOT: /home/recertia/.recertia
+      RECERTIA_EXECUTION_BACKEND: container
+      RECERTIA_CONTAINER_RUNTIME: docker
+      # Stock allowlisted sandbox image (not this app image), pinned by digest.
+      RECERTIA_CONTAINER_IMAGE: python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+      # RECERTIA_ALLOW_CUSTOM_IMAGE and RECERTIA_API_ALLOW_LOCAL_EXEC stay unset.
+      DATABASE_URL: ${DATABASE_URL:-}
+      POSTGRES_USER: ${POSTGRES_USER:-recertia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see docker/app.env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-recertia}
+      RECERTIA_MODEL_PROVIDER: ${RECERTIA_MODEL_PROVIDER:-openai}
+      RECERTIA_MODEL_ID: ${RECERTIA_MODEL_ID:-}
+      RECERTIA_VERIFIER_MODEL_ID: ${RECERTIA_VERIFIER_MODEL_ID:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      RECERTIA_OPENAI_BASE_URL: ${RECERTIA_OPENAI_BASE_URL:-}
+      RECERTIA_OPENAI_TITLE: ${RECERTIA_OPENAI_TITLE:-}
+      RECERTIA_OPENAI_HTTP_REFERER: ${RECERTIA_OPENAI_HTTP_REFERER:-}
+      RECERTIA_OPENAI_EXTRA_BODY: ${RECERTIA_OPENAI_EXTRA_BODY:-}
+      RECERTIA_CONSOLE_AUTH: ${RECERTIA_CONSOLE_AUTH:-off}
+      RECERTIA_CONSOLE_DEV_LOGIN: ${RECERTIA_CONSOLE_DEV_LOGIN:-}
+      RECERTIA_CONSOLE_DEV_ADMIN: ${RECERTIA_CONSOLE_DEV_ADMIN:-}
+      RECERTIA_CONSOLE_SESSION_SECRET: ${RECERTIA_CONSOLE_SESSION_SECRET:-}
+    volumes:
+      - ./.recertia:/home/recertia/.recertia
+      - ./skills:/home/recertia/skills:ro
+      - ./policy:/home/recertia/policy:ro
+      - ./facts:/home/recertia/facts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  worker:
+    image: recertia:local
+    init: true
+    working_dir: /home/recertia
+    command:
+      - recertia
+      - worker
+      - --root
+      - /home/recertia/.recertia
+      - --concurrency
+      - "1"
+    environment: *app-env
+    volumes:
+      - ./.recertia:/home/recertia/.recertia
+      - ./skills:/home/recertia/skills:ro
+      - ./policy:/home/recertia/policy:ro
+      - ./facts:/home/recertia/facts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    healthcheck:
+      # PID 1 is docker-init when `init: true`; look through /proc for the CLI.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import pathlib,sys; sys.exit(0 if any(b'recertia' in p.read_bytes() and b'worker' in p.read_bytes() for p in pathlib.Path('/proc').glob('*/cmdline')) else 1)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  recertia_soak_pg:

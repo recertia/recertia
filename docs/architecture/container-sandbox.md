@@ -80,6 +80,9 @@ daemon file-sharing settings before changing sandbox policy.
   `container-smoke` job).
 - **Do not set `RECERTIA_ALLOW_CUSTOM_IMAGE`** outside a reviewed change.
 - Prefer Docker Engine or Podman on the host; do not weaken `--network=none` or run as root.
+- The **product** API/worker image is a different artifact (control plane, non-root,
+  digest-pinned `python:3.12-slim` base). Do not set `RECERTIA_CONTAINER_IMAGE` to that
+  app image. See [app-containers.md](app-containers.md).
 
 ## Smoke test
 

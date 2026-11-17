@@ -1,0 +1,43 @@
+# Opt-in overlay: sibling sandbox containers via the host Docker daemon.
+#
+#   RECERTIA_REPO=/absolute/path/to/recertia \
+#     docker compose -f docker-compose.app.yml -f docker-compose.app.sandbox.yml up --build
+#
+# RECERTIA_REPO must be an absolute host path of this checkout. It is bind-mounted
+# at the same path inside api and worker so `docker run -v <workdir>:/work` uses a
+# path the host daemon can see (named volumes are invisible to the daemon).
+#
+# Trade-off (read docs/architecture/app-containers.md before enabling):
+# - Mounting docker.sock is equivalent to root on the host for the worker.
+# - Spawned sandboxes still use the immutable policy (--network=none, nobody,
+#   read-only root, cap-drop ALL). RECERTIA_ALLOW_CUSTOM_IMAGE stays unset.
+# - This is Docker-out-of-Docker (sibling containers), not privileged DinD.
+# - Do not set RECERTIA_API_ALLOW_LOCAL_EXEC here.
+# - Linux + Docker Engine. Docker Desktop path virt may break same-path binds.
+
+services:
+  api:
+    working_dir: ${RECERTIA_REPO:?set RECERTIA_REPO to the absolute host path of this checkout}
+    volumes:
+      - ${RECERTIA_REPO:?set RECERTIA_REPO to the absolute host path of this checkout}:${RECERTIA_REPO}
+      - /usr/bin/docker:/usr/bin/docker:ro
+    environment:
+      RECERTIA_DATA_ROOT: ${RECERTIA_REPO}/.recertia
+
+  worker:
+    working_dir: ${RECERTIA_REPO:?set RECERTIA_REPO to the absolute host path of this checkout}
+    volumes:
+      - ${RECERTIA_REPO:?set RECERTIA_REPO to the absolute host path of this checkout}:${RECERTIA_REPO}
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      RECERTIA_DATA_ROOT: ${RECERTIA_REPO}/.recertia
+      RECERTIA_EXECUTION_BACKEND: container
+      RECERTIA_CONTAINER_RUNTIME: docker
+    command:
+      - recertia
+      - worker
+      - --root
+      - ${RECERTIA_REPO}/.recertia
+      - --concurrency
+      - "1"

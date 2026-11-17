@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Digest-pinned API/worker image** (`Dockerfile`, `docker-compose.app.yml`). Base is
+  `python:3.12-slim` pinned by registry index digest; process user `65532`; extras
+  `[api,postgres]` from `pyproject.toml` (this repo has no lockfile). Compose runs
+  `api` + `worker` on a shared `.recertia` bind and the soak Postgres volume, with
+  secrets only from host env. Default compose does not mount `docker.sock` and does
+  not set `RECERTIA_ALLOW_CUSTOM_IMAGE` or `RECERTIA_API_ALLOW_LOCAL_EXEC`. Docs:
+  [`docs/architecture/app-containers.md`](docs/architecture/app-containers.md).
+
+
 - **Installed wheels ship the default authoring prior.** `authoring-prior.json` (version
   `ap-2026.08.1`) is packaged with the library and loaded via `importlib.resources`. An
   installed wheel completes the existing CLI/API distill path without a source checkout.
