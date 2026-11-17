@@ -525,5 +525,6 @@ jobs:
         run: |
           set -euo pipefail
           docker build -t recertia:ci .
-          docker image inspect recertia:ci --format 'id={{.Id}} user={{.Config.User}} cmd={{json .Config.Cmd}}'
+          # Config.User is empty: the entrypoint starts as root and drops to 65532.
+          docker image inspect recertia:ci --format 'id={{.Id}} cmd={{json .Config.Cmd}}'
           docker run --rm --entrypoint python recertia:ci -c "import recertia,sys; print('import_ok', sys.version.split()[0])"
