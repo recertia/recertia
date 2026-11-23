@@ -186,6 +186,7 @@ Copyright (c) 2026 Robert Schmidt. See [`NOTICE`](NOTICE).
 | [`docs/architecture/overview.md`](docs/architecture/overview.md) | Planes, memory taxonomy, governance |
 | [`docs/architecture/go-live.md`](docs/architecture/go-live.md) | Model credentials, jobs, retention |
 | [`docs/architecture/container-sandbox.md`](docs/architecture/container-sandbox.md) | Docker/Podman setup and hardening |
+| [`docs/architecture/app-containers.md`](docs/architecture/app-containers.md) | Digest-pinned API/worker image and compose |
 | [`docs/specifications/goal-objects.md`](docs/specifications/goal-objects.md) | Goal as primary input |
 | [`docs/adr/`](docs/adr/) | Architecture decision records |
 | [`docs/plans/remediation/README.md`](docs/plans/remediation/README.md) | Multi-tenant remediation plan ([ADR-0021](docs/adr/0021-deployment-model.md)); specifications only |

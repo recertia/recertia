@@ -13,6 +13,7 @@
 - [arXiv paper ingestion (Miner)](architecture/arxiv-ingest.md)
 - [Operations: storage, budgets, and attempt isolation](architecture/operations.md)
 - [Container sandbox: Docker/Podman setup and hardening](architecture/container-sandbox.md)
+- [Packaged API and worker containers](architecture/app-containers.md)
 - [Single-user go-live: models, tools, jobs, retention](architecture/go-live.md)
 - [OpenAI-compatible gateways (OpenRouter)](architecture/openai-compat-gateways.md)
 - [Measurement integrity](architecture/measurement-integrity.md)

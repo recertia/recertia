@@ -40,7 +40,7 @@ def _job_timeouts() -> dict[str, int | None]:
 
 
 def test_ci_yml_has_jobs() -> None:
-    assert {"ci", "commit-emails", "package-smoke", "container-smoke"} <= set(_job_timeouts())
+    assert {"ci", "commit-emails", "package-smoke", "container-smoke", "image-build"} <= set(_job_timeouts())
 
 
 def test_every_ci_job_has_a_bounded_timeout() -> None:
