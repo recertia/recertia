@@ -22,6 +22,7 @@ from recertia.ops.rsi_phase_d import (
     open_soak,
     record_promotion,
     register_noise_band,
+    registered_noise_band,
     window_state,
 )
 from recertia.rsi.world import Flags
@@ -333,6 +334,7 @@ def test_an_unregistered_band_is_refused(tmp_path: Path) -> None:
         _evaluate_with_band(ledger, index, 0.05)
     kinds = [entry.evidence.get("kind") for entry in ledger.entries()]
     assert kinds.count("rsi_soak") == 0
+    assert index.live_generation() == 1
 
 
 def test_both_control_rates_without_a_band_are_refused(tmp_path: Path) -> None:
@@ -627,3 +629,126 @@ def test_open_soak_reads_skill_sidecars_and_keeps_the_baseline_on_abort(tmp_path
     assert aborted["rollback_generation"] == 1
     assert index.retrieve("sk_new") == []
     assert index.retrieve("sk_old") == ["sk_old"]
+
+
+def test_register_refused_after_first_soak_row(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    index = _index(ledger)
+    evaluate_soak(
+        ledger,
+        index,
+        started_at=_START,
+        now=_START + timedelta(days=1),
+        skills=[_kept()],
+        baseline_snapshot_id="base",
+        post_change_skill_id="sk_new",
+    )
+    before = len(list(ledger.entries()))
+    with pytest.raises(PermissionError, match="after a soak row"):
+        register_noise_band(ledger, soak_id=_SOAK_ID, noise_band=0.05, at=_START)
+    assert len(list(ledger.entries())) == before
+    assert index.live_generation() == 1
+    kinds = [entry.evidence.get("kind") for entry in ledger.entries()]
+    assert kinds.count("rsi_noise_band") == 0
+    ledger.verify()
+
+
+def test_direct_append_cannot_override_registered_band(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    index = _index(ledger)
+    register_noise_band(ledger, soak_id=_SOAK_ID, noise_band=0.05, at=_START)
+    ledger.append(
+        actor="rsi-phase-d",
+        action="write",
+        target=_SOAK_ID,
+        at=_START,
+        evidence={"kind": "rsi_noise_band", "soak_id": _SOAK_ID, "noise_band": 0.99},
+    )
+    ledger.verify()
+    with pytest.raises(PermissionError, match="multiple noise band"):
+        registered_noise_band(ledger, _SOAK_ID)
+    with pytest.raises(PermissionError, match="multiple noise band"):
+        _evaluate_with_band(ledger, index, 0.99)
+    assert index.live_generation() == 1
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [True, float("nan"), float("inf"), float("-inf")],
+    ids=["bool", "nan", "inf", "neg-inf"],
+)
+def test_invalid_noise_band_is_rejected(tmp_path: Path, bad: float) -> None:
+    ledger = _ledger(tmp_path)
+    before = len(list(ledger.entries()))
+    with pytest.raises(ValueError):
+        register_noise_band(ledger, soak_id=_SOAK_ID, noise_band=bad, at=_START)
+    assert len(list(ledger.entries())) == before
+    ledger.verify()
+
+
+def test_register_refused_after_soak_row_persists_across_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    ledger = HashChainLedger(path)
+    index = _index(ledger)
+    evaluate_soak(
+        ledger,
+        index,
+        started_at=_START,
+        now=_START + timedelta(days=1),
+        skills=[_kept()],
+        baseline_snapshot_id="base",
+        post_change_skill_id="sk_new",
+    )
+    ledger.verify()
+    reopened = HashChainLedger(path)
+    before = len(list(reopened.entries()))
+    with pytest.raises(PermissionError, match="after a soak row"):
+        register_noise_band(reopened, soak_id=_SOAK_ID, noise_band=0.05, at=_START)
+    kinds = [entry.evidence.get("kind") for entry in reopened.entries()]
+    assert kinds.count("rsi_noise_band") == 0
+    assert len(list(reopened.entries())) == before
+    reopened.verify()
+
+
+def test_direct_append_override_survives_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    ledger = HashChainLedger(path)
+    register_noise_band(ledger, soak_id=_SOAK_ID, noise_band=0.05, at=_START)
+    ledger.append(
+        actor="rsi-phase-d",
+        action="write",
+        target=_SOAK_ID,
+        at=_START,
+        evidence={"kind": "rsi_noise_band", "soak_id": _SOAK_ID, "noise_band": 0.99},
+    )
+    ledger.verify()
+    reopened = HashChainLedger(path)
+    with pytest.raises(PermissionError, match="multiple noise band"):
+        registered_noise_band(reopened, _SOAK_ID)
+    reopened.verify()
+
+
+def test_registered_band_survives_ledger_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    ledger = HashChainLedger(path)
+    written = register_noise_band(ledger, soak_id=_SOAK_ID, noise_band=0.05, at=_START)
+    assert written["written"] is True
+    ledger.verify()
+    reopened = HashChainLedger(path)
+    assert registered_noise_band(reopened, _SOAK_ID) == 0.05
+    replay = register_noise_band(reopened, soak_id=_SOAK_ID, noise_band=0.05, at=_START)
+    assert replay["written"] is False
+    assert [entry.evidence.get("kind") for entry in reopened.entries()].count("rsi_noise_band") == 1
+    reopened.verify()
+
+
+def test_invalid_band_leaves_reopened_ledger_untouched(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    ledger = HashChainLedger(path)
+    ledger.verify()
+    with pytest.raises(ValueError, match="finite"):
+        register_noise_band(ledger, soak_id=_SOAK_ID, noise_band=float("nan"), at=_START)
+    reopened = HashChainLedger(path)
+    assert registered_noise_band(reopened, _SOAK_ID) is None
+    assert list(reopened.entries()) == []
+    reopened.verify()

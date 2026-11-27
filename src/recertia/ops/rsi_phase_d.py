@@ -10,6 +10,7 @@ default and does not schedule default-on.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import MutableMapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -216,14 +217,18 @@ def register_noise_band(
     noise_band: float,
     at: datetime,
 ) -> dict[str, Any]:
-    """Write the band once, before any control-arm comparison.
+    """Write the band once, before any soak row or control-arm comparison.
 
     A later call with a different number is refused. The same number is a replay.
+    A first registration after a soak row exists is refused. The band must be a
+    finite number >= 0.
     """
 
     if isinstance(noise_band, bool) or not isinstance(noise_band, (int, float)):
         raise ValueError("noise band must be a number")
     band = float(noise_band)
+    if not math.isfinite(band):
+        raise ValueError("noise band must be a finite number")
     if band < 0:
         raise ValueError("noise band must be >= 0")
     prior = registered_noise_band(ledger, soak_id)
@@ -231,6 +236,8 @@ def register_noise_band(
         if prior != band:
             raise PermissionError("noise band already registered")
         return {"written": False, "soak_id": soak_id, "noise_band": prior}
+    if _soak_row_exists(ledger, soak_id):
+        raise PermissionError("cannot register noise band after a soak row exists")
     ledger.append(
         actor=_ACTOR,
         action="write",
@@ -242,12 +249,26 @@ def register_noise_band(
 
 
 def registered_noise_band(ledger: HashChainLedger, soak_id: str) -> float | None:
-    found: float | None = None
+    """The single pre-registered band. A second band row fails closed."""
+
+    found: list[float] = []
     for entry in ledger.entries():
         evidence = entry.evidence or {}
         if evidence.get("kind") == _BAND_KIND and evidence.get("soak_id") == soak_id:
-            found = float(evidence["noise_band"])
-    return found
+            found.append(float(evidence["noise_band"]))
+    if not found:
+        return None
+    if len(found) != 1:
+        raise PermissionError("multiple noise band registrations")
+    return found[0]
+
+
+def _soak_row_exists(ledger: HashChainLedger, soak_id: str) -> bool:
+    for entry in ledger.entries():
+        evidence = entry.evidence or {}
+        if evidence.get("kind") == "rsi_soak" and evidence.get("soak_id") == soak_id:
+            return True
+    return False
 
 
 def _require_registered_band(
