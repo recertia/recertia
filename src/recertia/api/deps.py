@@ -8,7 +8,6 @@ from fastapi import HTTPException, Request
 
 from recertia.api.console_auth import ConsoleUser, console_session
 from recertia.app.state import AppState
-from recertia.ports.identity import ledger_actor
 
 
 def get_state(request: Request) -> AppState:
@@ -49,26 +48,6 @@ class RouteState:
         if user is not None:
             return user.active_tenant
         return principal.tenant_id
-
-    def require_host_admin(self, request: Request, principal: Any) -> str:
-        """Binding a host directory requires platform_admin, not tenant admin."""
-
-        user = self.optional_console_user(request)
-        roles = user.roles if user is not None else None
-        if self.ctx.pdp.may_admin_host(principal, console_roles=roles):
-            return user.user_id if user is not None else ledger_actor(principal)
-        raise HTTPException(
-            status_code=403, detail="platform_admin required to register a host root"
-        )
-
-    def require_workspace_admin(self, request: Request, principal: Any) -> str:
-        """Tenant admin may patch or disable a workspace. Host registration is separate."""
-
-        user = self.optional_console_user(request)
-        console_is_admin = user.may("admin") if user is not None else None
-        if self.ctx.pdp.may_admin_registry(principal, console_is_admin=console_is_admin):
-            return user.user_id if user is not None else ledger_actor(principal)
-        raise HTTPException(status_code=403, detail="admin required to update workspace")
 
     def require_library_write(
         self, request: Request, principal: Any, *, scope: str, min_role: str = "reviewer"

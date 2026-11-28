@@ -26,7 +26,6 @@ from recertia.jobs.arxiv import ArxivPaper
 from recertia.validation.sensitivity import author_sensitivity_proof
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
-_WORD = re.compile(r"[a-z0-9]+", re.I)
 
 _PITFALL_CUES = (
     "fail",

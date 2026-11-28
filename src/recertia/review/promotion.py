@@ -487,14 +487,3 @@ def _portable_ref(log_path: Path, repo_root: Path | None) -> str:
 def _report_json(report: Any) -> str:
     payload = {"all_passed": report.all_passed, "results": _report_rows(report)}
     return json.dumps(payload, indent=2) + "\n"
-
-
-def _result_json(result: Any) -> str:
-    """Backward-compatible helper for callers that still log a single result."""
-
-    class _One:
-        def __init__(self, item: Any) -> None:
-            self.results = [item]
-            self.all_passed = bool(getattr(item, "passed", False))
-
-    return _report_json(_One(result))

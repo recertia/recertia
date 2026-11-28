@@ -16,7 +16,6 @@ _TENANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 # ``admin`` does not imply it. SEC-8 skips a distinct ``evals`` key scope so
 # existing metrics keys keep calling eval routes. Reissue is a later break.
 OPERATOR_SCOPES = frozenset({"admin", "runs", "blobs", "metrics", "exec", "promote", "jobs"})
-_TENANT_LOCAL_SCOPES = OPERATOR_SCOPES - {"admin"}
 
 PrincipalKind = Literal["api_key", "console_session", "local_operator", "executor", "system"]
 

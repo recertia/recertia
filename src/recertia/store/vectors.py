@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import heapq
 import json
-import math
 import sqlite3
 from pathlib import Path
 from typing import Iterable, Protocol
@@ -110,7 +109,3 @@ def open_vector_index(db_path: Path | str, *, prefer_sqlite_vec: bool = True) ->
     if prefer_sqlite_vec:
         return SqliteVecIndex(db_path)
     return JsonBlobVectorIndex(db_path)
-
-
-def l2(vec: list[float]) -> float:
-    return math.sqrt(sum(v * v for v in vec)) or 1.0
