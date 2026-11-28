@@ -19,7 +19,6 @@ from typing import Iterable
 
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
 ARXIV_NS = "{http://arxiv.org/schemas/atom}"
-OPENSEARCH_NS = "{http://a9.com/-/spec/opensearch/1.1/}"
 
 ARXIV_API = "http://export.arxiv.org/api/query"
 DEFAULT_USER_AGENT = "RecertiaArxivIngest/0.1 (https://github.com/recertia/recertia; research)"

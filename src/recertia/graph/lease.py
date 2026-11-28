@@ -372,11 +372,6 @@ def _read_lock_payload(fd: int) -> tuple[int, str | None]:
     return token, gen
 
 
-def _read_token(fd: int) -> int:
-    token, _gen = _read_lock_payload(fd)
-    return token
-
-
 def _flock_exclusive(fd: int) -> None:
     if sys.platform == "win32":
         return
