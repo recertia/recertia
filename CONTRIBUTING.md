@@ -52,6 +52,7 @@ mypy contracts/ src/recertia/
 python3 scripts/generate_schemas.py --check
 python3 scripts/export_examples.py --check
 recertia skills lint --skills-root skills
+python3 scripts/generate_architecture2.py --check
 python3 scripts/check_cross_refs.py --check
 python3 scripts/check_milestone_deps.py --check
 python3 scripts/check_assumptions_hygiene.py --check
@@ -78,7 +79,8 @@ repo. Markdown notes and bibliography extracts in that tree are also plain git.
 - Keep diffs on-task. Do not rewrite archived Q3 plans or mark research assumptions
   in [`docs/assumptions.md`](docs/assumptions.md) `supported` from CI alone.
 - Default T2 policy is [`policy/default.json`](policy/default.json). Weekly job spend
-  belongs in `.recertia/job_quota.json`, not in that file.
+  belongs in `.recertia/jobs/job_quota.json` (CLI default; the API writes
+  `.recertia/runs/<tenant>/jobs/job_quota.json`), not in that file.
 - HEX/compress flags stay off unless the enablement predicates in
   [`docs/architecture/remaining-work.md`](docs/architecture/remaining-work.md) hold.
 

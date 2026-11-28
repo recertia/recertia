@@ -46,7 +46,7 @@ The claim that matters is lift: same task class, with memory vs without.
 
 ```bash
 pip install -e ".[dev]"
-recertia lift --task-class <name> --trials 10
+recertia lift --task-class <name>
 ```
 
 You should see success (and cost or step counts, when tracked) for the treatment arm and the control arm, plus a delta. The integrity ledger records both.
@@ -73,7 +73,7 @@ recertia ledger verify
 # library
 recertia skills search <query>
 recertia skills lint
-recertia skills promote <skill_id>
+recertia skills promote <skill_id> --version N
 ```
 
 HTTP API: `POST /v1/runs` (install with `pip install -e ".[api]"`). Issue keys with `recertia keys`.
