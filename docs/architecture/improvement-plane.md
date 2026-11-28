@@ -99,7 +99,7 @@ The checked-in T2 document is [`policy/default.json`](../../policy/default.json)
 the `JobQuota` **caps**. Flags MUST NOT grow `contracts.graph.NODES`.
 
 Weekly spend (`tokens_spent`, HEX counters) is a T0 sidecar next to the job runs root
-(`.recertia/job_quota.json` or `{runs_root}/jobs/job_quota.json`). ISO-week rollover in UTC
+(`.recertia/jobs/job_quota.json` or `{runs_root}/jobs/job_quota.json`). ISO-week rollover in UTC
 resets spend. The policy file is never rewritten to record consumption.
 
 Admit order: recertifier → curator retire → fail-cluster author → practice band →
