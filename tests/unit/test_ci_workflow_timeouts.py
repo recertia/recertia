@@ -2,8 +2,7 @@
 
 Without it GitHub's default is 360 minutes, so a hang in a job (for example a
 test process that cannot exit) holds a runner for six hours. A line scan, not
-a YAML parser: the dev extras do not ship PyYAML, and ci.yml keeps jobs at two
-spaces and job keys at four.
+a YAML parser: ci.yml keeps jobs at two spaces and job keys at four.
 """
 
 from __future__ import annotations
@@ -13,8 +12,6 @@ from pathlib import Path
 
 CI_YML = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 MAX_MINUTES = 60
-# Jobs whose timeout another open PR adds. Drop the entry once that PR is on main.
-PENDING: dict[str, str] = {}
 
 
 def _job_timeouts() -> dict[str, int | None]:
@@ -40,12 +37,25 @@ def _job_timeouts() -> dict[str, int | None]:
 
 
 def test_ci_yml_has_jobs() -> None:
-    assert {"ci", "commit-emails", "package-smoke", "container-smoke", "image-build"} <= set(_job_timeouts())
+    assert {
+        "ci",
+        "commit-emails",
+        "package-smoke",
+        "container-smoke",
+        "windows-root-lock",
+        "image-build",
+    } <= set(_job_timeouts())
 
 
 def test_every_ci_job_has_a_bounded_timeout() -> None:
     timeouts = _job_timeouts()
-    missing = sorted(name for name, minutes in timeouts.items() if minutes is None and name not in PENDING)
+    missing = sorted(name for name, minutes in timeouts.items() if minutes is None)
     assert missing == [], f"ci.yml jobs without timeout-minutes: {missing}"
     too_long = {name: m for name, m in timeouts.items() if m is not None and not 0 < m <= MAX_MINUTES}
     assert too_long == {}, f"timeout-minutes outside 1..{MAX_MINUTES}: {too_long}"
+
+
+def test_ruff_preview_step_writes_the_uploaded_file() -> None:
+    text = CI_YML.read_text(encoding="utf-8")
+    assert "tee ruff-preview.txt" in text
+    assert "path: ruff-preview.txt" in text

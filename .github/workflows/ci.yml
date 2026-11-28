@@ -50,7 +50,9 @@ jobs:
 
       - name: Lint preview (report-only)
         continue-on-error: true
-        run: ruff check --select B,C90,TID251,RUF100,SIM,UP contracts/ src/ scripts/ tests/ conftest.py
+        run: |
+          set -o pipefail
+          ruff check --select B,C90,TID251,RUF100,SIM,UP contracts/ src/ scripts/ tests/ conftest.py 2>&1 | tee ruff-preview.txt
 
       - name: Upload ruff preview
         if: always()
@@ -356,7 +358,7 @@ jobs:
       ROOT_LOCK_MIN_PASSED: "132"
       # Same rule for the `-m windows` run (test_root_lock_windows_real.py), so a
       # real-Windows test cannot drop out of the selection unnoticed.
-      WINDOWS_MARKED_MIN_PASSED: "20"
+      WINDOWS_MARKED_MIN_PASSED: "39"
     defaults:
       run:
         shell: bash
